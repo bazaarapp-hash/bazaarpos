@@ -1,6 +1,6 @@
 // ─── GANTI nilai firebaseConfig dengan punya kamu dari Firebase Console ───────
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
+import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAA0tOPK_hXLLxCJ_aOrNC_--dMv05qkv8",
