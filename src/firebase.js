@@ -40,4 +40,21 @@ export const db = {
       console.error("Firebase set error:", e);
     }
   },
+
+// Subscribe real-time — callback dipanggil setiap ada perubahan data
+  // Kembalikan fungsi unsubscribe untuk cleanup
+  subscribe(key, callback) {
+    const ref = doc(firestore, "bazaarpos", key);
+    return onSnapshot(ref, (snap) => {
+      if (!snap.exists()) { callback(null); return; }
+      try {
+        callback(JSON.parse(snap.data().value));
+      } catch (e) {
+        console.error("Firebase subscribe parse error:", e);
+        callback(null);
+      }
+    }, (e) => {
+      console.error("Firebase subscribe error:", e);
+    });
+  },
 };

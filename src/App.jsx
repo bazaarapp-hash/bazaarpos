@@ -182,19 +182,23 @@ export default function App(){
   const [loaded,setLoaded]=useState(false);
   const bkRef=useRef(null);
 
-  useEffect(()=>{
-    (async()=>{
-      const t=await db.get("bzr_tenants")||[];
-      const m=await db.get("bzr_menus")||[];
-      const tx=await db.get("bzr_transactions")||[];
-      const s=await db.get("bzr_settings")||{};
-      const a=await db.get("bzr_admins")||[];
-      const al=await db.get("bzr_alerts")||[];
-      setTenants(t);setMenus(m);setTransactions(tx);
-      setSettings({...DEF,...s});setAdmins(a);setAlerts(al);
-      setLoaded(true);
-    })();
-  },[]);
+useEffect(()=>{
+  // Subscribe real-time ke semua collection
+  // onSnapshot otomatis update state setiap ada perubahan dari HP manapun
+  let loadCount = 0;
+  const totalKeys = 6;
+  const checkLoaded = () => { loadCount++; if(loadCount >= totalKeys) setLoaded(true); };
+
+  const u1 = db.subscribe("bzr_tenants",    v => { setTenants(v||[]);              checkLoaded(); });
+  const u2 = db.subscribe("bzr_menus",      v => { setMenus(v||[]);                checkLoaded(); });
+  const u3 = db.subscribe("bzr_transactions",v=>{ setTransactions(v||[]);          checkLoaded(); });
+  const u4 = db.subscribe("bzr_settings",   v => { setSettings({...DEF,...(v||{})});checkLoaded(); });
+  const u5 = db.subscribe("bzr_admins",     v => { setAdmins(v||[]);               checkLoaded(); });
+  const u6 = db.subscribe("bzr_alerts",     v => { setAlerts(v||[]);               checkLoaded(); });
+
+  // Cleanup: unsubscribe saat komponen unmount
+  return () => { u1(); u2(); u3(); u4(); u5(); u6(); };
+},[]);
 
   useEffect(()=>{
     clearInterval(bkRef.current);
