@@ -27,7 +27,6 @@ _gs.textContent = `
 `;
 document.head.appendChild(_gs);
 
-// ─── Storage ──────────────────────────────────────────────────────────────────
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
@@ -1309,9 +1308,9 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
       const ms={};txs.forEach(tx=>tx.items.forEach(it=>{if(!ms[it.menuCode])ms[it.menuCode]={name:it.menuName,qty:0,total:0};ms[it.menuCode].qty+=it.qty;ms[it.menuCode].total+=it.qty*it.price;}));
       const mr=Object.entries(ms).map(([c,m])=>`<tr><td>[${c}]</td><td>${m.name}</td><td style="text-align:center">${m.qty}</td><td style="text-align:right">${idr(m.total)}</td></tr>`).join("");
       const nr=txs.map(tx=>`<tr><td>${tx.nota}</td><td>${tx.time}</td><td class="${tx.paymentMethod==="emoney"?"pe":"pc"}">${tx.paymentMethod==="emoney"?"💳 E-Money":"💵 Cash"}</td><td style="font-size:10px">${tx.items.map(it=>`[${it.menuCode}] ${it.menuName} ×${it.qty}=${idr(it.qty*it.price)}`).join("<br/>")}</td><td style="text-align:right;font-weight:700">${idr(tx.total)}</td></tr>`).join("");
-      body+=`<div class="th"><h3>${tn.code} — ${tn.name}</h3><p>${txs.length} transaksi | 💳 ${idr(em)} | 💵 ${idr(cs)} | Total: <strong>${idr(tt)}</strong></p></div><div class="sec">Ringkasan Menu</div><table><thead><tr><th>Kode</th><th>Nama Menu</th><th style="text-align:center">Terjual</th><th style="text-align:right">Subtotal</th></tr></thead><tbody>${mr}</tbody><tfoot><tr><td colspan="3"><strong>Total</strong></td><td style="text-align:right"><strong>${idr(tt)}</strong></td></tr></tfoot></table><div class="sec">Rincian Nota</div><table><thead><tr><th>No Nota</th><th>Jam</th><th>Pembayaran</th><th>Item</th><th style="text-align:right">Total</th></tr></thead><tbody>${nr}</tbody><tfoot><tr><td colspan="4"><strong>Total ${tn.name}</strong></td><td style="text-align:right"><strong>${idr(tt)}</strong></td></tr></tfoot></table>`;
+      body+=`<div class="th"><h3>${tn.code} — ${tn.name}</h3><p>${txs.length} transaksi &nbsp;|&nbsp; <span class="pe">💳 E-Money: ${idr(em)}</span> &nbsp;|&nbsp; <span class="pc">💵 Cash: ${idr(cs)}</span> &nbsp;|&nbsp; Total: <strong>${idr(tt)}</strong></p></div><div class="sec">Ringkasan Menu</div><table><thead><tr><th>Kode</th><th>Nama Menu</th><th style="text-align:center">Terjual</th><th style="text-align:right">Subtotal</th></tr></thead><tbody>${mr}</tbody><tfoot><tr><td colspan="3"><strong>Total</strong></td><td style="text-align:right"><strong>${idr(tt)}</strong></td></tr></tfoot></table><div class="sec">Rincian Nota</div><table><thead><tr><th>No Nota</th><th>Jam</th><th>Pembayaran</th><th>Item</th><th style="text-align:right">Total</th></tr></thead><tbody>${nr}</tbody><tfoot><tr><td colspan="4"><strong>Total ${tn.name}</strong></td><td style="text-align:right"><strong>${idr(tt)}</strong></td></tr></tfoot></table>`;
     });
-    if(selTn==="all"&&disp.length>1){const gt=filtered.reduce((s,t)=>s+t.total,0);const em=filtered.filter(t=>t.paymentMethod==="emoney").reduce((s,t)=>s+t.total,0);const cs=filtered.filter(t=>t.paymentMethod==="cash").reduce((s,t)=>s+t.total,0);body+=`<div style="background:#fff7ed;border:2px solid #ea580c;border-radius:6px;padding:12px 16px;margin-top:16px"><strong>🏆 GRAND TOTAL — ${filterDate}</strong><br/>💳 ${idr(em)} | 💵 ${idr(cs)} | <strong style="color:#ea580c">Total: ${idr(gt)}</strong></div>`;}
+    if(selTn==="all"&&disp.length>1){const gt=filtered.reduce((s,t)=>s+t.total,0);const em=filtered.filter(t=>t.paymentMethod==="emoney").reduce((s,t)=>s+t.total,0);const cs=filtered.filter(t=>t.paymentMethod==="cash").reduce((s,t)=>s+t.total,0);body+=`<div style="background:#fff7ed;border:2px solid #ea580c;border-radius:6px;padding:12px 16px;margin-top:16px"><strong>🏆 GRAND TOTAL — ${filterDate}</strong><br/><span class="pe">💳 E-Money: ${idr(em)}</span> &nbsp;|&nbsp; <span class="pc">💵 Cash: ${idr(cs)}</span> &nbsp;|&nbsp; <strong style="color:#ea580c">Total: ${idr(gt)}</strong></div>`;}
     printA4({title:"Laporan Transaksi per Tenant",subtitle:`Tanggal: ${filterDate} | Dicetak: ${new Date().toLocaleString("id-ID")}`,bazaarName:bname,bodyHtml:body});
   };
 
@@ -1851,10 +1850,16 @@ function TenantHistory({transactions,tenant,settings}){
 // SHARED COMPONENTS
 // ═════════════════════════════════════════════════════════════════════════════
 function Modal({title,onClose,children,accent="#ea580c"}){
+  // Pakai overflowY scroll di backdrop, modal card pakai margin auto
+  // Ini lebih andal di mobile dibanding flexbox centering
   return(
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"flex-start",justifyContent:"center",zIndex:999,padding:"12px 16px",overflowY:"auto"}}
-      onClick={e=>{if(e.target===e.currentTarget&&onClose)onClose();}}>
-      <div className="pop-in" style={{background:"#fff",borderRadius:20,boxShadow:"0 32px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:420,padding:20,marginTop:"auto",marginBottom:"auto"}}>
+    <div
+      onClick={e=>{if(e.target===e.currentTarget&&onClose)onClose();}}
+      style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",overflowY:"auto",zIndex:999,WebkitOverflowScrolling:"touch"}}>
+      <div className="pop-in"
+        style={{background:"#fff",borderRadius:20,boxShadow:"0 20px 60px rgba(0,0,0,.3)",
+          width:"calc(100% - 32px)",maxWidth:420,padding:20,
+          margin:"16px auto 16px auto"}}>
         {title&&<h3 style={{margin:"0 0 14px",fontSize:17,fontWeight:800,color:"#1c0a00"}}>{title}</h3>}
         {children}
       </div>
