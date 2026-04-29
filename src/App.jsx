@@ -182,23 +182,19 @@ export default function App(){
   const [loaded,setLoaded]=useState(false);
   const bkRef=useRef(null);
 
-useEffect(()=>{
-  // Subscribe real-time ke semua collection
-  // onSnapshot otomatis update state setiap ada perubahan dari HP manapun
-  let loadCount = 0;
-  const totalKeys = 6;
-  const checkLoaded = () => { loadCount++; if(loadCount >= totalKeys) setLoaded(true); };
-
-  const u1 = db.subscribe("bzr_tenants",    v => { setTenants(v||[]);              checkLoaded(); });
-  const u2 = db.subscribe("bzr_menus",      v => { setMenus(v||[]);                checkLoaded(); });
-  const u3 = db.subscribe("bzr_transactions",v=>{ setTransactions(v||[]);          checkLoaded(); });
-  const u4 = db.subscribe("bzr_settings",   v => { setSettings({...DEF,...(v||{})});checkLoaded(); });
-  const u5 = db.subscribe("bzr_admins",     v => { setAdmins(v||[]);               checkLoaded(); });
-  const u6 = db.subscribe("bzr_alerts",     v => { setAlerts(v||[]);               checkLoaded(); });
-
-  // Cleanup: unsubscribe saat komponen unmount
-  return () => { u1(); u2(); u3(); u4(); u5(); u6(); };
-},[]);
+  useEffect(()=>{
+    (async()=>{
+      const t=await db.get("bzr_tenants")||[];
+      const m=await db.get("bzr_menus")||[];
+      const tx=await db.get("bzr_transactions")||[];
+      const s=await db.get("bzr_settings")||{};
+      const a=await db.get("bzr_admins")||[];
+      const al=await db.get("bzr_alerts")||[];
+      setTenants(t);setMenus(m);setTransactions(tx);
+      setSettings({...DEF,...s});setAdmins(a);setAlerts(al);
+      setLoaded(true);
+    })();
+  },[]);
 
   useEffect(()=>{
     clearInterval(bkRef.current);
@@ -1356,8 +1352,12 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
                   <div style={{textAlign:"right"}}>
                     <p style={{color:ac,fontWeight:900,fontSize:24,margin:"0 0 4px"}}>{idr(tt)}</p>
                     <div style={{display:"flex",gap:6,justifyContent:"flex-end",flexWrap:"wrap"}}>
-                      <span style={{fontSize:11,color:"#6d28d9",background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:10,padding:"2px 7px",fontWeight:600}}>💳 {idr(em)}</span>
-                      <span style={{fontSize:11,color:"#b45309",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"2px 7px",fontWeight:600}}>💵 {idr(cs)}</span>
+                      <span style={{fontSize:12,color:"#6d28d9",background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:10,padding:"3px 10px",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+                        <span>💳</span><span>E-Money: {idr(em)}</span>
+                      </span>
+                      <span style={{fontSize:12,color:"#b45309",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"3px 10px",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+                        <span>💵</span><span>Cash: {idr(cs)}</span>
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1415,8 +1415,14 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
                       <p style={{margin:0,fontWeight:900,color:ac,fontSize:20}}>{idr(tt)}</p>
                     </div>
                     <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-                      <div style={{background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:10,padding:"8px 12px",flex:1}}><p style={{margin:"0 0 2px",color:"#7c3aed",fontSize:11,fontWeight:600}}>💳 E-Money</p><p style={{margin:0,color:"#4c1d95",fontWeight:800,fontSize:14}}>{idr(em)}</p></div>
-                      <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"8px 12px",flex:1}}><p style={{margin:"0 0 2px",color:"#b45309",fontSize:11,fontWeight:600}}>💵 Cash</p><p style={{margin:0,color:"#78350f",fontWeight:800,fontSize:14}}>{idr(cs)}</p></div>
+                      <div style={{background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:10,padding:"8px 12px",flex:1}}>
+                        <p style={{margin:"0 0 2px",color:"#7c3aed",fontSize:12,fontWeight:700}}>💳 E-Money</p>
+                        <p style={{margin:0,color:"#4c1d95",fontWeight:800,fontSize:14}}>{idr(em)}</p>
+                      </div>
+                      <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"8px 12px",flex:1}}>
+                        <p style={{margin:"0 0 2px",color:"#b45309",fontSize:12,fontWeight:700}}>💵 Cash</p>
+                        <p style={{margin:0,color:"#78350f",fontWeight:800,fontSize:14}}>{idr(cs)}</p>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1497,9 +1503,13 @@ function AdminSummary({tenants,transactions,settings,filterDate,setFilterDate}){
                 </div>
                 <div style={{textAlign:"right"}}>
                   <p style={{color:"#ea580c",fontWeight:800,fontSize:20,margin:0}}>{idr(t.tt)}</p>
-                  <div style={{display:"flex",gap:6,marginTop:4,justifyContent:"flex-end",flexWrap:"wrap"}}>
-                    <span style={{fontSize:11,color:"#6d28d9",background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:10,padding:"2px 7px",fontWeight:600}}>💳 {idr(t.em)}</span>
-                    <span style={{fontSize:11,color:"#b45309",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"2px 7px",fontWeight:600}}>💵 {idr(t.cs)}</span>
+                    <div style={{display:"flex",gap:6,marginTop:4,justifyContent:"flex-end",flexWrap:"wrap"}}>
+                    <span style={{fontSize:12,color:"#6d28d9",background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:10,padding:"3px 10px",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+                      <span>💳</span><span>E-Money: {idr(t.em)}</span>
+                    </span>
+                    <span style={{fontSize:12,color:"#b45309",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"3px 10px",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+                      <span>💵</span><span>Cash: {idr(t.cs)}</span>
+                    </span>
                   </div>
                   <div style={{height:4,borderRadius:4,background:"#f3f4f6",marginTop:6,width:100}}><div style={{height:4,borderRadius:4,background:"#ea580c",width:`${gt>0?(t.tt/gt)*100:0}%`,transition:"width .6s ease"}}/></div>
                 </div>
@@ -1621,34 +1631,34 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline}){
     <div>
       {lastNota&&(
         <Modal title="" onClose={()=>{}}>
-          <div style={{textAlign:"center",marginBottom:16}}>
-            <div style={{fontSize:46,marginBottom:6}}>{lastNota.paymentMethod==="emoney"?"💳":"💵"}</div>
-            <h3 style={{margin:0,fontSize:19,color:"#14532d"}}>Transaksi Berhasil!</h3>
-            <p style={{color:"#6b7280",margin:"5px 0 0",fontSize:13}}>No. Nota: <strong style={{color:"#1c0a00"}}>{lastNota.nota}</strong></p>
-            <div style={{marginTop:6}}><PayBadge method={lastNota.paymentMethod}/></div>
-            {!isOnline&&<div style={{background:"#fef3c7",border:"1px solid #fbbf24",borderRadius:10,padding:"5px 10px",marginTop:8,fontSize:12,color:"#92400e",fontWeight:600}}>⚠️ Tersimpan offline — sync saat online</div>}
+          <div style={{textAlign:"center",marginBottom:12}}>
+            <div style={{fontSize:36,marginBottom:4}}>{lastNota.paymentMethod==="emoney"?"💳":"💵"}</div>
+            <h3 style={{margin:0,fontSize:17,color:"#14532d"}}>Transaksi Berhasil!</h3>
+            <p style={{color:"#6b7280",margin:"4px 0 0",fontSize:12}}>No. Nota: <strong style={{color:"#1c0a00"}}>{lastNota.nota}</strong></p>
+            <div style={{marginTop:5}}><PayBadge method={lastNota.paymentMethod}/></div>
+            {!isOnline&&<div style={{background:"#fef3c7",border:"1px solid #fbbf24",borderRadius:8,padding:"4px 10px",marginTop:6,fontSize:11,color:"#92400e",fontWeight:600}}>⚠️ Tersimpan offline — sync saat online</div>}
           </div>
-          <div style={{background:"#f0fdf4",borderRadius:12,padding:12,marginBottom:12}}>
+          {/* List item dibatasi tinggi max 140px agar tidak terlalu panjang di HP kecil */}
+          <div style={{background:"#f0fdf4",borderRadius:10,padding:"10px 12px",marginBottom:10,maxHeight:140,overflowY:"auto"}}>
             {lastNota.items.map((it,i)=>(
-              <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"5px 0",fontSize:13,borderBottom:i<lastNota.items.length-1?"1px dashed #dcfce7":"none"}}>
+              <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12,borderBottom:i<lastNota.items.length-1?"1px dashed #dcfce7":"none"}}>
                 <span style={{color:"#374151"}}><span style={{color:"#9ca3af"}}>[{it.menuCode}]</span> {it.menuName} ×{it.qty}</span>
-                <span style={{fontWeight:600,color:"#1c0a00"}}>{idr(it.qty*it.price)}</span>
+                <span style={{fontWeight:600,color:"#1c0a00",marginLeft:8,whiteSpace:"nowrap"}}>{idr(it.qty*it.price)}</span>
               </div>
             ))}
-            <div style={{display:"flex",justifyContent:"space-between",marginTop:10,paddingTop:10,borderTop:"2px solid #dcfce7",fontWeight:800,fontSize:15}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:"2px solid #dcfce7",fontWeight:800,fontSize:14}}>
               <span>TOTAL</span><span style={{color:"#16a34a"}}>{idr(lastNota.total)}</span>
             </div>
           </div>
-          <button onClick={doPrint} style={{width:"100%",padding:"13px",background:"#1c0a00",color:"#fff",border:"none",borderRadius:12,fontSize:14,fontWeight:700,cursor:"pointer",marginBottom:10,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}} onMouseOver={e=>e.currentTarget.style.background="#431407"} onMouseOut={e=>e.currentTarget.style.background="#1c0a00"}>
+          <button onClick={doPrint} style={{width:"100%",padding:"12px",background:"#1c0a00",color:"#fff",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}} onMouseOver={e=>e.currentTarget.style.background="#431407"} onMouseOut={e=>e.currentTarget.style.background="#1c0a00"}>
             🖨️ {printed?"Cetak Ulang Struk":"Cetak Struk Thermal"}
           </button>
-          {/* WAJIB cetak struk dulu sebelum transaksi baru (req #9), klik tombol ini tutup popup (req #10) */}
           <button onClick={()=>{setLastNota(null);setPrinted(false);}} disabled={!printed}
-            style={{width:"100%",padding:"13px",background:printed?"#16a34a":"#d1fae5",color:printed?"#fff":"#9ca3af",border:"none",borderRadius:12,fontSize:14,fontWeight:700,cursor:printed?"pointer":"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif",transition:"all .2s"}}
+            style={{width:"100%",padding:"12px",background:printed?"#16a34a":"#d1fae5",color:printed?"#fff":"#9ca3af",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:printed?"pointer":"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif",transition:"all .2s"}}
             onMouseOver={e=>{if(printed)e.currentTarget.style.background="#15803d";}} onMouseOut={e=>{if(printed)e.currentTarget.style.background="#16a34a";}}>
             {printed?"➕ Transaksi Baru":"🔒 Cetak Struk Dulu"}
           </button>
-          {!printed&&<p style={{textAlign:"center",color:"#9ca3af",fontSize:12,margin:"8px 0 0"}}>Cetak struk dahulu sebelum lanjut transaksi baru</p>}
+          {!printed&&<p style={{textAlign:"center",color:"#9ca3af",fontSize:11,margin:"6px 0 0"}}>Cetak struk dahulu sebelum lanjut transaksi baru</p>}
         </Modal>
       )}
 
@@ -1842,10 +1852,10 @@ function TenantHistory({transactions,tenant,settings}){
 // ═════════════════════════════════════════════════════════════════════════════
 function Modal({title,onClose,children,accent="#ea580c"}){
   return(
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999,padding:16,overflowY:"auto"}}
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"flex-start",justifyContent:"center",zIndex:999,padding:"12px 16px",overflowY:"auto"}}
       onClick={e=>{if(e.target===e.currentTarget&&onClose)onClose();}}>
-      <div className="pop-in" style={{background:"#fff",borderRadius:20,boxShadow:"0 32px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:420,padding:24}}>
-        {title&&<h3 style={{margin:"0 0 16px",fontSize:17,fontWeight:800,color:"#1c0a00"}}>{title}</h3>}
+      <div className="pop-in" style={{background:"#fff",borderRadius:20,boxShadow:"0 32px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:420,padding:20,marginTop:"auto",marginBottom:"auto"}}>
+        {title&&<h3 style={{margin:"0 0 14px",fontSize:17,fontWeight:800,color:"#1c0a00"}}>{title}</h3>}
         {children}
       </div>
     </div>
