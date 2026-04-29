@@ -27,6 +27,8 @@ _gs.textContent = `
 `;
 document.head.appendChild(_gs);
 
+// ─── Storage ──────────────────────────────────────────────────────────────────
+
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
@@ -1630,34 +1632,46 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline}){
     <div>
       {lastNota&&(
         <Modal title="" onClose={()=>{}}>
-          <div style={{textAlign:"center",marginBottom:12}}>
-            <div style={{fontSize:36,marginBottom:4}}>{lastNota.paymentMethod==="emoney"?"💳":"💵"}</div>
-            <h3 style={{margin:0,fontSize:17,color:"#14532d"}}>Transaksi Berhasil!</h3>
-            <p style={{color:"#6b7280",margin:"4px 0 0",fontSize:12}}>No. Nota: <strong style={{color:"#1c0a00"}}>{lastNota.nota}</strong></p>
-            <div style={{marginTop:5}}><PayBadge method={lastNota.paymentMethod}/></div>
-            {!isOnline&&<div style={{background:"#fef3c7",border:"1px solid #fbbf24",borderRadius:8,padding:"4px 10px",marginTop:6,fontSize:11,color:"#92400e",fontWeight:600}}>⚠️ Tersimpan offline — sync saat online</div>}
+          {/* Header ringkas */}
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,background:"#f0fdf4",borderRadius:12,padding:"10px 14px"}}>
+            <div style={{fontSize:28}}>{lastNota.paymentMethod==="emoney"?"💳":"💵"}</div>
+            <div style={{flex:1}}>
+              <p style={{margin:0,fontWeight:800,fontSize:15,color:"#14532d"}}>Transaksi Berhasil!</p>
+              <p style={{margin:"2px 0 0",fontSize:12,color:"#6b7280"}}>Nota: <strong style={{color:"#1c0a00"}}>{lastNota.nota}</strong></p>
+            </div>
+            <PayBadge method={lastNota.paymentMethod}/>
           </div>
-          {/* List item dibatasi tinggi max 140px agar tidak terlalu panjang di HP kecil */}
-          <div style={{background:"#f0fdf4",borderRadius:10,padding:"10px 12px",marginBottom:10,maxHeight:140,overflowY:"auto"}}>
+
+          {!isOnline&&<div style={{background:"#fef3c7",border:"1px solid #fbbf24",borderRadius:8,padding:"5px 10px",marginBottom:8,fontSize:11,color:"#92400e",fontWeight:600,textAlign:"center"}}>⚠️ Tersimpan offline — sync saat online</div>}
+
+          {/* List item — max 120px scroll */}
+          <div style={{background:"#f9fafb",borderRadius:10,padding:"8px 12px",marginBottom:8,maxHeight:120,overflowY:"auto",WebkitOverflowScrolling:"touch"}}>
             {lastNota.items.map((it,i)=>(
-              <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12,borderBottom:i<lastNota.items.length-1?"1px dashed #dcfce7":"none"}}>
-                <span style={{color:"#374151"}}><span style={{color:"#9ca3af"}}>[{it.menuCode}]</span> {it.menuName} ×{it.qty}</span>
-                <span style={{fontWeight:600,color:"#1c0a00",marginLeft:8,whiteSpace:"nowrap"}}>{idr(it.qty*it.price)}</span>
+              <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"3px 0",fontSize:12,borderBottom:i<lastNota.items.length-1?"1px dashed #e5e7eb":"none"}}>
+                <span style={{color:"#374151",flex:1,marginRight:8}}><span style={{color:"#9ca3af"}}>[{it.menuCode}]</span> {it.menuName} <strong>×{it.qty}</strong></span>
+                <span style={{fontWeight:700,color:"#1c0a00",whiteSpace:"nowrap"}}>{idr(it.qty*it.price)}</span>
               </div>
             ))}
-            <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:"2px solid #dcfce7",fontWeight:800,fontSize:14}}>
-              <span>TOTAL</span><span style={{color:"#16a34a"}}>{idr(lastNota.total)}</span>
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:6,paddingTop:6,borderTop:"2px solid #dcfce7",fontWeight:800,fontSize:13}}>
+              <span style={{color:"#374151"}}>TOTAL</span>
+              <span style={{color:"#16a34a"}}>{idr(lastNota.total)}</span>
             </div>
           </div>
-          <button onClick={doPrint} style={{width:"100%",padding:"12px",background:"#1c0a00",color:"#fff",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}} onMouseOver={e=>e.currentTarget.style.background="#431407"} onMouseOut={e=>e.currentTarget.style.background="#1c0a00"}>
+
+          {/* Tombol cetak */}
+          <button onClick={doPrint}
+            style={{width:"100%",padding:"12px",background:"#1c0a00",color:"#fff",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+            onMouseOver={e=>e.currentTarget.style.background="#431407"} onMouseOut={e=>e.currentTarget.style.background="#1c0a00"}>
             🖨️ {printed?"Cetak Ulang Struk":"Cetak Struk Thermal"}
           </button>
+
+          {/* Tombol transaksi baru — disabled sampai struk dicetak */}
           <button onClick={()=>{setLastNota(null);setPrinted(false);}} disabled={!printed}
-            style={{width:"100%",padding:"12px",background:printed?"#16a34a":"#d1fae5",color:printed?"#fff":"#9ca3af",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:printed?"pointer":"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif",transition:"all .2s"}}
+            style={{width:"100%",padding:"12px",background:printed?"#16a34a":"#e5e7eb",color:printed?"#fff":"#9ca3af",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:printed?"pointer":"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif",transition:"all .2s"}}
             onMouseOver={e=>{if(printed)e.currentTarget.style.background="#15803d";}} onMouseOut={e=>{if(printed)e.currentTarget.style.background="#16a34a";}}>
             {printed?"➕ Transaksi Baru":"🔒 Cetak Struk Dulu"}
           </button>
-          {!printed&&<p style={{textAlign:"center",color:"#9ca3af",fontSize:11,margin:"6px 0 0"}}>Cetak struk dahulu sebelum lanjut transaksi baru</p>}
+          {!printed&&<p style={{textAlign:"center",color:"#9ca3af",fontSize:11,margin:"5px 0 0"}}>Cetak struk terlebih dahulu</p>}
         </Modal>
       )}
 
@@ -1850,16 +1864,32 @@ function TenantHistory({transactions,tenant,settings}){
 // SHARED COMPONENTS
 // ═════════════════════════════════════════════════════════════════════════════
 function Modal({title,onClose,children,accent="#ea580c"}){
-  // Pakai overflowY scroll di backdrop, modal card pakai margin auto
-  // Ini lebih andal di mobile dibanding flexbox centering
   return(
     <div
       onClick={e=>{if(e.target===e.currentTarget&&onClose)onClose();}}
-      style={{position:"fixed",inset:0,background:"rgba(0,0,0,.55)",overflowY:"auto",zIndex:999,WebkitOverflowScrolling:"touch"}}>
-      <div className="pop-in"
-        style={{background:"#fff",borderRadius:20,boxShadow:"0 20px 60px rgba(0,0,0,.3)",
-          width:"calc(100% - 32px)",maxWidth:420,padding:20,
-          margin:"16px auto 16px auto"}}>
+      style={{
+        position:"fixed",inset:0,
+        background:"rgba(0,0,0,.6)",
+        zIndex:999,
+        display:"flex",
+        alignItems:"center",
+        justifyContent:"center",
+        padding:16,
+      }}>
+      <div
+        className="pop-in"
+        style={{
+          background:"#fff",
+          borderRadius:20,
+          boxShadow:"0 20px 60px rgba(0,0,0,.3)",
+          width:"100%",
+          maxWidth:420,
+          // Kunci: maxHeight + overflowY scroll di CARD, bukan backdrop
+          maxHeight:"calc(100vh - 32px)",
+          overflowY:"auto",
+          WebkitOverflowScrolling:"touch",
+          padding:20,
+        }}>
         {title&&<h3 style={{margin:"0 0 14px",fontSize:17,fontWeight:800,color:"#1c0a00"}}>{title}</h3>}
         {children}
       </div>
