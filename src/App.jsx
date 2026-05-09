@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────17
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -826,6 +826,7 @@ function SettingsPanel({settings,onSaveSettings}){
           Diperlukan untuk kirim notifikasi saldo otomatis ke pelanggan.
         </div>
       </Sec>
+      <Sec label="🔐 Keamanan Akun">
         <FI label="Username Super Admin" placeholder="superadmin" value={form.saUser||""} onChange={v=>setForm({...form,saUser:v})}/>
         <FI label="Password Super Admin" placeholder="Password baru" value={form.saPass||""} onChange={v=>setForm({...form,saPass:v})} type="password"/>
         <FI label="Password Reset Data" placeholder="Password khusus reset" value={form.resetPass||""} onChange={v=>setForm({...form,resetPass:v})} type="password"/>
