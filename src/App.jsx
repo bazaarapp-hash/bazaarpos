@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from "react";
-import { db } from "./firebase";
 
 // ─── Fonts & Global Style ─────────────────────────────────────────────────────
 const _fl = document.createElement("link");
@@ -28,7 +27,14 @@ _gs.textContent = `
 document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
-
+const db = {
+  async get(k) {
+    try { const r = await window.storage.get(k); return r ? JSON.parse(r.value) : null; } catch { return null; }
+  },
+  async set(k, v) {
+    try { await window.storage.set(k, JSON.stringify(v)); } catch(e) { console.error(e); }
+  },
+};
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
@@ -75,12 +81,14 @@ const DEF = {
   bazaarName:"Bazaar 2026", receiptFooter1:"Terima kasih!", receiptFooter2:"Selamat menikmati :)",
   saUser:"superadmin", saPass:"superadmin123", resetPass:"reset123",
   autoBackup:false, backupInterval:30,
+  fonnteToken:"", bazaarPhone:"",
 };
 
 // ─── Payment ──────────────────────────────────────────────────────────────────
 const PAY = {
   emoney:{label:"💳 E-Money",color:"#6d28d9",bg:"#f5f3ff",border:"#ddd6fe"},
   cash:  {label:"💵 Cash",   color:"#b45309",bg:"#fffbeb",border:"#fde68a"},
+  wallet:{label:"🪙 Saldo",  color:"#4c1d95",bg:"#f5f0ff",border:"#c4b5fd"},
 };
 function PayBadge({method}){
   const p=PAY[method]||PAY.cash;
@@ -96,11 +104,14 @@ function exportToExcel({filename,sheets}){
 
 // ─── Thermal Print ────────────────────────────────────────────────────────────
 function printThermal({tx,tenantName,tenantCode,bazaarName="BazaarPOS",footer1="Terima kasih!",footer2="Selamat menikmati :)"}){
-  const payLabel=tx.paymentMethod==="emoney"?"E-Money":"Cash";
+  const payLabel=tx.paymentMethod==="emoney"?"E-Money":tx.paymentMethod==="wallet"?"Saldo":"Cash";
   const rows=tx.items.map(it=>`
     <tr><td colspan="2" style="padding:1px 0;font-size:12px;word-break:break-word">[${it.menuCode}] ${it.menuName}</td></tr>
     <tr><td style="padding:0 0 5px;font-size:12px">  ${it.qty} x ${idr(it.price)}</td>
         <td style="text-align:right;padding:0 0 5px;font-size:12px;font-weight:700">${idr(it.qty*it.price)}</td></tr>`).join("");
+  const walletInfo=tx.paymentMethod==="wallet"&&tx.walletCustomerName
+    ?`<p style="margin:2px 0;font-size:11px">Pelanggan: ${tx.walletCustomerName}</p><p style="margin:2px 0;font-size:11px">Sisa Saldo: ${idr(tx.walletBalanceAfter??0)}</p>`
+    :"";
   const html=`<!DOCTYPE html><html><head><title>Struk</title>
   <style>@page{size:58mm auto;margin:3mm 4mm}*{font-family:'Courier New',Courier,monospace;box-sizing:border-box}
   body{width:50mm;margin:0;padding:0;font-size:12px;color:#000}.c{text-align:center}.b{font-weight:bold}
@@ -112,6 +123,7 @@ function printThermal({tx,tenantName,tenantCode,bazaarName="BazaarPOS",footer1="
   <p style="margin:2px 0;font-size:11px">No  : ${tx.nota}</p>
   <p style="margin:2px 0;font-size:11px">Tgl : ${tx.date} ${tx.time}</p>
   <p style="margin:2px 0;font-size:11px">Byr : ${payLabel}</p>
+  ${walletInfo}
   <hr class="d"/><table>${rows}</table><hr class="d"/>
   <table><tr><td class="b" style="font-size:13px">TOTAL</td>
              <td class="b" style="text-align:right;font-size:13px">${idr(tx.total)}</td></tr></table>
@@ -180,6 +192,8 @@ export default function App(){
   const [settings,setSettings]=useState(DEF);
   const [admins,setAdmins]=useState([]);
   const [alerts,setAlerts]=useState([]);
+  const [customers,setCustomers]=useState([]);
+  const [walletLogs,setWalletLogs]=useState([]);
   const [loaded,setLoaded]=useState(false);
   const bkRef=useRef(null);
 
@@ -191,8 +205,11 @@ export default function App(){
       const s=await db.get("bzr_settings")||{};
       const a=await db.get("bzr_admins")||[];
       const al=await db.get("bzr_alerts")||[];
+      const cu=await db.get("bzr_customers")||[];
+      const wl=await db.get("bzr_wallet_logs")||[];
       setTenants(t);setMenus(m);setTransactions(tx);
       setSettings({...DEF,...s});setAdmins(a);setAlerts(al);
+      setCustomers(cu);setWalletLogs(wl);
       setLoaded(true);
     })();
   },[]);
@@ -227,36 +244,35 @@ export default function App(){
   const saveSettings=async d=>{setSettings(d);await db.set("bzr_settings",d);};
   const saveAdmins=async d=>{setAdmins(d);await db.set("bzr_admins",d);};
   const saveAlerts=async d=>{setAlerts(d);await db.set("bzr_alerts",d);};
+  const saveCustomers=async d=>{setCustomers(d);await db.set("bzr_customers",d);};
+  const saveWalletLogs=async d=>{setWalletLogs(d);await db.set("bzr_wallet_logs",d);};
   const logout=()=>{setSession(null);setScreen("login");};
 
-  // Restore atomik — update semua state sekaligus lalu simpan ke storage
   const restoreBackup=async(bk)=>{
     const newTenants     = Array.isArray(bk.tenants)     ? bk.tenants     : tenants;
     const newMenus       = Array.isArray(bk.menus)       ? bk.menus       : menus;
     const newTx          = Array.isArray(bk.transactions) ? bk.transactions : transactions;
     const newAdmins      = Array.isArray(bk.admins)      ? bk.admins      : admins;
     const newSettings    = bk.settings ? {...DEF,...bk.settings} : settings;
-    // Update semua state React sekaligus
-    setTenants(newTenants);
-    setMenus(newMenus);
-    setTransactions(newTx);
-    setAdmins(newAdmins);
-    setSettings(newSettings);
-    // Simpan ke storage
-    await db.set("bzr_tenants",     newTenants);
-    await db.set("bzr_menus",       newMenus);
-    await db.set("bzr_transactions",newTx);
-    await db.set("bzr_admins",      newAdmins);
-    await db.set("bzr_settings",    newSettings);
+    const newCustomers   = Array.isArray(bk.customers)   ? bk.customers   : customers;
+    const newWalletLogs  = Array.isArray(bk.walletLogs)  ? bk.walletLogs  : walletLogs;
+    setTenants(newTenants); setMenus(newMenus); setTransactions(newTx);
+    setAdmins(newAdmins);   setSettings(newSettings);
+    setCustomers(newCustomers); setWalletLogs(newWalletLogs);
+    await db.set("bzr_tenants",newTenants); await db.set("bzr_menus",newMenus);
+    await db.set("bzr_transactions",newTx); await db.set("bzr_admins",newAdmins);
+    await db.set("bzr_settings",newSettings);
+    await db.set("bzr_customers",newCustomers); await db.set("bzr_wallet_logs",newWalletLogs);
   };
 
   const unreadAlerts=alerts.filter(a=>!a.read);
 
   const commonProps={
-    tenants,menus,transactions,settings,admins,
+    tenants,menus,transactions,settings,admins,customers,walletLogs,
     alerts:unreadAlerts, allAlerts:alerts,
     onSaveTenants:saveTenants, onSaveMenus:saveMenus, onSaveTx:saveTx,
     onSaveSettings:saveSettings, onSaveAdmins:saveAdmins, onSaveAlerts:saveAlerts,
+    onSaveCustomers:saveCustomers, onSaveWalletLogs:saveWalletLogs,
     onRestoreBackup:restoreBackup,
     onLogout:logout,
   };
@@ -274,7 +290,10 @@ export default function App(){
       menus={menus.filter(m=>m.tenantId===session.data.id)} allMenus={menus}
       transactions={transactions.filter(t=>t.tenantId===session.data.id)}
       allTransactions={transactions} settings={settings}
-      onSaveMenus={saveMenus} onSaveTx={saveTx} onSaveAlerts={saveAlerts} alerts={alerts}
+      customers={customers} walletLogs={walletLogs}
+      onSaveMenus={saveMenus} onSaveTx={saveTx}
+      onSaveCustomers={saveCustomers} onSaveWalletLogs={saveWalletLogs}
+      onSaveAlerts={saveAlerts} alerts={alerts}
       onLogout={logout}/>);
 
   return <LoginScreen tenants={tenants} admins={admins} settings={settings}
@@ -472,6 +491,7 @@ function SuperAdminDashboard(props){
 
   const tabs=[
     {k:"tenants",i:"🏪",l:"Tenant"},{k:"admins",i:"🔑",l:"Admin"},
+    {k:"wallet",i:"💰",l:"Kasir Top Up"},
     {k:"transactions",i:"📋",l:"Transaksi"},{k:"report",i:"📑",l:"Laporan"},
     {k:"summary",i:"📊",l:"Rekap"},{k:"settings",i:"⚙️",l:"Pengaturan"},
     {k:"backup",i:"💾",l:"Backup"},{k:"reset",i:"🗑️",l:"Reset Data"},
@@ -522,6 +542,7 @@ function SuperAdminDashboard(props){
       <div style={{padding:20,maxWidth:1100,margin:"0 auto"}} className="fade-in">
         {tab==="tenants"&&<AdminTenants {...props}/>}
         {tab==="admins"&&<AdminUsers {...props}/>}
+        {tab==="wallet"&&<KasirTopUp {...props}/>}
         {tab==="transactions"&&<AdminTransactions {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
         {tab==="report"&&<AdminTenantReport {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
         {tab==="summary"&&<AdminSummary {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
@@ -543,7 +564,8 @@ function AdminDashboard(props){
   const [showAlertPop,setShowAlertPop]=useState(true);
   const todayTx=transactions.filter(t=>t.date===todayStr());
   const tabs=[
-    {k:"tenants",i:"🏪",l:"Tenant"},{k:"transactions",i:"📋",l:"Transaksi"},
+    {k:"tenants",i:"🏪",l:"Tenant"},{k:"wallet",i:"💰",l:"Kasir Top Up"},
+    {k:"transactions",i:"📋",l:"Transaksi"},
     {k:"report",i:"📑",l:"Laporan"},{k:"summary",i:"📊",l:"Rekap"},{k:"backup",i:"💾",l:"Backup"},
   ];
   const dismissAlerts=async()=>{await onSaveAlerts(allAlerts.map(a=>({...a,read:true})));setShowAlertPop(false);};
@@ -577,6 +599,7 @@ function AdminDashboard(props){
       </div>
       <div style={{padding:20,maxWidth:1100,margin:"0 auto"}} className="fade-in">
         {tab==="tenants"&&<AdminTenants {...props}/>}
+        {tab==="wallet"&&<KasirTopUp {...props}/>}
         {tab==="transactions"&&<AdminTransactions {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
         {tab==="report"&&<AdminTenantReport {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
         {tab==="summary"&&<AdminSummary {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
@@ -802,7 +825,14 @@ function SettingsPanel({settings,onSaveSettings}){
           <p style={{fontFamily:"'Courier New',monospace",fontSize:11,margin:"2px 0 0",color:"#6b7280"}}>{form.receiptFooter2||"—"}</p>
         </div>
       </Sec>
-      <Sec label="🔐 Keamanan Akun">
+      <Sec label="📱 WhatsApp (Fonnte API)">
+        <FI label="Fonnte API Token" placeholder="Token dari fonnte.com" value={form.fonnteToken||""} onChange={v=>setForm({...form,fonnteToken:v})}/>
+        <FI label="Nomor WA Bazaar (pengirim)" placeholder="628123456789" value={form.bazaarPhone||""} onChange={v=>setForm({...form,bazaarPhone:v})}/>
+        <div style={{background:"#f0f9ff",borderRadius:10,padding:"10px 14px",fontSize:12,color:"#0284c7"}}>
+          💡 Daftar di <strong>fonnte.com</strong> → hubungkan nomor WA → copy API Token ke sini.
+          Diperlukan untuk kirim notifikasi saldo otomatis ke pelanggan.
+        </div>
+      </Sec>
         <FI label="Username Super Admin" placeholder="superadmin" value={form.saUser||""} onChange={v=>setForm({...form,saUser:v})}/>
         <FI label="Password Super Admin" placeholder="Password baru" value={form.saPass||""} onChange={v=>setForm({...form,saPass:v})} type="password"/>
         <FI label="Password Reset Data" placeholder="Password khusus reset" value={form.resetPass||""} onChange={v=>setForm({...form,resetPass:v})} type="password"/>
@@ -1220,6 +1250,353 @@ function ResetPanel({transactions,settings,onSaveTx}){
   );
 }
 
+// ─── WhatsApp Sender via Fonnte ───────────────────────────────────────────────
+async function sendWhatsApp({token, phone, message}){
+  if(!token||!phone) return false;
+  try{
+    const target = phone.startsWith("0") ? "62"+phone.slice(1) : phone.replace(/\D/g,"");
+    const res = await fetch("https://api.fonnte.com/send",{
+      method:"POST",
+      headers:{"Authorization":token,"Content-Type":"application/json"},
+      body:JSON.stringify({target, message, countryCode:"62"}),
+    });
+    const d = await res.json();
+    return d.status===true||d.status==="true";
+  }catch(e){ console.error("WA error:",e); return false; }
+}
+
+// ─── Generate Customer Card (Canvas → JPEG dataURL) ──────────────────────────
+function generateCustomerCard({customer, bazaarName}){
+  return new Promise((resolve)=>{
+    const canvas = document.createElement("canvas");
+    canvas.width=800; canvas.height=420;
+    const ctx = canvas.getContext("2d");
+
+    // Background gradient
+    const grad = ctx.createLinearGradient(0,0,800,420);
+    grad.addColorStop(0,"#1c0a00"); grad.addColorStop(1,"#ea580c");
+    ctx.fillStyle=grad; ctx.roundRect(0,0,800,420,24); ctx.fill();
+
+    // White card area
+    ctx.fillStyle="rgba(255,255,255,0.95)";
+    ctx.roundRect(20,20,760,380,18); ctx.fill();
+
+    // Header
+    ctx.fillStyle="#ea580c";
+    ctx.font="bold 28px Arial"; ctx.textAlign="left";
+    ctx.fillText("🏪 "+bazaarName, 36, 65);
+    ctx.fillStyle="#6b7280";
+    ctx.font="16px Arial";
+    ctx.fillText("Kartu Saldo Pelanggan", 36, 90);
+
+    // Divider
+    ctx.strokeStyle="#f3f4f6"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(36,105); ctx.lineTo(764,105); ctx.stroke();
+
+    // Customer info
+    ctx.fillStyle="#1c0a00";
+    ctx.font="bold 32px Arial"; ctx.textAlign="left";
+    ctx.fillText(customer.name, 36, 150);
+    ctx.fillStyle="#6b7280";
+    ctx.font="20px Arial";
+    ctx.fillText("📱 "+customer.phone, 36, 185);
+
+    // Balance box
+    ctx.fillStyle="#fff7ed";
+    ctx.roundRect(36, 210, 340, 90, 12); ctx.fill();
+    ctx.strokeStyle="#fed7aa"; ctx.lineWidth=2;
+    ctx.roundRect(36,210,340,90,12); ctx.stroke();
+    ctx.fillStyle="#9ca3af"; ctx.font="14px Arial";
+    ctx.fillText("Saldo Tersedia", 56, 237);
+    ctx.fillStyle="#ea580c"; ctx.font="bold 34px Arial";
+    const balStr = new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(customer.balance);
+    ctx.fillText(balStr, 56, 280);
+
+    // QR code via qrserver API (load as image)
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(customer.phone)}&bgcolor=ffffff&color=1c0a00`;
+    const qrImg = new Image();
+    qrImg.crossOrigin="anonymous";
+    qrImg.onload=()=>{
+      // QR background
+      ctx.fillStyle="#f9fafb";
+      ctx.roundRect(560,130,200,200,12); ctx.fill();
+      ctx.drawImage(qrImg,570,140,180,180);
+      ctx.fillStyle="#6b7280"; ctx.font="13px Arial"; ctx.textAlign="center";
+      ctx.fillText("Scan untuk transaksi",660,350);
+
+      // Footer
+      ctx.fillStyle="#9ca3af"; ctx.font="13px Arial"; ctx.textAlign="left";
+      ctx.fillText("ID: "+customer.id.slice(0,8).toUpperCase(), 36, 365);
+      ctx.textAlign="right";
+      ctx.fillText("Dicetak: "+new Date().toLocaleString("id-ID"), 764, 365);
+
+      resolve(canvas.toDataURL("image/jpeg",0.92));
+    };
+    qrImg.onerror=()=>{
+      // Tanpa QR jika gagal load
+      ctx.fillStyle="#9ca3af"; ctx.font="13px Arial"; ctx.textAlign="left";
+      ctx.fillText("ID: "+customer.id.slice(0,8).toUpperCase(), 36, 365);
+      resolve(canvas.toDataURL("image/jpeg",0.92));
+    };
+    qrImg.src=qrUrl;
+  });
+}
+
+// ─── Kasir Top Up ─────────────────────────────────────────────────────────────
+function KasirTopUp({customers,walletLogs,settings,onSaveCustomers,onSaveWalletLogs}){
+  const [tab,setTab]=useState("customers");
+  const [form,setForm]=useState({phone:"",name:"",amount:""});
+  const [selCust,setSelCust]=useState(null); // customer dipilih untuk top up
+  const [search,setSearch]=useState("");
+  const [sending,setSending]=useState(false);
+  const [msg,setMsg]=useState("");
+  const [filterDate,setFilterDate]=useState(todayStr());
+
+  const showMsg=(m,dur=3500)=>{setMsg(m);setTimeout(()=>setMsg(""),dur);};
+
+  // Cari atau buat customer
+  const findOrCreate=()=>{
+    if(!form.phone.trim()||!form.name.trim()){showMsg("❌ Nomor WA dan nama harus diisi!");return null;}
+    const phone=form.phone.trim().replace(/\D/g,"");
+    let cust=customers.find(c=>c.phone===phone);
+    if(!cust){
+      cust={id:uid(),phone,name:form.name.trim(),balance:0,createdAt:new Date().toISOString()};
+      return {cust,isNew:true};
+    }
+    return {cust,isNew:false};
+  };
+
+  const handleTopUp=async()=>{
+    const result=findOrCreate(); if(!result)return;
+    const amount=parseInt(form.amount);
+    if(isNaN(amount)||amount<=0){showMsg("❌ Nominal top up tidak valid!");return;}
+    setSending(true);
+
+    const {cust,isNew}=result;
+    const balBefore=cust.balance;
+    const balAfter=balBefore+amount;
+    const now=new Date();
+    const logEntry={
+      id:uid(), customerId:cust.id, customerPhone:cust.phone, customerName:cust.name,
+      type:"topup", amount, balanceBefore:balBefore, balanceAfter:balAfter,
+      timestamp:now.toISOString(), date:todayStr(), time:timeStr(),
+    };
+
+    // Update customer balance
+    const updCust={...cust,balance:balAfter,name:form.name.trim()};
+    const newCusts=isNew?[...customers,updCust]:customers.map(c=>c.id===cust.id?updCust:c);
+    const newLogs=[logEntry,...walletLogs];
+    await onSaveCustomers(newCusts);
+    await onSaveWalletLogs(newLogs);
+
+    // Generate kartu & kirim WA
+    const cardDataUrl=await generateCustomerCard({customer:updCust,bazaarName:settings.bazaarName||"BazaarPOS"});
+
+    // Download kartu otomatis
+    const link=document.createElement("a");
+    link.href=cardDataUrl;
+    link.download=`Kartu_${updCust.name.replace(/\s+/g,"_")}.jpg`;
+    link.click();
+
+    // Kirim WA notifikasi
+    const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\nHalo *${updCust.name}*! 👋\n\n✅ *Top Up Berhasil*\n💰 Nominal   : ${idr(amount)}\n📊 Saldo Lama: ${idr(balBefore)}\n💳 Saldo Baru: ${idr(balAfter)}\n\n🕐 Waktu: ${now.toLocaleString("id-ID")}\n\nTunjukkan QR Code kartu Anda saat bertransaksi.\n\nTerima kasih! 🙏`;
+
+    let waSent=false;
+    if(settings.fonnteToken){
+      waSent=await sendWhatsApp({token:settings.fonnteToken,phone:updCust.phone,message:waMsg});
+    }
+
+    showMsg(`✅ Top up berhasil! Kartu didownload.${waSent?" WA terkirim!":settings.fonnteToken?" (WA gagal)":""}`);
+    setForm({phone:"",name:"",amount:""});
+    setSelCust(null);
+    setSending(false);
+  };
+
+  const handleDownloadCard=async(cust)=>{
+    const dataUrl=await generateCustomerCard({customer:cust,bazaarName:settings.bazaarName||"BazaarPOS"});
+    const link=document.createElement("a");
+    link.href=dataUrl; link.download=`Kartu_${cust.name.replace(/\s+/g,"_")}.jpg`;
+    link.click();
+  };
+
+  const filteredSearch=customers.filter(c=>
+    c.name.toLowerCase().includes(search.toLowerCase())||c.phone.includes(search)
+  );
+  const filteredLogs=walletLogs.filter(l=>l.date===filterDate);
+  const todayTopUp=filteredLogs.filter(l=>l.type==="topup").reduce((s,l)=>s+l.amount,0);
+  const todayPayment=filteredLogs.filter(l=>l.type==="payment").reduce((s,l)=>s+l.amount,0);
+
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:12}}>
+        <div>
+          <h2 style={{margin:0,fontSize:20,fontWeight:800,color:"#1c0a00"}}>💰 Kasir Top Up</h2>
+          <p style={{color:"#9ca3af",margin:"4px 0 0",fontSize:13}}>{customers.length} pelanggan terdaftar</p>
+        </div>
+      </div>
+
+      {msg&&<div className="pop-in" style={{background:msg.startsWith("✅")?"#f0fdf4":"#fef2f2",border:`1px solid ${msg.startsWith("✅")?"#bbf7d0":"#fca5a5"}`,borderRadius:12,padding:"10px 16px",marginBottom:16,fontWeight:600,fontSize:13,color:msg.startsWith("✅")?"#16a34a":"#dc2626"}}>{msg}</div>}
+
+      {/* Sub-tabs */}
+      <div style={{display:"flex",gap:4,marginBottom:20,background:"#f9fafb",borderRadius:14,padding:4}}>
+        {[{k:"customers",i:"👥",l:"Pelanggan"},{k:"topup",i:"💳",l:"Top Up"},{k:"history",i:"📋",l:"Riwayat"}].map(t=>(
+          <button key={t.k} onClick={()=>setTab(t.k)}
+            style={{flex:1,padding:"10px 8px",background:tab===t.k?"#fff":"transparent",border:"none",borderRadius:10,fontWeight:tab===t.k?700:500,color:tab===t.k?"#ea580c":"#6b7280",cursor:"pointer",fontSize:13,boxShadow:tab===t.k?"0 2px 8px rgba(0,0,0,.08)":"none",transition:"all .2s"}}>
+            {t.i} {t.l}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Tab Pelanggan ── */}
+      {tab==="customers"&&(
+        <div>
+          <div style={{position:"relative",marginBottom:16}}>
+            <input placeholder="🔍 Cari nama atau nomor WA..." value={search} onChange={e=>setSearch(e.target.value)}
+              style={{width:"100%",border:"2px solid #e5e7eb",borderRadius:12,padding:"11px 14px",fontSize:14,outline:"none",color:"#111",boxSizing:"border-box",fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+              onFocus={e=>e.target.style.borderColor="#ea580c"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
+          </div>
+          {filteredSearch.length===0?<EmptyState icon="👥" text="Belum ada pelanggan terdaftar."/>:
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {filteredSearch.map(c=>(
+                <div key={c.id} className="card-hover" style={{background:"#fff",border:"1px solid #f3f4f6",borderRadius:16,padding:"14px 18px",boxShadow:"0 2px 8px rgba(0,0,0,.05)"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}}>
+                    <div>
+                      <p style={{fontWeight:800,fontSize:16,color:"#1c0a00",margin:"0 0 4px"}}>{c.name}</p>
+                      <p style={{color:"#6b7280",fontSize:13,margin:"0 0 6px"}}>📱 {c.phone}</p>
+                      <div style={{display:"flex",gap:8}}>
+                        <span style={{background:c.balance>0?"#f0fdf4":"#fef2f2",color:c.balance>0?"#16a34a":"#dc2626",fontSize:13,fontWeight:800,padding:"4px 12px",borderRadius:20,border:`1px solid ${c.balance>0?"#bbf7d0":"#fca5a5"}`}}>
+                          💳 Saldo: {idr(c.balance)}
+                        </span>
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:8}}>
+                      <button onClick={()=>{setForm({phone:c.phone,name:c.name,amount:""});setTab("topup");}}
+                        style={{padding:"8px 14px",background:"#fff7ed",color:"#ea580c",border:"1px solid #fed7aa",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                        💰 Top Up
+                      </button>
+                      <button onClick={()=>handleDownloadCard(c)}
+                        style={{padding:"8px 14px",background:"#f0f9ff",color:"#0284c7",border:"1px solid #bae6fd",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                        🪪 Kartu
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>}
+        </div>
+      )}
+
+      {/* ── Tab Top Up ── */}
+      {tab==="topup"&&(
+        <div style={{maxWidth:500}}>
+          <div style={{background:"#fff",borderRadius:18,padding:24,boxShadow:"0 2px 12px rgba(0,0,0,.06)",marginBottom:16}}>
+            <p style={{fontWeight:700,color:"#ea580c",fontSize:14,margin:"0 0 16px",borderLeft:"4px solid #ea580c",paddingLeft:10}}>💳 Form Top Up Saldo</p>
+            <FI label="Nomor WhatsApp Pelanggan" placeholder="08123456789" value={form.phone} onChange={v=>{
+              setForm({...form,phone:v});
+              const found=customers.find(c=>c.phone===v.replace(/\D/g,""));
+              if(found) setForm(f=>({...f,name:found.name}));
+            }}/>
+            <FI label="Nama Pelanggan" placeholder="Nama lengkap" value={form.name} onChange={v=>setForm({...form,name:v})}/>
+            <FI label="Nominal Top Up (Rp)" placeholder="50000" value={form.amount} onChange={v=>setForm({...form,amount:v})} type="number"/>
+
+            {/* Preview nominal cepat */}
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+              {[10000,20000,50000,100000].map(n=>(
+                <button key={n} onClick={()=>setForm({...form,amount:String(n)})}
+                  style={{padding:"6px 14px",background:form.amount===String(n)?"#fff7ed":"#f9fafb",color:form.amount===String(n)?"#ea580c":"#6b7280",border:`1px solid ${form.amount===String(n)?"#fed7aa":"#e5e7eb"}`,borderRadius:20,cursor:"pointer",fontWeight:600,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                  {idr(n)}
+                </button>
+              ))}
+            </div>
+
+            {/* Preview saldo */}
+            {form.phone&&(()=>{
+              const found=customers.find(c=>c.phone===form.phone.replace(/\D/g,""));
+              const curBal=found?found.balance:0;
+              const topAmt=parseInt(form.amount)||0;
+              return(
+                <div style={{background:"#f9fafb",borderRadius:12,padding:"12px 16px",marginBottom:14}}>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}>
+                    <span style={{color:"#6b7280"}}>Saldo saat ini</span>
+                    <span style={{fontWeight:700,color:"#374151"}}>{idr(curBal)}</span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}>
+                    <span style={{color:"#6b7280"}}>Nominal top up</span>
+                    <span style={{fontWeight:700,color:"#16a34a"}}>+ {idr(topAmt)}</span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:14,borderTop:"1px dashed #e5e7eb",paddingTop:8,marginTop:4}}>
+                    <span style={{fontWeight:700,color:"#374151"}}>Saldo setelah top up</span>
+                    <span style={{fontWeight:900,color:"#ea580c"}}>{idr(curBal+topAmt)}</span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            <button onClick={handleTopUp} disabled={sending}
+              style={{width:"100%",padding:"14px",background:sending?"#9ca3af":"#ea580c",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:sending?"not-allowed":"pointer",fontSize:15,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:10}}
+              onMouseOver={e=>{if(!sending)e.currentTarget.style.background="#c2410c";}} onMouseOut={e=>{if(!sending)e.currentTarget.style.background="#ea580c";}}>
+              {sending?"⏳ Memproses...":"💰 Proses Top Up & Download Kartu"}
+            </button>
+            {!settings.fonnteToken&&<p style={{textAlign:"center",color:"#f97316",fontSize:12,margin:"8px 0 0"}}>⚠️ Fonnte token belum diisi — notifikasi WA tidak akan terkirim</p>}
+          </div>
+        </div>
+      )}
+
+      {/* ── Tab Riwayat ── */}
+      {tab==="history"&&(
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:10}}>
+            <h3 style={{margin:0,fontSize:16,fontWeight:800,color:"#1c0a00"}}>Riwayat Transaksi Saldo</h3>
+            <DP value={filterDate} onChange={setFilterDate}/>
+          </div>
+
+          {/* Statistik hari ini */}
+          {filteredLogs.length>0&&(
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16}}>
+              {[
+                {l:"Total Top Up",v:idr(todayTopUp),c:"#16a34a",bg:"#f0fdf4",bc:"#bbf7d0"},
+                {l:"Total Belanja",v:idr(todayPayment),c:"#ea580c",bg:"#fff7ed",bc:"#fed7aa"},
+                {l:"Transaksi",v:filteredLogs.length,c:"#0284c7",bg:"#f0f9ff",bc:"#bae6fd"},
+              ].map(s=>(
+                <div key={s.l} style={{background:s.bg,border:`1px solid ${s.bc}`,borderRadius:12,padding:"10px 12px",textAlign:"center"}}>
+                  <p style={{margin:0,color:"#6b7280",fontSize:11,fontWeight:600}}>{s.l}</p>
+                  <p style={{margin:"4px 0 0",color:s.c,fontWeight:900,fontSize:16}}>{s.v}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {filteredLogs.length===0?<EmptyState icon="📋" text="Tidak ada transaksi pada tanggal ini."/>:
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {filteredLogs.map(log=>(
+                <div key={log.id} style={{background:"#fff",border:"1px solid #f3f4f6",borderRadius:14,padding:"12px 16px",boxShadow:"0 2px 6px rgba(0,0,0,.04)"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+                    <div>
+                      <div style={{display:"flex",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+                        <span style={{background:log.type==="topup"?"#f0fdf4":"#fff7ed",color:log.type==="topup"?"#16a34a":"#ea580c",fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:20,border:`1px solid ${log.type==="topup"?"#bbf7d0":"#fed7aa"}`}}>
+                          {log.type==="topup"?"💰 Top Up":"🛒 Belanja"}
+                        </span>
+                        {log.tenantName&&<span style={{background:"#f5f3ff",color:"#7c3aed",fontSize:11,fontWeight:600,padding:"2px 10px",borderRadius:20,border:"1px solid #ddd6fe"}}>{log.tenantName}</span>}
+                      </div>
+                      <p style={{fontWeight:700,color:"#1c0a00",margin:"0 0 2px",fontSize:14}}>{log.customerName}</p>
+                      <p style={{color:"#9ca3af",fontSize:12,margin:0}}>📱 {log.customerPhone} • {log.time}</p>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <p style={{fontWeight:900,color:log.type==="topup"?"#16a34a":"#ea580c",fontSize:16,margin:0}}>
+                        {log.type==="topup"?"+":"-"}{idr(log.amount)}
+                      </p>
+                      <p style={{color:"#9ca3af",fontSize:11,margin:"3px 0 0"}}>Sisa: <strong style={{color:"#374151"}}>{idr(log.balanceAfter)}</strong></p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Admin Transactions ───────────────────────────────────────────────────────
 function AdminTransactions({tenants,transactions,settings,filterDate,setFilterDate}){
   const getTn=id=>tenants.find(t=>t.id===id)||{};
@@ -1529,7 +1906,7 @@ function AdminSummary({tenants,transactions,settings,filterDate,setFilterDate}){
 // ═════════════════════════════════════════════════════════════════════════════
 // TENANT APP
 // ═════════════════════════════════════════════════════════════════════════════
-function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,onSaveMenus,onSaveTx,onSaveAlerts,alerts,onLogout}){
+function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,customers,walletLogs,onSaveMenus,onSaveTx,onSaveCustomers,onSaveWalletLogs,onSaveAlerts,alerts,onLogout}){
   const [tab,setTab]=useState("pos");
   const [btPrinter,setBtPrinter]=useState(null);
   const [btConnecting,setBtConnecting]=useState(false);
@@ -1596,7 +1973,7 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
       </div>
 
       <div style={{padding:16,maxWidth:520,margin:"0 auto"}} className="fade-in">
-        {tab==="pos"&&<TenantPOS tenant={tenant} menus={menus} allTransactions={allTransactions} onSaveTx={onSaveTx} settings={settings} isOnline={isOnline}/>}
+        {tab==="pos"&&<TenantPOS tenant={tenant} menus={menus} allTransactions={allTransactions} onSaveTx={onSaveTx} settings={settings} isOnline={isOnline} customers={customers} walletLogs={walletLogs} onSaveCustomers={onSaveCustomers} onSaveWalletLogs={onSaveWalletLogs}/>}
         {tab==="menu"&&<TenantMenuMgr tenant={tenant} menus={menus} allMenus={allMenus} allTransactions={allTransactions} onSaveMenus={onSaveMenus}/>}
         {tab==="history"&&<TenantHistory transactions={transactions} tenant={tenant} settings={settings}/>}
       </div>
@@ -1605,7 +1982,300 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
 }
 
 // ─── Tenant POS ───────────────────────────────────────────────────────────────
-function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline}){
+function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,customers,walletLogs,onSaveCustomers,onSaveWalletLogs}){
+  const [cart,setCart]=useState([]);
+  const [lastNota,setLastNota]=useState(null);
+  const [printed,setPrinted]=useState(false);
+  const [showScanner,setShowScanner]=useState(false);
+  const [scanPhone,setScanPhone]=useState(""); // hasil scan
+  const [scanError,setScanError]=useState("");
+  const videoRef=useRef(null);
+  const scanIntervalRef=useRef(null);
+
+  const addToCart=m=>setCart(p=>{const ex=p.find(c=>c.menuId===m.id);return ex?p.map(c=>c.menuId===m.id?{...c,qty:c.qty+1}:c):[...p,{menuId:m.id,menuCode:m.code,menuName:m.name,price:m.price,qty:1}];});
+  const updQty=(id,q)=>{if(q<=0)setCart(p=>p.filter(c=>c.menuId!==id));else setCart(p=>p.map(c=>c.menuId===id?{...c,qty:q}:c));};
+  const total=cart.reduce((s,c)=>s+c.price*c.qty,0);
+
+  // ── Start QR Scanner ──────────────────────────────────────────────────────
+  const startScanner=async()=>{
+    setScanPhone("");setScanError("");setShowScanner(true);
+    // Load jsQR dari CDN jika belum ada
+    if(!window.jsQR){
+      await new Promise((res,rej)=>{
+        const s=document.createElement("script");
+        s.src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";
+        s.onload=res; s.onerror=rej;
+        document.head.appendChild(s);
+      });
+    }
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"},audio:false});
+      if(videoRef.current){
+        videoRef.current.srcObject=stream;
+        videoRef.current.play();
+        // Scan frame setiap 500ms
+        scanIntervalRef.current=setInterval(()=>{
+          if(!videoRef.current||!window.jsQR)return;
+          const canvas=document.createElement("canvas");
+          canvas.width=videoRef.current.videoWidth;
+          canvas.height=videoRef.current.videoHeight;
+          const ctx=canvas.getContext("2d");
+          ctx.drawImage(videoRef.current,0,0);
+          const imageData=ctx.getImageData(0,0,canvas.width,canvas.height);
+          const code=window.jsQR(imageData.data,imageData.width,imageData.height);
+          if(code&&code.data){
+            const phone=code.data.replace(/\D/g,"");
+            setScanPhone(phone);
+            stopScanner();
+          }
+        },500);
+      }
+    }catch(e){
+      setScanError("Gagal akses kamera: "+e.message);
+    }
+  };
+
+  const stopScanner=()=>{
+    clearInterval(scanIntervalRef.current);
+    if(videoRef.current&&videoRef.current.srcObject){
+      videoRef.current.srcObject.getTracks().forEach(t=>t.stop());
+      videoRef.current.srcObject=null;
+    }
+  };
+
+  const closeScanner=()=>{stopScanner();setShowScanner(false);setScanPhone("");setScanError("");};
+
+  // ── Bayar pakai saldo (setelah QR di-scan) ────────────────────────────────
+  const handleWalletPay=async()=>{
+    if(!scanPhone){setScanError("Scan QR pelanggan terlebih dahulu!");return;}
+    const cust=customers.find(c=>c.phone===scanPhone);
+    if(!cust){setScanError(`Pelanggan dengan nomor ${scanPhone} tidak ditemukan!`);return;}
+    if(cust.balance<total){
+      setScanError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(total)}`);
+      return;
+    }
+    closeScanner();
+    await handleCheckout("wallet",cust);
+  };
+
+  // ── Checkout utama ────────────────────────────────────────────────────────
+  const handleCheckout=async(paymentMethod,walletCust=null)=>{
+    if(!cart.length){alert("Keranjang kosong!");return;}
+    const nota=genNota(tenant.code,allTransactions);
+    const tx={id:uid(),tenantId:tenant.id,tenantCode:tenant.code,nota,items:cart,total,paymentMethod,
+      walletCustomerId:walletCust?.id||null, walletCustomerPhone:walletCust?.phone||null,
+      walletCustomerName:walletCust?.name||null, date:todayStr(),time:timeStr()};
+
+    if(isOnline) await onSaveTx([...allTransactions,tx]);
+    else offQ.add(tx);
+
+    // Potong saldo jika bayar wallet
+    if(paymentMethod==="wallet"&&walletCust){
+      const balBefore=walletCust.balance;
+      const balAfter=balBefore-total;
+      const updCust={...walletCust,balance:balAfter};
+      const newCusts=customers.map(c=>c.id===walletCust.id?updCust:c);
+      const logEntry={
+        id:uid(),customerId:walletCust.id,customerPhone:walletCust.phone,customerName:walletCust.name,
+        type:"payment",amount:total,balanceBefore:balBefore,balanceAfter:balAfter,
+        tenantId:tenant.id,tenantName:tenant.name,nota,
+        timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
+      };
+      await onSaveCustomers(newCusts);
+      await onSaveWalletLogs([logEntry,...walletLogs]);
+
+      // Kirim WA notifikasi saldo
+      if(settings.fonnteToken){
+        const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n🛒 *Transaksi Belanja*\n📋 Nota: ${nota}\n🏪 Tenant: ${tenant.name}\n💸 Bayar: ${idr(total)}\n📊 Saldo Lama: ${idr(balBefore)}\n💳 Sisa Saldo: ${idr(balAfter)}\n🕐 Waktu: ${new Date().toLocaleString("id-ID")}\n\nTerima kasih ${walletCust.name}! 🙏`;
+        sendWhatsApp({token:settings.fonnteToken,phone:walletCust.phone,message:waMsg});
+      }
+      // Simpan info customer ke tx untuk ditampilkan di struk
+      tx.walletBalanceAfter=balAfter;
+    }
+
+    setLastNota(tx);setPrinted(false);setCart([]);
+  };
+
+  const doPrint=()=>{
+    printThermal({tx:lastNota,tenantName:tenant.name,tenantCode:tenant.code,
+      bazaarName:settings?.bazaarName||"BazaarPOS",
+      footer1:settings?.receiptFooter1||"Terima kasih!",
+      footer2:settings?.receiptFooter2||"Selamat menikmati :)"});
+    setPrinted(true);
+  };
+
+  return(
+    <div>
+      {/* ── Modal QR Scanner ── */}
+      {showScanner&&(
+        <Modal title="📷 Scan QR Pelanggan" onClose={closeScanner}>
+          <p style={{color:"#6b7280",fontSize:13,margin:"0 0 12px"}}>Arahkan kamera ke QR Code kartu pelanggan.</p>
+          {!scanPhone&&(
+            <div style={{position:"relative",borderRadius:14,overflow:"hidden",background:"#000",marginBottom:12,height:240}}>
+              <video ref={videoRef} style={{width:"100%",height:"100%",objectFit:"cover"}} playsInline muted/>
+              {/* Viewfinder overlay */}
+              <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none"}}>
+                <div style={{width:180,height:180,border:"3px solid #ea580c",borderRadius:12,boxShadow:"0 0 0 2000px rgba(0,0,0,.4)"}}/>
+              </div>
+            </div>
+          )}
+          {scanError&&<div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:10,padding:"10px 14px",color:"#dc2626",fontWeight:600,fontSize:13,marginBottom:12}}>❌ {scanError}</div>}
+          {scanPhone&&!scanError&&(()=>{
+            const cust=customers.find(c=>c.phone===scanPhone);
+            return(
+              <div style={{background:cust?"#f0fdf4":"#fef2f2",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
+                {cust?(
+                  <>
+                    <p style={{margin:"0 0 4px",fontWeight:800,fontSize:16,color:"#14532d"}}>✅ {cust.name}</p>
+                    <p style={{margin:"0 0 4px",color:"#6b7280",fontSize:13}}>📱 {cust.phone}</p>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8,paddingTop:8,borderTop:"1px dashed #dcfce7"}}>
+                      <div>
+                        <p style={{margin:0,color:"#6b7280",fontSize:12}}>Saldo tersedia</p>
+                        <p style={{margin:"2px 0 0",fontWeight:900,color:cust.balance>=total?"#16a34a":"#dc2626",fontSize:18}}>{idr(cust.balance)}</p>
+                      </div>
+                      <div style={{textAlign:"right"}}>
+                        <p style={{margin:0,color:"#6b7280",fontSize:12}}>Total belanja</p>
+                        <p style={{margin:"2px 0 0",fontWeight:900,color:"#ea580c",fontSize:18}}>{idr(total)}</p>
+                      </div>
+                    </div>
+                    {cust.balance<total&&<p style={{marginTop:8,color:"#dc2626",fontSize:13,fontWeight:600,textAlign:"center"}}>⚠️ Saldo tidak cukup — perlu top up {idr(total-cust.balance)}</p>}
+                  </>
+                ):(
+                  <p style={{margin:0,color:"#dc2626",fontWeight:600,fontSize:14}}>❌ Pelanggan tidak ditemukan ({scanPhone})</p>
+                )}
+              </div>
+            );
+          })()}
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={closeScanner} style={{...btnSec,flex:1}}>Batal</button>
+            {scanPhone&&customers.find(c=>c.phone===scanPhone)&&customers.find(c=>c.phone===scanPhone).balance>=total?(
+              <button onClick={handleWalletPay}
+                style={{flex:2,padding:"13px",background:"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
+                ✅ Bayar {idr(total)}
+              </button>
+            ):(
+              <button onClick={()=>{setScanPhone("");setScanError("");startScanner();}}
+                style={{flex:2,padding:"13px",background:"#ea580c",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                onMouseOver={e=>e.currentTarget.style.background="#c2410c"} onMouseOut={e=>e.currentTarget.style.background="#ea580c"}>
+                🔄 Scan Ulang
+              </button>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Nota Sukses ── */}
+      {lastNota&&(
+        <Modal title="" onClose={()=>{}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,background:"#f0fdf4",borderRadius:12,padding:"10px 14px"}}>
+            <div style={{fontSize:28}}>
+              {lastNota.paymentMethod==="emoney"?"💳":lastNota.paymentMethod==="wallet"?"🪙":"💵"}
+            </div>
+            <div style={{flex:1}}>
+              <p style={{margin:0,fontWeight:800,fontSize:15,color:"#14532d"}}>Transaksi Berhasil!</p>
+              <p style={{margin:"2px 0 0",fontSize:12,color:"#6b7280"}}>Nota: <strong style={{color:"#1c0a00"}}>{lastNota.nota}</strong></p>
+            </div>
+            <PayBadge method={lastNota.paymentMethod}/>
+          </div>
+
+          {/* Info pelanggan jika bayar wallet */}
+          {lastNota.paymentMethod==="wallet"&&lastNota.walletCustomerName&&(
+            <div style={{background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:10,padding:"8px 12px",marginBottom:8}}>
+              <p style={{margin:0,fontSize:12,color:"#7c3aed",fontWeight:700}}>🪙 Bayar Saldo</p>
+              <p style={{margin:"2px 0 0",fontSize:13,fontWeight:700,color:"#1c0a00"}}>{lastNota.walletCustomerName}</p>
+              <p style={{margin:"2px 0 0",fontSize:12,color:"#6b7280"}}>Sisa saldo: <strong style={{color:"#7c3aed"}}>{idr(lastNota.walletBalanceAfter??0)}</strong></p>
+            </div>
+          )}
+
+          {!isOnline&&<div style={{background:"#fef3c7",border:"1px solid #fbbf24",borderRadius:8,padding:"5px 10px",marginBottom:8,fontSize:11,color:"#92400e",fontWeight:600,textAlign:"center"}}>⚠️ Tersimpan offline</div>}
+
+          <div style={{background:"#f9fafb",borderRadius:10,padding:"8px 12px",marginBottom:8,maxHeight:120,overflowY:"auto",WebkitOverflowScrolling:"touch"}}>
+            {lastNota.items.map((it,i)=>(
+              <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"3px 0",fontSize:12,borderBottom:i<lastNota.items.length-1?"1px dashed #e5e7eb":"none"}}>
+                <span style={{color:"#374151",flex:1,marginRight:8}}><span style={{color:"#9ca3af"}}>[{it.menuCode}]</span> {it.menuName} <strong>×{it.qty}</strong></span>
+                <span style={{fontWeight:700,color:"#1c0a00",whiteSpace:"nowrap"}}>{idr(it.qty*it.price)}</span>
+              </div>
+            ))}
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:6,paddingTop:6,borderTop:"2px solid #dcfce7",fontWeight:800,fontSize:13}}>
+              <span style={{color:"#374151"}}>TOTAL</span>
+              <span style={{color:"#16a34a"}}>{idr(lastNota.total)}</span>
+            </div>
+          </div>
+
+          <button onClick={doPrint}
+            style={{width:"100%",padding:"12px",background:"#1c0a00",color:"#fff",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+            onMouseOver={e=>e.currentTarget.style.background="#431407"} onMouseOut={e=>e.currentTarget.style.background="#1c0a00"}>
+            🖨️ {printed?"Cetak Ulang Struk":"Cetak Struk Thermal"}
+          </button>
+          <button onClick={()=>{setLastNota(null);setPrinted(false);}} disabled={!printed}
+            style={{width:"100%",padding:"12px",background:printed?"#16a34a":"#e5e7eb",color:printed?"#fff":"#9ca3af",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:printed?"pointer":"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif",transition:"all .2s"}}
+            onMouseOver={e=>{if(printed)e.currentTarget.style.background="#15803d";}} onMouseOut={e=>{if(printed)e.currentTarget.style.background="#16a34a";}}>
+            {printed?"➕ Transaksi Baru":"🔒 Cetak Struk Dulu"}
+          </button>
+          {!printed&&<p style={{textAlign:"center",color:"#9ca3af",fontSize:11,margin:"5px 0 0"}}>Cetak struk terlebih dahulu</p>}
+        </Modal>
+      )}
+
+      <h2 style={{margin:"0 0 14px",fontSize:17,fontWeight:800,color:"#14532d"}}>Pilih Menu</h2>
+      {menus.length===0?<EmptyState icon="🍽️" text="Belum ada menu. Tambahkan di tab Menu."/>:
+        <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:12,marginBottom:16}}>
+          {menus.map(m=>(
+            <button key={m.id} onClick={()=>addToCart(m)} className="card-hover btn-press"
+              style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:14,padding:14,cursor:"pointer",textAlign:"left",transition:"all .2s"}}>
+              <div style={{fontSize:10,color:"#9ca3af",fontWeight:600,marginBottom:4}}>[{m.code}]</div>
+              <div style={{fontWeight:700,color:"#1c0a00",fontSize:14,lineHeight:1.3}}>{m.name}</div>
+              <div style={{color:"#16a34a",fontWeight:800,fontSize:16,marginTop:8}}>{idr(m.price)}</div>
+              <div style={{marginTop:6,fontSize:11,color:"#6b7280",background:"#f0fdf4",borderRadius:6,padding:"3px 8px",display:"inline-block"}}>+ Tambah</div>
+            </button>
+          ))}
+        </div>}
+
+      {cart.length>0&&(
+        <div style={{background:"#fff",borderRadius:18,padding:18,boxShadow:"0 8px 32px rgba(22,163,74,.15)",border:"1px solid #dcfce7",position:"sticky",bottom:10}}>
+          <h3 style={{margin:"0 0 12px",color:"#14532d",fontSize:15,fontWeight:800}}>🛒 Keranjang</h3>
+          <div style={{maxHeight:180,overflowY:"auto",marginBottom:12}}>
+            {cart.map(item=>(
+              <div key={item.menuId} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:"1px solid #f0fdf4"}}>
+                <div style={{flex:1}}><p style={{margin:0,fontWeight:600,color:"#1c0a00",fontSize:13}}>{item.menuName}</p><p style={{margin:"1px 0 0",color:"#6b7280",fontSize:12}}>{idr(item.price)} /pcs</p></div>
+                <div style={{display:"flex",alignItems:"center",gap:7}}>
+                  <button onClick={()=>updQty(item.menuId,item.qty-1)} style={{width:28,height:28,borderRadius:"50%",background:"#fef2f2",color:"#dc2626",border:"none",cursor:"pointer",fontWeight:800,fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>−</button>
+                  <span style={{width:26,textAlign:"center",fontWeight:700,color:"#1c0a00",fontSize:14}}>{item.qty}</span>
+                  <button onClick={()=>updQty(item.menuId,item.qty+1)} style={{width:28,height:28,borderRadius:"50%",background:"#dcfce7",color:"#16a34a",border:"none",cursor:"pointer",fontWeight:800,fontSize:16,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",borderTop:"2px solid #dcfce7",paddingTop:12,marginBottom:12}}>
+            <div><p style={{color:"#6b7280",fontSize:12,margin:0}}>Total Bayar</p><p style={{color:"#16a34a",fontWeight:900,fontSize:22,margin:"2px 0 0"}}>{idr(total)}</p></div>
+          </div>
+          <p style={{margin:"0 0 8px",fontSize:12,fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:".05em"}}>Pilih Cara Bayar</p>
+
+          {/* Tombol Bayar Saldo (scan QR) — UTAMA */}
+          <button onClick={()=>startScanner()} className="btn-press"
+            style={{width:"100%",padding:"15px",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",color:"#fff",border:"none",borderRadius:14,fontSize:16,fontWeight:800,cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:10,boxShadow:"0 4px 16px rgba(124,58,237,.35)",fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+            onMouseOver={e=>e.currentTarget.style.background="linear-gradient(135deg,#3b0764,#6d28d9)"} onMouseOut={e=>e.currentTarget.style.background="linear-gradient(135deg,#4c1d95,#7c3aed)"}>
+            <span style={{fontSize:20}}>🪙</span> Bayar Saldo (Scan QR)
+          </button>
+
+          {/* E-Money */}
+          <button onClick={()=>handleCheckout("emoney")} className="btn-press"
+            style={{width:"100%",padding:"12px",background:"linear-gradient(135deg,#6d28d9,#7c3aed)",color:"#fff",border:"none",borderRadius:12,fontSize:14,fontWeight:700,cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+            onMouseOver={e=>e.currentTarget.style.background="linear-gradient(135deg,#5b21b6,#6d28d9)"} onMouseOut={e=>e.currentTarget.style.background="linear-gradient(135deg,#6d28d9,#7c3aed)"}>
+            <span>💳</span> E-Money
+          </button>
+
+          {/* Cash */}
+          <button onClick={()=>handleCheckout("cash")} className="btn-press"
+            style={{width:"100%",padding:"9px",background:"#fffbeb",color:"#b45309",border:"2px solid #fde68a",borderRadius:11,fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+            onMouseOver={e=>{e.currentTarget.style.background="#fef3c7";e.currentTarget.style.borderColor="#fbbf24";}} onMouseOut={e=>{e.currentTarget.style.background="#fffbeb";e.currentTarget.style.borderColor="#fde68a";}}>
+            <span>💵</span> Cash
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
   const [cart,setCart]=useState([]);
   const [lastNota,setLastNota]=useState(null);
   const [printed,setPrinted]=useState(false);
