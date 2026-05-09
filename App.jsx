@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
+import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────17
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -27,14 +28,6 @@ _gs.textContent = `
 document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
-const db = {
-  async get(k) {
-    try { const r = await window.storage.get(k); return r ? JSON.parse(r.value) : null; } catch { return null; }
-  },
-  async set(k, v) {
-    try { await window.storage.set(k, JSON.stringify(v)); } catch(e) { console.error(e); }
-  },
-};
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
