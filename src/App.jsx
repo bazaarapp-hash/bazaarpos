@@ -1493,34 +1493,50 @@ function KasirTopUp({customers,walletLogs,settings,onSaveCustomers,onSaveWalletL
             <FI label="Nama Pelanggan" placeholder="Nama lengkap" value={form.name} onChange={v=>setForm({...form,name:v})}/>
             <FI label="Nominal Top Up (Rp)" placeholder="50000" value={form.amount} onChange={v=>setForm({...form,amount:v})} type="number"/>
 
-            {/* Preview nominal cepat */}
+            {/* Preview nominal cepat — pakai functional setState agar tidak stale */}
             <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
               {[10000,20000,50000,100000].map(n=>(
-                <button key={n} onClick={()=>setForm({...form,amount:String(n)})}
+                <button key={n} onClick={()=>setForm(f=>({...f,amount:String(n)}))}
                   style={{padding:"6px 14px",background:form.amount===String(n)?"#fff7ed":"#f9fafb",color:form.amount===String(n)?"#ea580c":"#6b7280",border:`1px solid ${form.amount===String(n)?"#fed7aa":"#e5e7eb"}`,borderRadius:20,cursor:"pointer",fontWeight:600,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
                   {idr(n)}
                 </button>
               ))}
             </div>
 
-            {/* Preview saldo */}
-            {form.phone&&(()=>{
-              const found=customers.find(c=>c.phone===form.phone.replace(/\D/g,""));
+            {/* Preview saldo — tampil saat phone DAN amount sudah diisi */}
+            {form.phone&&form.amount&&(()=>{
+              const cleanPhone=form.phone.trim().replace(/\D/g,"");
+              const found=customers.find(c=>c.phone===cleanPhone);
+              // Saldo saat ini: 0 jika pelanggan baru, atau saldo tersimpan jika sudah ada
               const curBal=found?found.balance:0;
               const topAmt=parseInt(form.amount)||0;
+              const isNew=!found;
               return(
-                <div style={{background:"#f9fafb",borderRadius:12,padding:"12px 16px",marginBottom:14}}>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}>
+                <div style={{background:"#f9fafb",borderRadius:12,padding:"14px 16px",marginBottom:14,border:"1px solid #e5e7eb"}}>
+                  {/* Status pelanggan */}
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,paddingBottom:10,borderBottom:"1px dashed #e5e7eb"}}>
+                    <span style={{fontSize:14}}>{isNew?"🆕":"👤"}</span>
+                    <span style={{fontWeight:700,color:isNew?"#0284c7":"#16a34a",fontSize:13}}>
+                      {isNew?"Pelanggan Baru":"Pelanggan Terdaftar"}
+                    </span>
+                  </div>
+                  {/* Baris 1: Saldo saat ini (merah di screenshot) */}
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:6}}>
                     <span style={{color:"#6b7280"}}>Saldo saat ini</span>
                     <span style={{fontWeight:700,color:"#374151"}}>{idr(curBal)}</span>
                   </div>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}>
+                  {/* Baris 2: Nominal top up (hijau di screenshot) */}
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:6}}>
                     <span style={{color:"#6b7280"}}>Nominal top up</span>
                     <span style={{fontWeight:700,color:"#16a34a"}}>+ {idr(topAmt)}</span>
                   </div>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:14,borderTop:"1px dashed #e5e7eb",paddingTop:8,marginTop:4}}>
-                    <span style={{fontWeight:700,color:"#374151"}}>Saldo setelah top up</span>
-                    <span style={{fontWeight:900,color:"#ea580c"}}>{idr(curBal+topAmt)}</span>
+                  {/* Garis pemisah */}
+                  <div style={{borderTop:"2px solid #e5e7eb",paddingTop:8,marginTop:2}}>
+                    {/* Baris 3: Saldo setelah top up (hitam di screenshot) */}
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:14}}>
+                      <span style={{fontWeight:700,color:"#1c0a00"}}>Saldo setelah top up</span>
+                      <span style={{fontWeight:900,color:"#ea580c",fontSize:16}}>{idr(curBal+topAmt)}</span>
+                    </div>
                   </div>
                 </div>
               );
