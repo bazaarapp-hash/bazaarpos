@@ -28,7 +28,6 @@ _gs.textContent = `
 document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
-
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
 const todayStr = () => new Date().toISOString().split("T")[0];
@@ -79,9 +78,9 @@ const DEF = {
 
 // ─── Payment ──────────────────────────────────────────────────────────────────
 const PAY = {
-  emoney:{label:"💳 E-Money",color:"#6d28d9",bg:"#f5f3ff",border:"#ddd6fe"},
-  cash:  {label:"💵 Cash",   color:"#b45309",bg:"#fffbeb",border:"#fde68a"},
-  wallet:{label:"🪙 Saldo",  color:"#4c1d95",bg:"#f5f0ff",border:"#c4b5fd"},
+  emoney:{label:"🪙 Saldo",color:"#4c1d95",bg:"#f5f0ff",border:"#c4b5fd"},
+  cash:  {label:"🪙 Saldo",color:"#4c1d95",bg:"#f5f0ff",border:"#c4b5fd"},
+  wallet:{label:"🪙 Saldo",color:"#4c1d95",bg:"#f5f0ff",border:"#c4b5fd"},
 };
 function PayBadge({method}){
   const p=PAY[method]||PAY.cash;
@@ -191,20 +190,20 @@ export default function App(){
   const bkRef=useRef(null);
 
   useEffect(()=>{
-    (async()=>{
-      const t=await db.get("bzr_tenants")||[];
-      const m=await db.get("bzr_menus")||[];
-      const tx=await db.get("bzr_transactions")||[];
-      const s=await db.get("bzr_settings")||{};
-      const a=await db.get("bzr_admins")||[];
-      const al=await db.get("bzr_alerts")||[];
-      const cu=await db.get("bzr_customers")||[];
-      const wl=await db.get("bzr_wallet_logs")||[];
-      setTenants(t);setMenus(m);setTransactions(tx);
-      setSettings({...DEF,...s});setAdmins(a);setAlerts(al);
-      setCustomers(cu);setWalletLogs(wl);
-      setLoaded(true);
-    })();
+    // Real-time subscriptions — semua panel update otomatis saat ada perubahan
+    let count=0; const total=8;
+    const checkLoaded=()=>{count++;if(count>=total)setLoaded(true);};
+
+    const u1=db.subscribe("bzr_tenants",    v=>{setTenants(v||[]);             checkLoaded();});
+    const u2=db.subscribe("bzr_menus",      v=>{setMenus(v||[]);               checkLoaded();});
+    const u3=db.subscribe("bzr_transactions",v=>{setTransactions(v||[]);       checkLoaded();});
+    const u4=db.subscribe("bzr_settings",   v=>{setSettings({...DEF,...(v||{})});checkLoaded();});
+    const u5=db.subscribe("bzr_admins",     v=>{setAdmins(v||[]);              checkLoaded();});
+    const u6=db.subscribe("bzr_alerts",     v=>{setAlerts(v||[]);              checkLoaded();});
+    const u7=db.subscribe("bzr_customers",  v=>{setCustomers(v||[]);           checkLoaded();});
+    const u8=db.subscribe("bzr_wallet_logs",v=>{setWalletLogs(v||[]);          checkLoaded();});
+
+    return()=>{u1();u2();u3();u4();u5();u6();u7();u8();};
   },[]);
 
   useEffect(()=>{
@@ -214,11 +213,6 @@ export default function App(){
     return()=>clearInterval(bkRef.current);
   },[settings.autoBackup,settings.backupInterval,tenants,menus,transactions,admins]);
 
-  useEffect(()=>{
-    if(screen!=="superadmin"&&screen!=="admin")return;
-    const iv=setInterval(async()=>{const al=await db.get("bzr_alerts")||[];setAlerts(al);},8000);
-    return()=>clearInterval(iv);
-  },[screen]);
 
   useEffect(()=>{
     const sync=async()=>{
@@ -275,6 +269,11 @@ export default function App(){
       <div style={{textAlign:"center"}}><div style={{fontSize:48,marginBottom:12}}>🏪</div>
         <p style={{color:"#ea580c",fontWeight:700,fontSize:18}}>Memuat BazaarPOS…</p></div>
     </div>);
+
+  // Deteksi URL ?card=PHONE untuk halaman kartu pelanggan publik
+  const urlParams=new URLSearchParams(window.location.search);
+  const cardPhone=urlParams.get("card");
+  if(cardPhone) return <CustomerCardPage phone={cardPhone} settings={settings} customers={customers} loaded={loaded}/>;
 
   if(screen==="superadmin") return <SuperAdminDashboard {...commonProps}/>;
   if(screen==="admin") return <AdminDashboard {...commonProps} adminData={session?.data}/>;
@@ -1371,38 +1370,29 @@ function KasirTopUp({customers,walletLogs,settings,onSaveCustomers,onSaveWalletL
     const balAfter=balBefore+amount;
     const now=new Date();
     const logEntry={
-      id:uid(), customerId:cust.id, customerPhone:cust.phone, customerName:cust.name,
-      type:"topup", amount, balanceBefore:balBefore, balanceAfter:balAfter,
-      timestamp:now.toISOString(), date:todayStr(), time:timeStr(),
+      id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
+      type:"topup",amount,balanceBefore:balBefore,balanceAfter:balAfter,
+      timestamp:now.toISOString(),date:todayStr(),time:timeStr(),
     };
 
-    // Update customer balance
     const updCust={...cust,balance:balAfter,name:form.name.trim()};
     const newCusts=isNew?[...customers,updCust]:customers.map(c=>c.id===cust.id?updCust:c);
-    const newLogs=[logEntry,...walletLogs];
     await onSaveCustomers(newCusts);
-    await onSaveWalletLogs(newLogs);
+    await onSaveWalletLogs([logEntry,...walletLogs]);
 
-    // Generate kartu & kirim WA
-    const cardDataUrl=await generateCustomerCard({customer:updCust,bazaarName:settings.bazaarName||"BazaarPOS"});
+    // Link kartu pelanggan
+    const cardLink=`${window.location.origin}${window.location.pathname}?card=${updCust.phone}`;
 
-    // Download kartu otomatis
-    const link=document.createElement("a");
-    link.href=cardDataUrl;
-    link.download=`Kartu_${updCust.name.replace(/\s+/g,"_")}.jpg`;
-    link.click();
-
-    // Kirim WA notifikasi
-    const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\nHalo *${updCust.name}*! 👋\n\n✅ *Top Up Berhasil*\n💰 Nominal   : ${idr(amount)}\n📊 Saldo Lama: ${idr(balBefore)}\n💳 Saldo Baru: ${idr(balAfter)}\n\n🕐 Waktu: ${now.toLocaleString("id-ID")}\n\nTunjukkan QR Code kartu Anda saat bertransaksi.\n\nTerima kasih! 🙏`;
+    // Pesan WA dengan link kartu
+    const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\nHalo *${updCust.name}*! 👋\n\n✅ *Top Up Berhasil*\n💰 Nominal   : ${idr(amount)}\n📊 Saldo Lama: ${idr(balBefore)}\n🪙 Saldo Baru: ${idr(balAfter)}\n🕐 Waktu: ${now.toLocaleString("id-ID")}\n\n🔗 *Kartu Saldo Kamu:*\n${cardLink}\n\n_(Simpan link ini untuk cek saldo & QR Code)_\n\nTerima kasih! 🙏`;
 
     let waSent=false;
     if(settings.fonnteToken){
       waSent=await sendWhatsApp({token:settings.fonnteToken,phone:updCust.phone,message:waMsg});
     }
 
-    showMsg(`✅ Top up berhasil! Kartu didownload.${waSent?" WA terkirim!":settings.fonnteToken?" (WA gagal)":""}`);
+    showMsg(`✅ Top up berhasil!${waSent?" Notif WA + link kartu terkirim!":settings.fonnteToken?" (WA gagal)":""}`);
     setForm({phone:"",name:"",amount:""});
-    setSelCust(null);
     setSending(false);
   };
 
@@ -1468,9 +1458,20 @@ function KasirTopUp({customers,walletLogs,settings,onSaveCustomers,onSaveWalletL
                         style={{padding:"8px 14px",background:"#fff7ed",color:"#ea580c",border:"1px solid #fed7aa",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
                         💰 Top Up
                       </button>
-                      <button onClick={()=>handleDownloadCard(c)}
+                      <button onClick={()=>{
+                        const link=`${window.location.origin}${window.location.pathname}?card=${c.phone}`;
+                        const waText=`https://wa.me/?text=${encodeURIComponent(`Halo ${c.name}! Cek saldo & QR Code kamu di:\n${link}`)}`;
+                        window.open(waText,"_blank");
+                      }}
+                        style={{padding:"8px 14px",background:"#f0fdf4",color:"#16a34a",border:"1px solid #bbf7d0",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                        💬 Share Kartu
+                      </button>
+                      <button onClick={()=>{
+                        const link=`${window.location.origin}${window.location.pathname}?card=${c.phone}`;
+                        window.open(link,"_blank");
+                      }}
                         style={{padding:"8px 14px",background:"#f0f9ff",color:"#0284c7",border:"1px solid #bae6fd",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-                        🪪 Kartu
+                        🪪 Lihat
                       </button>
                     </div>
                   </div>
@@ -2259,28 +2260,18 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",borderTop:"2px solid #dcfce7",paddingTop:12,marginBottom:12}}>
             <div><p style={{color:"#6b7280",fontSize:12,margin:0}}>Total Bayar</p><p style={{color:"#16a34a",fontWeight:900,fontSize:22,margin:"2px 0 0"}}>{idr(total)}</p></div>
           </div>
-          <p style={{margin:"0 0 8px",fontSize:12,fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:".05em"}}>Pilih Cara Bayar</p>
+          <p style={{margin:"0 0 8px",fontSize:12,fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:".05em"}}>Cara Bayar</p>
 
-          {/* Tombol Bayar Saldo (scan QR) — UTAMA */}
+          {/* Tombol Bayar Saldo (scan QR) — satu-satunya metode aktif */}
           <button onClick={()=>startScanner()} className="btn-press"
-            style={{width:"100%",padding:"15px",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",color:"#fff",border:"none",borderRadius:14,fontSize:16,fontWeight:800,cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:10,boxShadow:"0 4px 16px rgba(124,58,237,.35)",fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+            style={{width:"100%",padding:"16px",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",color:"#fff",border:"none",borderRadius:14,fontSize:17,fontWeight:800,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10,boxShadow:"0 4px 16px rgba(124,58,237,.35)",fontFamily:"'Plus Jakarta Sans',sans-serif"}}
             onMouseOver={e=>e.currentTarget.style.background="linear-gradient(135deg,#3b0764,#6d28d9)"} onMouseOut={e=>e.currentTarget.style.background="linear-gradient(135deg,#4c1d95,#7c3aed)"}>
-            <span style={{fontSize:20}}>🪙</span> Bayar Saldo (Scan QR)
+            <span style={{fontSize:22}}>🪙</span> Bayar dengan Saldo
           </button>
 
-          {/* E-Money */}
-          <button onClick={()=>handleCheckout("emoney")} className="btn-press"
-            style={{width:"100%",padding:"12px",background:"linear-gradient(135deg,#6d28d9,#7c3aed)",color:"#fff",border:"none",borderRadius:12,fontSize:14,fontWeight:700,cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
-            onMouseOver={e=>e.currentTarget.style.background="linear-gradient(135deg,#5b21b6,#6d28d9)"} onMouseOut={e=>e.currentTarget.style.background="linear-gradient(135deg,#6d28d9,#7c3aed)"}>
-            <span>💳</span> E-Money
-          </button>
-
-          {/* Cash */}
-          <button onClick={()=>handleCheckout("cash")} className="btn-press"
-            style={{width:"100%",padding:"9px",background:"#fffbeb",color:"#b45309",border:"2px solid #fde68a",borderRadius:11,fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
-            onMouseOver={e=>{e.currentTarget.style.background="#fef3c7";e.currentTarget.style.borderColor="#fbbf24";}} onMouseOut={e=>{e.currentTarget.style.background="#fffbeb";e.currentTarget.style.borderColor="#fde68a";}}>
-            <span>💵</span> Cash
-          </button>
+          {/* E-Money & Cash — dinonaktifkan, kode tetap ada */}
+          {/* <button onClick={()=>handleCheckout("emoney")}>E-Money</button> */}
+          {/* <button onClick={()=>handleCheckout("cash")}>Cash</button> */}
         </div>
       )}
     </div>
@@ -2419,6 +2410,123 @@ function TenantHistory({transactions,tenant,settings}){
             </div>
           ))}
         </div>}
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// CUSTOMER CARD PAGE — halaman publik ?card=PHONE
+// ═════════════════════════════════════════════════════════════════════════════
+function CustomerCardPage({phone,settings,customers,loaded}){
+  const cleanPhone=phone.replace(/\D/g,"");
+  const customer=customers.find(c=>c.phone===cleanPhone||c.phone===phone);
+  const bazaarName=settings?.bazaarName||"BazaarPOS";
+  const shareUrl=`${window.location.origin}${window.location.pathname}?card=${phone}`;
+  const waShare=`https://wa.me/?text=${encodeURIComponent(`Cek saldo kamu di ${bazaarName}:\n${shareUrl}`)}`;
+
+  const idr2=n=>new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n||0);
+
+  if(!loaded) return(
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{textAlign:"center",color:"#fff"}}>
+        <div style={{fontSize:40,marginBottom:12}}>⏳</div>
+        <p style={{fontWeight:700,fontSize:16}}>Memuat data...</p>
+      </div>
+    </div>
+  );
+
+  if(!customer) return(
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{background:"#fff",borderRadius:24,padding:40,maxWidth:380,width:"100%",textAlign:"center"}}>
+        <div style={{fontSize:52,marginBottom:12}}>❌</div>
+        <h2 style={{color:"#dc2626",margin:"0 0 8px"}}>Pelanggan Tidak Ditemukan</h2>
+        <p style={{color:"#6b7280",fontSize:14}}>Nomor {phone} belum terdaftar di {bazaarName}.</p>
+        <p style={{color:"#9ca3af",fontSize:13,marginTop:8}}>Silakan hubungi kasir untuk mendaftar.</p>
+      </div>
+    </div>
+  );
+
+  const balanceColor=customer.balance>0?"#16a34a":"#dc2626";
+  const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(customer.phone)}&bgcolor=ffffff&color=4c1d95&margin=10`;
+
+  return(
+    <div style={{minHeight:"100vh",background:"linear-gradient(145deg,#4c1d95,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+      {/* Decorative blobs */}
+      <div style={{position:"fixed",top:-100,right:-100,width:300,height:300,borderRadius:"50%",background:"rgba(255,255,255,.07)"}}/>
+      <div style={{position:"fixed",bottom:-80,left:-80,width:250,height:250,borderRadius:"50%",background:"rgba(255,255,255,.05)"}}/>
+
+      <div style={{width:"100%",maxWidth:400,animation:"slideUp .4s ease"}}>
+        {/* Header */}
+        <div style={{textAlign:"center",marginBottom:20}}>
+          <p style={{color:"rgba(255,255,255,.8)",fontSize:14,margin:0,fontWeight:600}}>🏪 {bazaarName}</p>
+          <p style={{color:"rgba(255,255,255,.6)",fontSize:12,margin:"4px 0 0"}}>Kartu Saldo Pelanggan</p>
+        </div>
+
+        {/* Card utama */}
+        <div style={{background:"#fff",borderRadius:24,overflow:"hidden",boxShadow:"0 32px 80px rgba(0,0,0,.3)"}}>
+          {/* Card header */}
+          <div style={{background:"linear-gradient(135deg,#4c1d95,#7c3aed)",padding:"24px 24px 20px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+              <div>
+                <p style={{color:"rgba(255,255,255,.7)",fontSize:12,margin:"0 0 6px",fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>Nama Pelanggan</p>
+                <h2 style={{color:"#fff",fontSize:22,fontWeight:800,margin:0}}>{customer.name}</h2>
+                <p style={{color:"rgba(255,255,255,.7)",fontSize:13,margin:"6px 0 0"}}>📱 {customer.phone}</p>
+              </div>
+              <div style={{width:44,height:44,borderRadius:12,background:"rgba(255,255,255,.2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>🪙</div>
+            </div>
+          </div>
+
+          {/* Saldo real-time */}
+          <div style={{padding:"20px 24px",borderBottom:"1px solid #f3f4f6"}}>
+            <p style={{color:"#9ca3af",fontSize:12,margin:"0 0 6px",fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>Saldo Tersedia</p>
+            <p style={{fontSize:36,fontWeight:900,color:balanceColor,margin:0,letterSpacing:-1}}>
+              {idr2(customer.balance)}
+            </p>
+            <div style={{display:"flex",alignItems:"center",gap:6,marginTop:8}}>
+              <div style={{width:8,height:8,borderRadius:"50%",background:"#16a34a",animation:"pulse 2s infinite"}}/>
+              <p style={{color:"#9ca3af",fontSize:12,margin:0}}>Saldo diperbarui secara real-time</p>
+            </div>
+            {customer.balance<=0&&(
+              <div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:10,padding:"8px 12px",marginTop:12}}>
+                <p style={{color:"#dc2626",fontSize:13,fontWeight:600,margin:0}}>⚠️ Saldo habis — silakan top up di kasir</p>
+              </div>
+            )}
+          </div>
+
+          {/* QR Code */}
+          <div style={{padding:"20px 24px",textAlign:"center",borderBottom:"1px solid #f3f4f6"}}>
+            <p style={{color:"#374151",fontSize:13,fontWeight:700,margin:"0 0 14px"}}>QR Code untuk Transaksi</p>
+            <div style={{display:"inline-block",background:"#fff",borderRadius:16,padding:12,boxShadow:"0 4px 16px rgba(0,0,0,.1)",border:"2px solid #f5f3ff"}}>
+              <img src={qrUrl} alt="QR Code" width={160} height={160} style={{display:"block",borderRadius:8}}/>
+            </div>
+            <p style={{color:"#9ca3af",fontSize:12,margin:"10px 0 0"}}>Tunjukkan QR ini ke tenant saat transaksi</p>
+          </div>
+
+          {/* Info & Share */}
+          <div style={{padding:"16px 24px"}}>
+            <p style={{color:"#6b7280",fontSize:12,margin:"0 0 12px",textAlign:"center"}}>
+              ID: <span style={{fontFamily:"monospace",color:"#374151",fontWeight:600}}>{customer.id?.slice(0,8).toUpperCase()}</span>
+            </p>
+
+            {/* Tombol share WA */}
+            <a href={waShare} target="_blank" rel="noopener noreferrer"
+              style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,width:"100%",padding:"14px",background:"#16a34a",color:"#fff",border:"none",borderRadius:14,fontWeight:700,fontSize:15,textDecoration:"none",boxSizing:"border-box",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+              <span style={{fontSize:20}}>💬</span> Share ke WhatsApp
+            </a>
+
+            {/* Tombol copy link */}
+            <button onClick={()=>{navigator.clipboard.writeText(shareUrl).then(()=>alert("✅ Link berhasil disalin!"));}}
+              style={{width:"100%",padding:"12px",background:"#f5f3ff",color:"#7c3aed",border:"1px solid #ddd6fe",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:14,marginTop:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+              🔗 Salin Link Kartu
+            </button>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <p style={{textAlign:"center",color:"rgba(255,255,255,.5)",fontSize:12,marginTop:16}}>
+          Powered by {bazaarName} • BazaarPOS
+        </p>
+      </div>
     </div>
   );
 }
