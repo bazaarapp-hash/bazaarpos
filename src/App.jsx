@@ -28,6 +28,7 @@ _gs.textContent = `
 document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
 const todayStr = () => new Date().toISOString().split("T")[0];
@@ -96,7 +97,7 @@ function exportToExcel({filename,sheets}){
 
 // ─── Thermal Print ────────────────────────────────────────────────────────────
 function printThermal({tx,tenantName,tenantCode,bazaarName="BazaarPOS",footer1="Terima kasih!",footer2="Selamat menikmati :)"}){
-  const payLabel=tx.paymentMethod==="emoney"?"E-Money":tx.paymentMethod==="wallet"?"Saldo":"Cash";
+  const payLabel="Saldo";
   const rows=tx.items.map(it=>`
     <tr><td colspan="2" style="padding:1px 0;font-size:12px;word-break:break-word">[${it.menuCode}] ${it.menuName}</td></tr>
     <tr><td style="padding:0 0 5px;font-size:12px">  ${it.qty} x ${idr(it.price)}</td>
@@ -479,6 +480,7 @@ function SuperAdminDashboard(props){
   const [editBazaar,setEditBazaar]=useState(false);
   const [bazaarInput,setBazaarInput]=useState(settings.bazaarName||"");
   const [showAlertPop,setShowAlertPop]=useState(true);
+  const {BackConfirmModal}=useBackConfirm(true);
   const todayTx=transactions.filter(t=>t.date===todayStr());
 
   const tabs=[
@@ -494,6 +496,7 @@ function SuperAdminDashboard(props){
 
   return(
     <div style={{minHeight:"100vh",background:"#fafaf9"}}>
+      <BackConfirmModal/>
       {showAlertPop&&<AlertPopup alerts={alerts} onDismiss={dismissAlerts}/>}
       <div style={{background:"linear-gradient(90deg,#431407,#ea580c)",padding:"14px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",boxShadow:"0 4px 20px rgba(234,88,12,.3)",flexWrap:"wrap",gap:10}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
@@ -516,6 +519,7 @@ function SuperAdminDashboard(props){
             </div>
           )}
           {alerts.length>0&&<button onClick={()=>setShowAlertPop(true)} className="pulse" style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontWeight:700,fontSize:13}}>🆘 {alerts.length}</button>}
+          <button onClick={()=>window.location.reload()} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}} title="Refresh">🔄</button>
           <button onClick={onLogout} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}}>Keluar</button>
         </div>
       </div>
@@ -564,6 +568,7 @@ function AdminDashboard(props){
 
   return(
     <div style={{minHeight:"100vh",background:"#fafaf9"}}>
+      <BackConfirmModal/>
       {showAlertPop&&<AlertPopup alerts={alerts} onDismiss={dismissAlerts}/>}
       <div style={{background:"linear-gradient(90deg,#4c1d95,#7c3aed)",padding:"14px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",boxShadow:"0 4px 20px rgba(124,58,237,.3)",flexWrap:"wrap",gap:10}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
@@ -574,6 +579,7 @@ function AdminDashboard(props){
         <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
           <span style={{color:"#fff",fontSize:16,fontWeight:800}}>{settings.bazaarName}</span>
           {alerts.length>0&&<button onClick={()=>setShowAlertPop(true)} className="pulse" style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontWeight:700,fontSize:13}}>🆘 {alerts.length}</button>}
+          <button onClick={()=>window.location.reload()} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}} title="Refresh">🔄</button>
           <button onClick={onLogout} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}}>Keluar</button>
         </div>
       </div>
@@ -1613,13 +1619,13 @@ function AdminTransactions({tenants,transactions,settings,filterDate,setFilterDa
   const getTn=id=>tenants.find(t=>t.id===id)||{};
   const filtered=[...transactions.filter(t=>t.date===filterDate)].sort((a,b)=>b.nota.localeCompare(a.nota));
   const bname=settings?.bazaarName||"BazaarPOS";
-  const et=filtered.filter(t=>t.paymentMethod==="emoney").reduce((s,t)=>s+t.total,0);
-  const ct=filtered.filter(t=>t.paymentMethod==="cash").reduce((s,t)=>s+t.total,0);
+
+
   const gt=filtered.reduce((s,t)=>s+t.total,0);
 
   const doPrint=()=>{
-    const rows=filtered.map(tx=>{const tn=getTn(tx.tenantId);const pc=tx.paymentMethod==="emoney"?"pe":"pc";const pl=tx.paymentMethod==="emoney"?"💳 E-Money":"💵 Cash";const its=tx.items.map(it=>`[${it.menuCode}] ${it.menuName} ×${it.qty}=${idr(it.qty*it.price)}`).join("<br/>");return`<tr><td><strong>${tx.nota}</strong></td><td><strong>${tn.code||""}</strong><br/><span style="color:#6b7280;font-size:10px">${tn.name||""}</span></td><td>${tx.date}<br/>${tx.time}</td><td class="${pc}">${pl}</td><td style="font-size:10px">${its}</td><td style="text-align:right;font-weight:700">${idr(tx.total)}</td></tr>`;}).join("");
-    printA4({title:"Data Transaksi Harian",subtitle:`Tanggal: ${filterDate} | Dicetak: ${new Date().toLocaleString("id-ID")}`,bazaarName:bname,bodyHtml:`<div class="sr"><div class="sb"><p class="lbl">Jumlah Tx</p><p class="val" style="color:#1c0a00">${filtered.length}</p></div><div class="sb em"><p class="lbl">💳 E-Money</p><p class="val">${idr(et)}</p></div><div class="sb cs"><p class="lbl">💵 Cash</p><p class="val">${idr(ct)}</p></div><div class="sb"><p class="lbl">Grand Total</p><p class="val">${idr(gt)}</p></div></div><div class="sec">Daftar Transaksi</div><table><thead><tr><th>No Nota</th><th>Tenant</th><th>Waktu</th><th>Pembayaran</th><th>Item</th><th style="text-align:right">Total</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td colspan="5"><strong>TOTAL</strong></td><td style="text-align:right"><strong>${idr(gt)}</strong></td></tr></tfoot></table>`});
+    const rows=filtered.map(tx=>{const tn=getTn(tx.tenantId);const its=tx.items.map(it=>`[${it.menuCode}] ${it.menuName} ×${it.qty}=${idr(it.qty*it.price)}`).join("<br/>");return`<tr><td><strong>${tx.nota}</strong></td><td><strong>${tn.code||""}</strong><br/><span style="color:#6b7280;font-size:10px">${tn.name||""}</span></td><td>${tx.date}<br/>${tx.time}</td><td class="pe">🪙 Saldo</td><td style="font-size:10px">${its}</td><td style="text-align:right;font-weight:700">${idr(tx.total)}</td></tr>`;}).join("");
+    printA4({title:"Data Transaksi Harian",subtitle:`Tanggal: ${filterDate} | Dicetak: ${new Date().toLocaleString("id-ID")}`,bazaarName:bname,bodyHtml:`<div class="sr"><div class="sb"><p class="lbl">Jumlah Tx</p><p class="val" style="color:#1c0a00">${filtered.length}</p></div><div class="sb em"><p class="lbl">🪙 Saldo</p><p class="val">${idr(gt)}</p></div><div class="sb"><p class="lbl">Grand Total</p><p class="val">${idr(gt)}</p></div></div><div class="sec">Daftar Transaksi</div><table><thead><tr><th>No Nota</th><th>Tenant</th><th>Waktu</th><th>Pembayaran</th><th>Item</th><th style="text-align:right">Total</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td colspan="5"><strong>TOTAL</strong></td><td style="text-align:right"><strong>${idr(gt)}</strong></td></tr></tfoot></table>`});
   };
 
   return(
@@ -1681,10 +1687,10 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
   const exportXls=()=>{
     const sheets=disp.map(tn=>{
       const txs=filtered.filter(t=>t.tenantId===tn.id).sort((a,b)=>a.nota.localeCompare(b.nota));
-      const rows=[];txs.forEach(tx=>tx.items.forEach((it,i)=>rows.push([i===0?tx.nota:"",i===0?tx.date:"",i===0?tx.time:"",i===0?(tx.paymentMethod==="emoney"?"E-Money":"Cash"):"",it.menuCode,it.menuName,it.qty,it.price,it.qty*it.price,i===0?tx.total:""])));
-      const em=txs.filter(t=>t.paymentMethod==="emoney").reduce((s,t)=>s+t.total,0);
-      const cs=txs.filter(t=>t.paymentMethod==="cash").reduce((s,t)=>s+t.total,0);
-      rows.push([],[],[`TOTAL E-MONEY`,"","","","","","","","",em],[`TOTAL CASH`,"","","","","","","","",cs],[`GRAND TOTAL`,"","","","","","","","",txs.reduce((s,t)=>s+t.total,0)]);
+      const rows=[];txs.forEach(tx=>tx.items.forEach((it,i)=>rows.push([i===0?tx.nota:"",i===0?tx.date:"",i===0?tx.time:"",i===0?"Saldo":"",it.menuCode,it.menuName,it.qty,it.price,it.qty*it.price,i===0?tx.total:""])));
+      const em=txs.reduce((s,t)=>s+t.total,0);const cs=0;
+      rows.push([],[],[`TOTAL SALDO`,"","","","","","","","",em],["GRAND TOTAL","","","","","","","","",txs.reduce((s,t)=>s+t.total,0)]);
+
       return{name:tn.code,headers:["No Nota","Tanggal","Jam","Pembayaran","Kode Menu","Nama Menu","Qty","Harga","Subtotal","Total Nota"],rows};
     });
     exportToExcel({filename:`Laporan-Tenant-${filterDate}.xlsx`,sheets});
@@ -1694,13 +1700,14 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
     let body="";
     disp.forEach(tn=>{
       const txs=filtered.filter(t=>t.tenantId===tn.id).sort((a,b)=>a.nota.localeCompare(b.nota));
-      const tt=txs.reduce((s,t)=>s+t.total,0);const em=txs.filter(t=>t.paymentMethod==="emoney").reduce((s,t)=>s+t.total,0);const cs=txs.filter(t=>t.paymentMethod==="cash").reduce((s,t)=>s+t.total,0);
+      const tt=txs.reduce((s,t)=>s+t.total,0);
       const ms={};txs.forEach(tx=>tx.items.forEach(it=>{if(!ms[it.menuCode])ms[it.menuCode]={name:it.menuName,qty:0,total:0};ms[it.menuCode].qty+=it.qty;ms[it.menuCode].total+=it.qty*it.price;}));
       const mr=Object.entries(ms).map(([c,m])=>`<tr><td>[${c}]</td><td>${m.name}</td><td style="text-align:center">${m.qty}</td><td style="text-align:right">${idr(m.total)}</td></tr>`).join("");
-      const nr=txs.map(tx=>`<tr><td>${tx.nota}</td><td>${tx.time}</td><td class="${tx.paymentMethod==="emoney"?"pe":"pc"}">${tx.paymentMethod==="emoney"?"💳 E-Money":"💵 Cash"}</td><td style="font-size:10px">${tx.items.map(it=>`[${it.menuCode}] ${it.menuName} ×${it.qty}=${idr(it.qty*it.price)}`).join("<br/>")}</td><td style="text-align:right;font-weight:700">${idr(tx.total)}</td></tr>`).join("");
-      body+=`<div class="th"><h3>${tn.code} — ${tn.name}</h3><p>${txs.length} transaksi &nbsp;|&nbsp; <span class="pe">💳 E-Money: ${idr(em)}</span> &nbsp;|&nbsp; <span class="pc">💵 Cash: ${idr(cs)}</span> &nbsp;|&nbsp; Total: <strong>${idr(tt)}</strong></p></div><div class="sec">Ringkasan Menu</div><table><thead><tr><th>Kode</th><th>Nama Menu</th><th style="text-align:center">Terjual</th><th style="text-align:right">Subtotal</th></tr></thead><tbody>${mr}</tbody><tfoot><tr><td colspan="3"><strong>Total</strong></td><td style="text-align:right"><strong>${idr(tt)}</strong></td></tr></tfoot></table><div class="sec">Rincian Nota</div><table><thead><tr><th>No Nota</th><th>Jam</th><th>Pembayaran</th><th>Item</th><th style="text-align:right">Total</th></tr></thead><tbody>${nr}</tbody><tfoot><tr><td colspan="4"><strong>Total ${tn.name}</strong></td><td style="text-align:right"><strong>${idr(tt)}</strong></td></tr></tfoot></table>`;
+      const nr=txs.map(tx=>`<tr><td>${tx.nota}</td><td>${tx.time}</td><td class="pe">🪙 Saldo</td><td style="font-size:10px">${tx.items.map(it=>`[${it.menuCode}] ${it.menuName} ×${it.qty}=${idr(it.qty*it.price)}`).join("<br/>")}</td><td style="text-align:right;font-weight:700">${idr(tx.total)}</td></tr>`).join("");
+      body+=`<div class="th"><h3>${tn.code} — ${tn.name}</h3><p>${txs.length} transaksi &nbsp;|&nbsp; <span class="pe">🪙 Saldo: ${idr(tt)}</span> &nbsp;|&nbsp; Total: <strong>${idr(tt)}</strong></p></div><div class="sec">Ringkasan Menu</div><table><thead><tr><th>Kode</th><th>Nama Menu</th><th style="text-align:center">Terjual</th><th style="text-align:right">Subtotal</th></tr></thead><tbody>${mr}</tbody><tfoot><tr><td colspan="3"><strong>Total</strong></td><td style="text-align:right"><strong>${idr(tt)}</strong></td></tr></tfoot></table><div class="sec">Rincian Nota</div><table><thead><tr><th>No Nota</th><th>Jam</th><th>Pembayaran</th><th>Item</th><th style="text-align:right">Total</th></tr></thead><tbody>${nr}</tbody><tfoot><tr><td colspan="4"><strong>Total ${tn.name}</strong></td><td style="text-align:right"><strong>${idr(tt)}</strong></td></tr></tfoot></table>`;
     });
-    if(selTn==="all"&&disp.length>1){const gt=filtered.reduce((s,t)=>s+t.total,0);const em=filtered.filter(t=>t.paymentMethod==="emoney").reduce((s,t)=>s+t.total,0);const cs=filtered.filter(t=>t.paymentMethod==="cash").reduce((s,t)=>s+t.total,0);body+=`<div style="background:#fff7ed;border:2px solid #ea580c;border-radius:6px;padding:12px 16px;margin-top:16px"><strong>🏆 GRAND TOTAL — ${filterDate}</strong><br/><span class="pe">💳 E-Money: ${idr(em)}</span> &nbsp;|&nbsp; <span class="pc">💵 Cash: ${idr(cs)}</span> &nbsp;|&nbsp; <strong style="color:#ea580c">Total: ${idr(gt)}</strong></div>`;}
+    if(selTn==="all"&&disp.length>1){const gt=filtered.reduce((s,t)=>s+t.total,0);body+=`<div style="background:#fff7ed;border:2px solid #ea580c;border-radius:6px;padding:12px 16px;margin-top:16px"><strong>🏆 GRAND TOTAL — ${filterDate}</strong><br/><span class="pe">🪙 Total Saldo: ${idr(gt)}</span> &nbsp;|&nbsp; <strong style="color:#ea580c">Grand Total: ${idr(gt)}</strong></div>`;}
+
     printA4({title:"Laporan Transaksi per Tenant",subtitle:`Tanggal: ${filterDate} | Dicetak: ${new Date().toLocaleString("id-ID")}`,bazaarName:bname,bodyHtml:body});
   };
 
@@ -1725,7 +1732,7 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
         <div style={{display:"flex",flexDirection:"column",gap:20}}>
           {disp.map((tn,ti)=>{
             const txs=[...filtered.filter(t=>t.tenantId===tn.id)].sort((a,b)=>a.nota.localeCompare(b.nota));
-            const tt=txs.reduce((s,t)=>s+t.total,0);const em=txs.filter(t=>t.paymentMethod==="emoney").reduce((s,t)=>s+t.total,0);const cs=txs.filter(t=>t.paymentMethod==="cash").reduce((s,t)=>s+t.total,0);
+            const tt=txs.reduce((s,t)=>s+t.total,0);
             const ac=COLS[ti%COLS.length];const ms={};txs.forEach(tx=>tx.items.forEach(it=>{if(!ms[it.menuCode])ms[it.menuCode]={name:it.menuName,price:it.price,qty:0,total:0};ms[it.menuCode].qty+=it.qty;ms[it.menuCode].total+=it.qty*it.price;}));
             return(
               <div key={tn.id} style={{background:"#fff",border:"1px solid #f3f4f6",borderRadius:18,overflow:"hidden",boxShadow:"0 2px 12px rgba(0,0,0,.06)"}}>
@@ -1741,11 +1748,8 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
                   <div style={{textAlign:"right"}}>
                     <p style={{color:ac,fontWeight:900,fontSize:24,margin:"0 0 4px"}}>{idr(tt)}</p>
                     <div style={{display:"flex",gap:6,justifyContent:"flex-end",flexWrap:"wrap"}}>
-                      <span style={{fontSize:12,color:"#6d28d9",background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:10,padding:"3px 10px",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
-                        <span>💳</span><span>E-Money: {idr(em)}</span>
-                      </span>
-                      <span style={{fontSize:12,color:"#b45309",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"3px 10px",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
-                        <span>💵</span><span>Cash: {idr(cs)}</span>
+                      <span style={{fontSize:12,color:"#4c1d95",background:"#f5f0ff",border:"1px solid #c4b5fd",borderRadius:10,padding:"3px 10px",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+                        <span>🪙</span><span>Saldo: {idr(tt)}</span>
                       </span>
                     </div>
                   </div>
@@ -1804,13 +1808,9 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
                       <p style={{margin:0,fontWeight:900,color:ac,fontSize:20}}>{idr(tt)}</p>
                     </div>
                     <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-                      <div style={{background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:10,padding:"8px 12px",flex:1}}>
-                        <p style={{margin:"0 0 2px",color:"#7c3aed",fontSize:12,fontWeight:700}}>💳 E-Money</p>
-                        <p style={{margin:0,color:"#4c1d95",fontWeight:800,fontSize:14}}>{idr(em)}</p>
-                      </div>
-                      <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"8px 12px",flex:1}}>
-                        <p style={{margin:"0 0 2px",color:"#b45309",fontSize:12,fontWeight:700}}>💵 Cash</p>
-                        <p style={{margin:0,color:"#78350f",fontWeight:800,fontSize:14}}>{idr(cs)}</p>
+                      <div style={{background:"#f5f0ff",border:"1px solid #c4b5fd",borderRadius:10,padding:"8px 12px",flex:1}}>
+                        <p style={{margin:"0 0 2px",color:"#4c1d95",fontSize:12,fontWeight:700}}>🪙 Total Saldo Transaksi</p>
+                        <p style={{margin:0,color:"#4c1d95",fontWeight:800,fontSize:14}}>{idr(tt)}</p>
                       </div>
                     </div>
                   </div>
@@ -1818,15 +1818,30 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
               </div>
             );
           })}
-          {selTn==="all"&&disp.length>1&&(()=>{const gt=filtered.reduce((s,t)=>s+t.total,0);const em=filtered.filter(t=>t.paymentMethod==="emoney").reduce((s,t)=>s+t.total,0);const cs=filtered.filter(t=>t.paymentMethod==="cash").reduce((s,t)=>s+t.total,0);return(
+          {selTn==="all"&&disp.length>1&&(()=>{const gt=filtered.reduce((s,t)=>s+t.total,0);return(
             <div style={{background:"#1c0a00",borderRadius:16,padding:"18px 22px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12,marginBottom:12}}>
                 <div><p style={{color:"#fed7aa",fontWeight:700,margin:0,fontSize:14}}>🏆 GRAND TOTAL</p><p style={{color:"#9ca3af",fontSize:12,margin:"2px 0 0"}}>{filtered.length} transaksi • {disp.length} tenant • {filterDate}</p></div>
                 <p style={{color:"#fb923c",fontWeight:900,fontSize:26,margin:0}}>{idr(gt)}</p>
               </div>
               <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-                <div style={{background:"rgba(109,40,217,.25)",borderRadius:10,padding:"8px 14px",flex:1}}><p style={{margin:"0 0 2px",color:"#c4b5fd",fontSize:11,fontWeight:600}}>💳 E-Money</p><p style={{margin:0,color:"#fff",fontWeight:800,fontSize:15}}>{idr(em)}</p></div>
-                <div style={{background:"rgba(180,83,9,.25)",borderRadius:10,padding:"8px 14px",flex:1}}><p style={{margin:"0 0 2px",color:"#fde68a",fontSize:11,fontWeight:600}}>💵 Cash</p><p style={{margin:0,color:"#fff",fontWeight:800,fontSize:15}}>{idr(cs)}</p></div>
+                <div style={{background:"rgba(76,29,149,.25)",borderRadius:10,padding:"8px 14px",flex:1}}>
+                  <p style={{margin:"0 0 2px",color:"#c4b5fd",fontSize:11,fontWeight:600}}>🪙 Total Saldo</p>
+                  <p style={{margin:0,color:"#fff",fontWeight:800,fontSize:15}}>{idr(gt)}</p>
+                </div>
+              </div>
+            </div>
+          );})()}
+            <div style={{background:"#1c0a00",borderRadius:16,padding:"18px 22px"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12,marginBottom:12}}>
+                <div><p style={{color:"#fed7aa",fontWeight:700,margin:0,fontSize:14}}>🏆 GRAND TOTAL</p><p style={{color:"#9ca3af",fontSize:12,margin:"2px 0 0"}}>{filtered.length} transaksi • {disp.length} tenant • {filterDate}</p></div>
+                <p style={{color:"#fb923c",fontWeight:900,fontSize:26,margin:0}}>{idr(gt)}</p>
+              </div>
+              <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                <div style={{background:"rgba(76,29,149,.25)",borderRadius:10,padding:"8px 14px",flex:1}}>
+                  <p style={{margin:"0 0 2px",color:"#c4b5fd",fontSize:11,fontWeight:600}}>🪙 Total Saldo</p>
+                  <p style={{margin:0,color:"#fff",fontWeight:800,fontSize:15}}>{idr(gt)}</p>
+                </div>
               </div>
             </div>
           );})()}
@@ -1838,18 +1853,18 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
 // ─── Admin Summary ────────────────────────────────────────────────────────────
 function AdminSummary({tenants,transactions,settings,filterDate,setFilterDate}){
   const filtered=transactions.filter(t=>t.date===filterDate);
-  const gt=filtered.reduce((s,t)=>s+t.total,0);const et=filtered.filter(t=>t.paymentMethod==="emoney").reduce((s,t)=>s+t.total,0);const ct=filtered.filter(t=>t.paymentMethod==="cash").reduce((s,t)=>s+t.total,0);
+  const gt=filtered.reduce((s,t)=>s+t.total,0);
   const bname=settings?.bazaarName||"BazaarPOS";
   const byTn=tenants.map(tn=>{const txs=filtered.filter(t=>t.tenantId===tn.id);return{...tn,n:txs.length,tt:txs.reduce((s,t)=>s+t.total,0),em:txs.filter(t=>t.paymentMethod==="emoney").reduce((s,t)=>s+t.total,0),cs:txs.filter(t=>t.paymentMethod==="cash").reduce((s,t)=>s+t.total,0)};}).filter(t=>t.n>0).sort((a,b)=>b.tt-a.tt);
 
   const exportXls=()=>{
     const sr=byTn.map(t=>[t.code,t.name,t.n,t.em,t.cs,t.tt]);
-    const tr=filtered.map(tx=>{const tn=tenants.find(t=>t.id===tx.tenantId)||{};return[tx.nota,tn.code||"",tn.name||"",tx.date,tx.time,tx.paymentMethod==="emoney"?"E-Money":"Cash",tx.total];});
-    exportToExcel({filename:`Rekap-${filterDate}.xlsx`,sheets:[{name:"Rekap Tenant",headers:["Kode","Nama","Jml Tx","E-Money","Cash","Total"],rows:sr},{name:"Detail Transaksi",headers:["No Nota","Kode","Nama","Tanggal","Jam","Pembayaran","Total"],rows:tr}]});
+    const tr=filtered.map(tx=>{const tn=tenants.find(t=>t.id===tx.tenantId)||{};return[tx.nota,tn.code||"",tn.name||"",tx.date,tx.time,"Saldo",tx.total];});
+    exportToExcel({filename:`Rekap-${filterDate}.xlsx`,sheets:[{name:"Rekap Tenant",headers:["Kode","Nama","Jml Tx","Total Saldo"],rows:byTn.map(t=>[t.code,t.name,t.n,t.tt])},{name:"Detail Transaksi",headers:["No Nota","Kode","Nama","Tanggal","Jam","Pembayaran","Total"],rows:tr}]});
   };
   const doPrint=()=>{
     const rows=byTn.map((t,i)=>`<tr><td>${i+1}</td><td><strong>${t.code}</strong></td><td>${t.name}</td><td style="text-align:center">${t.n}</td><td class="pe" style="text-align:right">${idr(t.em)}</td><td class="pc" style="text-align:right">${idr(t.cs)}</td><td style="text-align:right;font-weight:700">${idr(t.tt)}</td></tr>`).join("");
-    printA4({title:"Rekapitulasi Harian",subtitle:`Tanggal: ${filterDate} | Dicetak: ${new Date().toLocaleString("id-ID")}`,bazaarName:bname,bodyHtml:`<div class="sr"><div class="sb"><p class="lbl">Transaksi</p><p class="val" style="color:#1c0a00">${filtered.length}</p></div><div class="sb"><p class="lbl">Tenant Aktif</p><p class="val" style="color:#1c0a00">${byTn.length}</p></div><div class="sb em"><p class="lbl">💳 E-Money</p><p class="val">${idr(et)}</p></div><div class="sb cs"><p class="lbl">💵 Cash</p><p class="val">${idr(ct)}</p></div><div class="sb"><p class="lbl">Grand Total</p><p class="val">${idr(gt)}</p></div></div><div class="sec">Rekapitulasi per Tenant</div><table><thead><tr><th>#</th><th>Kode</th><th>Nama Tenant</th><th style="text-align:center">Transaksi</th><th style="text-align:right">E-Money</th><th style="text-align:right">Cash</th><th style="text-align:right">Total</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td colspan="3"><strong>GRAND TOTAL</strong></td><td style="text-align:center"><strong>${filtered.length}</strong></td><td class="pe" style="text-align:right"><strong>${idr(et)}</strong></td><td class="pc" style="text-align:right"><strong>${idr(ct)}</strong></td><td style="text-align:right"><strong>${idr(gt)}</strong></td></tr></tfoot></table>`});
+    printA4({title:"Rekapitulasi Harian",subtitle:`Tanggal: ${filterDate} | Dicetak: ${new Date().toLocaleString("id-ID")}`,bazaarName:bname,bodyHtml:`<div class="sr"><div class="sb"><p class="lbl">Transaksi</p><p class="val" style="color:#1c0a00">${filtered.length}</p></div><div class="sb"><p class="lbl">Tenant Aktif</p><p class="val" style="color:#1c0a00">${byTn.length}</p></div><div class="sb em"><p class="lbl">🪙 Total Saldo</p><p class="val">${idr(gt)}</p></div></div><div class="sec">Rekapitulasi per Tenant</div><table><thead><tr><th>#</th><th>Kode</th><th>Nama Tenant</th><th style="text-align:center">Transaksi</th><th style="text-align:right">Total Saldo</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><td colspan="3"><strong>GRAND TOTAL</strong></td><td style="text-align:center"><strong>${filtered.length}</strong></td><td style="text-align:right"><strong>${idr(gt)}</strong></td></tr></tfoot></table>`});
   };
 
   return(
@@ -1873,9 +1888,12 @@ function AdminSummary({tenants,transactions,settings,filterDate,setFilterDate}){
           <div><p style={{margin:0,color:"#fed7aa",fontSize:12}}>Tenant Aktif</p><p style={{margin:"2px 0 0",fontWeight:700,fontSize:17}}>{byTn.length}</p></div>
         </div>
       </div>
-      {filtered.length>0&&<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:18}}>
-        <div style={{background:"#f5f3ff",border:"2px solid #ddd6fe",borderRadius:14,padding:16}}><p style={{margin:"0 0 4px",color:"#7c3aed",fontSize:11,fontWeight:700}}>💳 E-MONEY</p><p style={{margin:"0 0 4px",color:"#4c1d95",fontWeight:900,fontSize:20}}>{idr(et)}</p><p style={{margin:0,color:"#7c3aed",fontSize:12}}>{filtered.filter(t=>t.paymentMethod==="emoney").length} transaksi</p></div>
-        <div style={{background:"#fffbeb",border:"2px solid #fde68a",borderRadius:14,padding:16}}><p style={{margin:"0 0 4px",color:"#b45309",fontSize:11,fontWeight:700}}>💵 CASH</p><p style={{margin:"0 0 4px",color:"#78350f",fontWeight:900,fontSize:20}}>{idr(ct)}</p><p style={{margin:0,color:"#b45309",fontSize:12}}>{filtered.filter(t=>t.paymentMethod==="cash").length} transaksi</p></div>
+      {filtered.length>0&&<div style={{display:"grid",gridTemplateColumns:"1fr",gap:12,marginBottom:18}}>
+        <div style={{background:"#f5f0ff",border:"2px solid #c4b5fd",borderRadius:14,padding:16}}>
+          <p style={{margin:"0 0 4px",color:"#4c1d95",fontSize:11,fontWeight:700}}>🪙 TOTAL SALDO TRANSAKSI</p>
+          <p style={{margin:"0 0 4px",color:"#4c1d95",fontWeight:900,fontSize:20}}>{idr(gt)}</p>
+          <p style={{margin:0,color:"#7c3aed",fontSize:12}}>{filtered.length} transaksi</p>
+        </div>
       </div>}
       {byTn.length===0?<EmptyState icon="📊" text="Tidak ada data transaksi."/>:
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
@@ -1892,12 +1910,9 @@ function AdminSummary({tenants,transactions,settings,filterDate,setFilterDate}){
                 </div>
                 <div style={{textAlign:"right"}}>
                   <p style={{color:"#ea580c",fontWeight:800,fontSize:20,margin:0}}>{idr(t.tt)}</p>
-                    <div style={{display:"flex",gap:6,marginTop:4,justifyContent:"flex-end",flexWrap:"wrap"}}>
-                    <span style={{fontSize:12,color:"#6d28d9",background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:10,padding:"3px 10px",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
-                      <span>💳</span><span>E-Money: {idr(t.em)}</span>
-                    </span>
-                    <span style={{fontSize:12,color:"#b45309",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"3px 10px",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
-                      <span>💵</span><span>Cash: {idr(t.cs)}</span>
+                  <div style={{display:"flex",gap:6,marginTop:4,justifyContent:"flex-end",flexWrap:"wrap"}}>
+                    <span style={{fontSize:12,color:"#4c1d95",background:"#f5f0ff",border:"1px solid #c4b5fd",borderRadius:10,padding:"3px 10px",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+                      <span>🪙</span><span>Saldo: {idr(t.tt)}</span>
                     </span>
                   </div>
                   <div style={{height:4,borderRadius:4,background:"#f3f4f6",marginTop:6,width:100}}><div style={{height:4,borderRadius:4,background:"#ea580c",width:`${gt>0?(t.tt/gt)*100:0}%`,transition:"width .6s ease"}}/></div>
@@ -1942,6 +1957,7 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
 
   return(
     <div style={{minHeight:"100vh",background:"#f0fdf4"}}>
+      <BackConfirmModal/>
       {!isOnline&&<div style={{background:"#dc2626",color:"#fff",textAlign:"center",padding:"8px",fontSize:13,fontWeight:700}}>⚠️ Offline — Transaksi tersimpan lokal, sync otomatis saat online</div>}
 
       {showEmerg&&<Modal title="🆘 Kirim Pesan Darurat" onClose={()=>setShowEmerg(false)} accent="#dc2626">
@@ -1970,6 +1986,7 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
             <button onClick={connectBT} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}} disabled={btConnecting}>
               {btConnecting?"⏳":"🖨️"} {btPrinter?"Ganti BT":"Koneksi BT"}
             </button>
+            <button onClick={()=>window.location.reload()} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}} title="Refresh">🔄</button>
             <button onClick={onLogout} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}}>Keluar</button>
           </div>
         </div>
@@ -2181,7 +2198,7 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
         <Modal title="" onClose={()=>{}}>
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,background:"#f0fdf4",borderRadius:12,padding:"10px 14px"}}>
             <div style={{fontSize:28}}>
-              {lastNota.paymentMethod==="emoney"?"💳":lastNota.paymentMethod==="wallet"?"🪙":"💵"}
+              {"🪙"}
             </div>
             <div style={{flex:1}}>
               <p style={{margin:0,fontWeight:800,fontSize:15,color:"#14532d"}}>Transaksi Berhasil!</p>
@@ -2344,15 +2361,15 @@ function TenantHistory({transactions,tenant,settings}){
   const [filterDate,setFilterDate]=useState(todayStr());
   const filtered=[...transactions.filter(t=>t.date===filterDate)].sort((a,b)=>b.nota.localeCompare(a.nota));
   const tot=filtered.reduce((s,t)=>s+t.total,0);
-  const em=filtered.filter(t=>t.paymentMethod==="emoney").reduce((s,t)=>s+t.total,0);
-  const cs=filtered.filter(t=>t.paymentMethod==="cash").reduce((s,t)=>s+t.total,0);
+
+
   const bname=settings?.bazaarName||"BazaarPOS";
   const f1=settings?.receiptFooter1||"Terima kasih!";
   const f2=settings?.receiptFooter2||"Selamat menikmati :)";
 
   const exportXls=()=>{
     const rows=[];
-    filtered.forEach(tx=>tx.items.forEach((it,i)=>rows.push([i===0?tx.nota:"",i===0?tx.date:"",i===0?tx.time:"",i===0?(tx.paymentMethod==="emoney"?"E-Money":"Cash"):"",it.menuCode,it.menuName,it.qty,it.price,it.qty*it.price,i===0?tx.total:""])));
+    filtered.forEach(tx=>tx.items.forEach((it,i)=>rows.push([i===0?tx.nota:"",i===0?tx.date:"",i===0?tx.time:"",i===0?"Saldo":"",it.menuCode,it.menuName,it.qty,it.price,it.qty*it.price,i===0?tx.total:""])));
     exportToExcel({filename:`Riwayat-${tenant?.code}-${filterDate}.xlsx`,sheets:[{name:"Riwayat",headers:["No Nota","Tanggal","Jam","Pembayaran","Kode Menu","Nama Menu","Qty","Harga","Subtotal","Total Nota"],rows}]});
   };
 
@@ -2371,9 +2388,12 @@ function TenantHistory({transactions,tenant,settings}){
           <p style={{margin:"4px 0 8px",fontSize:26,fontWeight:800}}>{idr(tot)}</p>
           <p style={{margin:0,color:"#bbf7d0",fontSize:12}}>{filtered.length} transaksi</p>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
-          <div style={{background:"#f5f3ff",border:"2px solid #ddd6fe",borderRadius:12,padding:12}}><p style={{margin:"0 0 3px",color:"#7c3aed",fontSize:11,fontWeight:700}}>💳 E-MONEY</p><p style={{margin:"0 0 2px",color:"#4c1d95",fontWeight:900,fontSize:16}}>{idr(em)}</p><p style={{margin:0,color:"#7c3aed",fontSize:11}}>{filtered.filter(t=>t.paymentMethod==="emoney").length} tx</p></div>
-          <div style={{background:"#fffbeb",border:"2px solid #fde68a",borderRadius:12,padding:12}}><p style={{margin:"0 0 3px",color:"#b45309",fontSize:11,fontWeight:700}}>💵 CASH</p><p style={{margin:"0 0 2px",color:"#78350f",fontWeight:900,fontSize:16}}>{idr(cs)}</p><p style={{margin:0,color:"#b45309",fontSize:11}}>{filtered.filter(t=>t.paymentMethod==="cash").length} tx</p></div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr",gap:10,marginBottom:14}}>
+          <div style={{background:"#f5f0ff",border:"2px solid #c4b5fd",borderRadius:12,padding:12,textAlign:"center"}}>
+            <p style={{margin:"0 0 3px",color:"#4c1d95",fontSize:11,fontWeight:700}}>🪙 TOTAL SALDO TRANSAKSI</p>
+            <p style={{margin:"0 0 2px",color:"#4c1d95",fontWeight:900,fontSize:18}}>{idr(tot)}</p>
+            <p style={{margin:0,color:"#7c3aed",fontSize:11}}>{filtered.length} transaksi</p>
+          </div>
         </div>
       </>}
       {filtered.length===0?<EmptyState icon="📜" text="Tidak ada transaksi pada tanggal ini."/>:
@@ -2529,6 +2549,54 @@ function CustomerCardPage({phone,settings,customers,loaded}){
       </div>
     </div>
   );
+}
+
+// ─── Back Button Confirmation ─────────────────────────────────────────────────
+function useBackConfirm(active=true){
+  const [showConfirm,setShowConfirm]=useState(false);
+  const [pendingBack,setPendingBack]=useState(false);
+
+  useEffect(()=>{
+    if(!active)return;
+    // Push state agar back button bisa dicegat
+    window.history.pushState({backGuard:true},document.title);
+
+    const handlePop=(e)=>{
+      // Cegat back button
+      window.history.pushState({backGuard:true},document.title);
+      setShowConfirm(true);
+    };
+    window.addEventListener("popstate",handlePop);
+    return()=>window.removeEventListener("popstate",handlePop);
+  },[active]);
+
+  const BackConfirmModal=()=>showConfirm?(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:99999,padding:20}}>
+      <div className="pop-in" style={{background:"#fff",borderRadius:20,padding:28,maxWidth:360,width:"100%",textAlign:"center",boxShadow:"0 24px 60px rgba(0,0,0,.3)"}}>
+        <div style={{fontSize:48,marginBottom:12}}>⚠️</div>
+        <h3 style={{margin:"0 0 8px",fontSize:18,fontWeight:800,color:"#1c0a00"}}>Keluar dari Aplikasi?</h3>
+        <p style={{color:"#6b7280",fontSize:14,margin:"0 0 20px"}}>Anda yakin ingin keluar dari aplikasi ini?</p>
+        <div style={{display:"flex",gap:12}}>
+          <button onClick={()=>setShowConfirm(false)}
+            style={{flex:1,padding:"13px",background:"#f3f4f6",color:"#374151",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:15,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+            Tidak
+          </button>
+          <button onClick={()=>{
+            setShowConfirm(false);
+            // Kembali ke halaman login (logout)
+            window.history.go(-2);
+            setTimeout(()=>window.location.replace(window.location.pathname),200);
+          }}
+            style={{flex:1,padding:"13px",background:"#dc2626",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:15,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+            onMouseOver={e=>e.currentTarget.style.background="#b91c1c"} onMouseOut={e=>e.currentTarget.style.background="#dc2626"}>
+            Ya, Keluar
+          </button>
+        </div>
+      </div>
+    </div>
+  ):null;
+
+  return {BackConfirmModal};
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
