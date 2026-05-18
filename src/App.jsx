@@ -557,6 +557,7 @@ function AdminDashboard(props){
   const {tenants,transactions,settings,alerts,allAlerts,onSaveAlerts,adminData,onLogout}=props;
   const [tab,setTab]=useState("tenants");
   const [filterDate,setFilterDate]=useState(todayStr());
+  const {BackConfirmModal}=useBackConfirm(true);
   const [showAlertPop,setShowAlertPop]=useState(true);
   const todayTx=transactions.filter(t=>t.date===todayStr());
   const tabs=[
@@ -1429,7 +1430,7 @@ function KasirTopUp({customers,walletLogs,settings,onSaveCustomers,onSaveWalletL
 
       {/* Sub-tabs */}
       <div style={{display:"flex",gap:4,marginBottom:20,background:"#f9fafb",borderRadius:14,padding:4}}>
-        {[{k:"customers",i:"👥",l:"Pelanggan"},{k:"topup",i:"💳",l:"Top Up"},{k:"history",i:"📋",l:"Riwayat"}].map(t=>(
+        {[{k:"customers",i:"👥",l:"Pelanggan"},{k:"topup",i:"🪙",l:"Top Up"},{k:"history",i:"📋",l:"Riwayat"}].map(t=>(
           <button key={t.k} onClick={()=>setTab(t.k)}
             style={{flex:1,padding:"10px 8px",background:tab===t.k?"#fff":"transparent",border:"none",borderRadius:10,fontWeight:tab===t.k?700:500,color:tab===t.k?"#ea580c":"#6b7280",cursor:"pointer",fontSize:13,boxShadow:tab===t.k?"0 2px 8px rgba(0,0,0,.08)":"none",transition:"all .2s"}}>
             {t.i} {t.l}
@@ -1455,7 +1456,7 @@ function KasirTopUp({customers,walletLogs,settings,onSaveCustomers,onSaveWalletL
                       <p style={{color:"#6b7280",fontSize:13,margin:"0 0 6px"}}>📱 {c.phone}</p>
                       <div style={{display:"flex",gap:8}}>
                         <span style={{background:c.balance>0?"#f0fdf4":"#fef2f2",color:c.balance>0?"#16a34a":"#dc2626",fontSize:13,fontWeight:800,padding:"4px 12px",borderRadius:20,border:`1px solid ${c.balance>0?"#bbf7d0":"#fca5a5"}`}}>
-                          💳 Saldo: {idr(c.balance)}
+                          🪙 Saldo: {idr(c.balance)}
                         </span>
                       </div>
                     </div>
@@ -1491,7 +1492,7 @@ function KasirTopUp({customers,walletLogs,settings,onSaveCustomers,onSaveWalletL
       {tab==="topup"&&(
         <div style={{maxWidth:500}}>
           <div style={{background:"#fff",borderRadius:18,padding:24,boxShadow:"0 2px 12px rgba(0,0,0,.06)",marginBottom:16}}>
-            <p style={{fontWeight:700,color:"#ea580c",fontSize:14,margin:"0 0 16px",borderLeft:"4px solid #ea580c",paddingLeft:10}}>💳 Form Top Up Saldo</p>
+            <p style={{fontWeight:700,color:"#ea580c",fontSize:14,margin:"0 0 16px",borderLeft:"4px solid #ea580c",paddingLeft:10}}>🪙 Form Top Up Saldo</p>
             <FI label="Nomor WhatsApp Pelanggan" placeholder="08123456789" value={form.phone} onChange={v=>{
               setForm({...form,phone:v});
               const found=customers.find(c=>c.phone===v.replace(/\D/g,""));
@@ -1934,6 +1935,7 @@ function AdminSummary({tenants,transactions,settings,filterDate,setFilterDate}){
 // ═════════════════════════════════════════════════════════════════════════════
 function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,customers,walletLogs,onSaveMenus,onSaveTx,onSaveCustomers,onSaveWalletLogs,onSaveAlerts,alerts,onLogout}){
   const [tab,setTab]=useState("pos");
+  const {BackConfirmModal}=useBackConfirm(true);
   const [btPrinter,setBtPrinter]=useState(null);
   const [btConnecting,setBtConnecting]=useState(false);
   const [isOnline,setIsOnline]=useState(navigator.onLine);
@@ -2114,7 +2116,7 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
 
       // Kirim WA notifikasi saldo
       if(settings.fonnteToken){
-        const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n🛒 *Transaksi Belanja*\n📋 Nota: ${nota}\n🏪 Tenant: ${tenant.name}\n💸 Bayar: ${idr(total)}\n📊 Saldo Lama: ${idr(balBefore)}\n💳 Sisa Saldo: ${idr(balAfter)}\n🕐 Waktu: ${new Date().toLocaleString("id-ID")}\n\nTerima kasih ${walletCust.name}! 🙏`;
+        const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n🛒 *Transaksi Belanja*\n📋 Nota: ${nota}\n🏪 Tenant: ${tenant.name}\n💸 Bayar: ${idr(total)}\n📊 Saldo Lama: ${idr(balBefore)}\n🪙 Sisa Saldo: ${idr(balAfter)}\n🕐 Waktu: ${new Date().toLocaleString("id-ID")}\n\nTerima kasih ${walletCust.name}! 🙏`;
         sendWhatsApp({token:settings.fonnteToken,phone:walletCust.phone,message:waMsg});
       }
       // Simpan info customer ke tx untuk ditampilkan di struk
