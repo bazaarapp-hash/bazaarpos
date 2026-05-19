@@ -39,14 +39,7 @@ _gs.textContent = `
 document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
-const db = {
-  async get(k) {
-    try { const r = await window.storage.get(k); return r ? JSON.parse(r.value) : null; } catch { return null; }
-  },
-  async set(k, v) {
-    try { await window.storage.set(k, JSON.stringify(v)); } catch(e) { console.error(e); }
-  },
-};
+
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
@@ -257,45 +250,55 @@ async function generateReceiptImage({tx, tenantName, tenantCode, bazaarName="Baz
 }
 
 // ─── Send Receipt Image via Fonnte atau Web Share ─────────────────────────────
-async function sendReceiptImage({dataUrl, phone, token, caption="Struk belanja kamu 🧾"}){
-  // Konversi data URL ke Blob
-  const res=await fetch(dataUrl);
-  const blob=await res.blob();
+async function sendReceiptImage({dataUrl, phone, token, caption="Struk belanja 🧾", onStatus}){
+  const blob=await (await fetch(dataUrl)).blob();
+  const file=new File([blob],"struk.jpg",{type:"image/jpeg"});
 
-  // Coba Fonnte API (kirim gambar langsung)
+  // ── 1. Fonnte API (kirim otomatis ke WA pelanggan) ──────────────────────────
   if(token&&phone){
     try{
       const target=phone.startsWith("0")?"62"+phone.slice(1):phone.replace(/\D/g,"");
       const form=new FormData();
       form.append("target",target);
       form.append("message",caption);
-      form.append("file",blob,"struk.jpg");
+      form.append("file",file,"struk.jpg");
       const r=await fetch("https://api.fonnte.com/send",{
         method:"POST",
         headers:{"Authorization":token},
         body:form,
       });
       const d=await r.json();
-      if(d.status===true||d.status==="true") return {ok:true,via:"fonnte"};
-    }catch(e){console.error("Fonnte image error:",e);}
+      if(d.status===true||d.status==="true"){
+        onStatus&&onStatus("✅ Struk gambar terkirim ke WhatsApp pelanggan!");
+        return "fonnte";
+      }
+    }catch(e){console.error("Fonnte image:",e);}
   }
 
-  // Fallback: Web Share API (mobile Chrome/Safari)
-  if(navigator.share&&navigator.canShare&&navigator.canShare({files:[new File([blob],"struk.jpg",{type:"image/jpeg"})]})){
+  // ── 2. Web Share API (native share Android/iOS Chrome) ─────────────────────
+  if(typeof navigator.share==="function"){
     try{
-      await navigator.share({files:[new File([blob],"struk.jpg",{type:"image/jpeg"})],title:"Struk Belanja",text:caption});
-      return {ok:true,via:"webshare"};
-    }catch(e){if(e.name!=="AbortError")console.error("Share error:",e);}
+      // Coba share dengan file gambar
+      if(navigator.canShare&&navigator.canShare({files:[file]})){
+        await navigator.share({files:[file],title:"Struk Belanja",text:caption});
+        onStatus&&onStatus("✅ Struk gambar dibagikan via WhatsApp!");
+        return "webshare";
+      }
+    }catch(e){
+      if(e.name==="AbortError") return "cancelled";
+      console.error("Web share:",e);
+    }
   }
 
-  // Fallback terakhir: download gambar + buka WA text
+  // ── 3. Download gambar + instruksi ─────────────────────────────────────────
+  // Buat object URL agar file bisa didownload (lebih kecil dari dataURL)
+  const objUrl=URL.createObjectURL(blob);
   const a=document.createElement("a");
-  a.href=dataUrl; a.download="struk.jpg"; a.click();
-  if(phone){
-    const waPhone=phone.startsWith("0")?"62"+phone.slice(1):phone.replace(/\D/g,"");
-    setTimeout(()=>window.open(`https://wa.me/${waPhone}?text=${encodeURIComponent(caption)}`,"_blank"),800);
-  }
-  return {ok:true,via:"download"};
+  a.href=objUrl; a.download="struk.jpg"; a.click();
+  setTimeout(()=>URL.revokeObjectURL(objUrl),3000);
+
+  onStatus&&onStatus("📥 Gambar struk didownload. Kirim manual ke WhatsApp pelanggan.");
+  return "download";
 }
 async function connectBTPrinter(){
   if(!navigator.bluetooth){alert("Browser ini tidak mendukung Web Bluetooth. Gunakan Chrome di Android.");return null;}
@@ -2277,8 +2280,11 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
     setLastNota(tx);setPrinted(false);setCart([]);
   };
 
+  const [sendStatus,setSendStatus]=useState("");
+
   const doPrint=async()=>{
-    const caption=`Struk belanja ${tenant.name}\nNota: ${lastNota.nota}\nTotal: ${idr(lastNota.total)}${lastNota.walletBalanceAfter!=null?"\nSisa saldo: "+idr(lastNota.walletBalanceAfter):""}`;
+    setSendStatus("⏳ Membuat gambar struk...");
+    const caption=`Struk belanja ${tenant.name}\nNota: ${lastNota.nota} • ${lastNota.date} ${lastNota.time}\nTotal: ${idr(lastNota.total)}${lastNota.walletCustomerName?"\nPelanggan: "+lastNota.walletCustomerName:""}${lastNota.walletBalanceAfter!=null?"\nSisa saldo: "+idr(lastNota.walletBalanceAfter):""}`;
     try{
       const dataUrl=await generateReceiptImage({
         tx:lastNota, tenantName:tenant.name, tenantCode:tenant.code,
@@ -2286,14 +2292,17 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
         footer1:settings?.receiptFooter1||"Terima kasih!",
         footer2:settings?.receiptFooter2||"Selamat menikmati :)"
       });
+      setSendStatus("⏳ Mengirim struk...");
       await sendReceiptImage({
         dataUrl, phone:lastNota.walletCustomerPhone,
-        token:settings?.fonnteToken, caption
+        token:settings?.fonnteToken, caption,
+        onStatus:(s)=>setSendStatus(s),
       });
       setPrinted(true);
     }catch(e){
       console.error("Receipt error:",e);
-      setPrinted(true); // tetap enable tombol transaksi baru
+      setSendStatus("⚠️ Gagal kirim, coba lagi.");
+      setPrinted(true);
     }
   };
 
@@ -2396,12 +2405,13 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
             </div>
           </div>
 
+          {sendStatus&&<div style={{background:sendStatus.startsWith("✅")?"#f0fdf4":sendStatus.startsWith("📥")?"#eff6ff":"#fef3c7",border:`1px solid ${sendStatus.startsWith("✅")?"#bbf7d0":sendStatus.startsWith("📥")?"#bae6fd":"#fbbf24"}`,borderRadius:10,padding:"8px 12px",marginBottom:8,fontSize:12,fontWeight:600,color:sendStatus.startsWith("✅")?"#16a34a":sendStatus.startsWith("📥")?"#0284c7":"#92400e",textAlign:"center"}}>{sendStatus}</div>}
           <button onClick={doPrint}
             style={{width:"100%",padding:"12px",background:"#16a34a",color:"#fff",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
             onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
-            💬 {printed?"Kirim Ulang Struk WA":"Kirim Struk via WhatsApp"}
+            {sendStatus.includes("⏳")?"⏳ Memproses...":printed?"🔄 Kirim Ulang Struk":"💬 Kirim Struk via WhatsApp"}
           </button>
-          <button onClick={()=>{setLastNota(null);setPrinted(false);}} disabled={!printed}
+          <button onClick={()=>{setLastNota(null);setPrinted(false);setSendStatus("");}} disabled={!printed}
             style={{width:"100%",padding:"12px",background:printed?"#16a34a":"#e5e7eb",color:printed?"#fff":"#9ca3af",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:printed?"pointer":"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif",transition:"all .2s"}}
             onMouseOver={e=>{if(printed)e.currentTarget.style.background="#15803d";}} onMouseOut={e=>{if(printed)e.currentTarget.style.background="#16a34a";}}>
             {printed?"➕ Transaksi Baru":"🔒 Cetak Struk Dulu"}
