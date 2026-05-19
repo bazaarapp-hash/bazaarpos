@@ -40,6 +40,7 @@ document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
 
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
 const todayStr = () => new Date().toISOString().split("T")[0];
@@ -2502,6 +2503,7 @@ function CustomerCardPage({phone,settings,customers,walletLogs,loaded}){
   const bazaarName=settings?.bazaarName||"BazaarPOS";
   const shareUrl=`${window.location.origin}${window.location.pathname}?card=${phone}`;
   const waShare=`https://wa.me/?text=${encodeURIComponent(`Cek saldo kamu di ${bazaarName}:\n${shareUrl}`)}`;
+  const [expandedTx,setExpandedTx]=useState(null);
 
   const idr2=n=>new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n||0);
 
@@ -2598,7 +2600,6 @@ function CustomerCardPage({phone,settings,customers,walletLogs,loaded}){
             {/* Recent transactions */}
             {(()=>{
               const recentTx=(walletLogs||[]).filter(l=>l.customerId===customer.id&&l.type==="payment").sort((a,b)=>b.timestamp?.localeCompare(a.timestamp)||0).slice(0,5);
-              const [expandedTx,setExpandedTx]=React.useState(null);
               return recentTx.length>0?(
                 <div style={{marginBottom:14}}>
                   <p style={{color:"#374151",fontSize:13,fontWeight:700,margin:"0 0 8px"}}>🛒 Transaksi Terakhir <span style={{color:"#9ca3af",fontWeight:400,fontSize:12}}>(tap untuk detail)</span></p>
