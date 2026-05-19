@@ -2131,6 +2131,7 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
         id:uid(),customerId:walletCust.id,customerPhone:walletCust.phone,customerName:walletCust.name,
         type:"payment",amount:total,balanceBefore:balBefore,balanceAfter:balAfter,
         tenantId:tenant.id,tenantName:tenant.name,nota,
+        items:cart.map(it=>({menuCode:it.menuCode,menuName:it.menuName,qty:it.qty,price:it.price})),
         timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
       };
       await onSaveCustomers(newCusts);
@@ -2336,9 +2337,12 @@ function TenantMenuMgr({tenant,menus,allMenus,allTransactions,onSaveMenus}){
   const [form,setForm]=useState({code:"",name:"",price:""});
   const usedIds=new Set(allTransactions.flatMap(tx=>tx.items.map(it=>it.menuId)));
   const genCode=()=>{
-    const nums=menus.map(m=>parseInt(m.code.replace(/\D/g,""))||0);
+    // Ambil huruf pertama tiap kata dari nama tenant
+    const initials=tenant.name.trim().split(/\s+/).map(w=>w[0]?.toUpperCase()||"").join("");
+    // Cari nomor urut tertinggi untuk kode dengan prefix ini
+    const nums=menus.filter(m=>m.code.startsWith(initials)).map(m=>parseInt(m.code.replace(initials,""))||0);
     const next=(nums.length>0?Math.max(...nums):0)+1;
-    return "M"+String(next).padStart(3,"0");
+    return initials+String(next).padStart(3,"0");
   };
   const openAdd=()=>{setForm({code:genCode(),name:"",price:""});setEditing(null);setShowForm(true);};
   const openEdit=m=>{
@@ -2398,6 +2402,20 @@ function TenantMenuMgr({tenant,menus,allMenus,allTransactions,onSaveMenus}){
 // ─── Tenant History ────────────────────────────────────────────────────────────
 function TenantHistory({transactions,tenant,settings}){
   const [filterDate,setFilterDate]=useState(todayStr());
+  const [sending,setSending]=useState(null); // id transaksi yang sedang dikirim
+
+  const sendReceiptWA=async(tx)=>{
+    setSending(tx.id);
+    const itemLines=tx.items.map(it=>`[${it.menuCode}] ${it.menuName} ×${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
+    const receiptText=`🏪 *${settings?.bazaarName||"BazaarPOS"}*\n${tenant.code} — ${tenant.name}\n${"─".repeat(28)}\nNo  : ${tx.nota}\nTgl : ${tx.date} ${tx.time}\nByr : Saldo${tx.walletCustomerName?"\nPlgn: "+tx.walletCustomerName:""}\n${"─".repeat(28)}\n${itemLines}\n${"─".repeat(28)}\n*TOTAL: ${idr(tx.total)}*\n${"─".repeat(28)}\n${settings?.receiptFooter1||"Terima kasih!"}\n${settings?.receiptFooter2||"Selamat menikmati :)"}`;
+
+    if(settings?.fonnteToken&&tx.walletCustomerPhone){
+      await sendWhatsApp({token:settings.fonnteToken,phone:tx.walletCustomerPhone,message:receiptText});
+    } else {
+      window.open(`https://wa.me/?text=${encodeURIComponent(receiptText)}`,"_blank");
+    }
+    setSending(null);
+  };
   const filtered=[...transactions.filter(t=>t.date===filterDate)].sort((a,b)=>b.nota.localeCompare(a.nota));
   const tot=filtered.reduce((s,t)=>s+t.total,0);
 
@@ -2450,9 +2468,10 @@ function TenantHistory({transactions,tenant,settings}){
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:8}}>
                   <p style={{fontWeight:800,color:"#16a34a",fontSize:17,margin:0}}>{idr(tx.total)}</p>
-                  <button onClick={()=>printThermal({tx,tenantName:tenant?.name||"",tenantCode:tenant?.code||"",bazaarName:bname,footer1:f1,footer2:f2})}
-                    style={{padding:"6px 10px",background:"#1c0a00",color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Plus Jakarta Sans',sans-serif"}} onMouseOver={e=>e.currentTarget.style.background="#431407"} onMouseOut={e=>e.currentTarget.style.background="#1c0a00"}>
-                    🖨️ Cetak
+                  <button onClick={()=>sendReceiptWA(tx)} disabled={sending===tx.id}
+                    style={{padding:"6px 10px",background:"#16a34a",color:"#fff",border:"none",borderRadius:8,cursor:sending===tx.id?"not-allowed":"pointer",fontSize:12,fontWeight:700,fontFamily:"'Plus Jakarta Sans',sans-serif",opacity:sending===tx.id?0.7:1}}
+                    onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
+                    {sending===tx.id?"⏳":"💬"} {sending===tx.id?"Mengirim...":"Kirim Ulang Struk"}
                   </button>
                 </div>
               </div>
@@ -2578,17 +2597,42 @@ function CustomerCardPage({phone,settings,customers,walletLogs,loaded}){
 
             {/* Recent transactions */}
             {(()=>{
-              const recentTx=(walletLogs||[]).filter(l=>l.customerId===customer.id&&l.type==="payment").sort((a,b)=>b.timestamp?.localeCompare(a.timestamp)||0).slice(0,3);
+              const recentTx=(walletLogs||[]).filter(l=>l.customerId===customer.id&&l.type==="payment").sort((a,b)=>b.timestamp?.localeCompare(a.timestamp)||0).slice(0,5);
+              const [expandedTx,setExpandedTx]=React.useState(null);
               return recentTx.length>0?(
                 <div style={{marginBottom:14}}>
-                  <p style={{color:"#374151",fontSize:13,fontWeight:700,margin:"0 0 8px"}}>🛒 Transaksi Terakhir</p>
+                  <p style={{color:"#374151",fontSize:13,fontWeight:700,margin:"0 0 8px"}}>🛒 Transaksi Terakhir <span style={{color:"#9ca3af",fontWeight:400,fontSize:12}}>(tap untuk detail)</span></p>
                   {recentTx.map(tx=>(
-                    <div key={tx.id} style={{background:"#f9fafb",borderRadius:10,padding:"8px 12px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div>
-                        <p style={{margin:0,color:"#374151",fontSize:13,fontWeight:600}}>{tx.tenantName||"Tenant"}</p>
-                        <p style={{margin:"1px 0 0",color:"#9ca3af",fontSize:11}}>{tx.nota} • {tx.time}</p>
-                      </div>
-                      <p style={{margin:0,color:"#ea580c",fontWeight:800,fontSize:14}}>-{idr(tx.amount)}</p>
+                    <div key={tx.id} style={{borderRadius:10,marginBottom:6,overflow:"hidden",border:"1px solid #f3f4f6"}}>
+                      {/* Header baris - bisa diklik */}
+                      <button onClick={()=>setExpandedTx(expandedTx===tx.id?null:tx.id)}
+                        style={{width:"100%",background:"#f9fafb",border:"none",padding:"9px 12px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                        <div style={{textAlign:"left"}}>
+                          <p style={{margin:0,color:"#374151",fontSize:13,fontWeight:600}}>{tx.tenantName||"Tenant"}</p>
+                          <p style={{margin:"1px 0 0",color:"#9ca3af",fontSize:11}}>{tx.nota} • {tx.date} {tx.time}</p>
+                        </div>
+                        <div style={{display:"flex",alignItems:"center",gap:8}}>
+                          <p style={{margin:0,color:"#ea580c",fontWeight:800,fontSize:14}}>-{idr(tx.amount)}</p>
+                          <span style={{color:"#9ca3af",fontSize:12,transform:expandedTx===tx.id?"rotate(180deg)":"rotate(0)",transition:"transform .2s",display:"inline-block"}}>▼</span>
+                        </div>
+                      </button>
+                      {/* Detail item - muncul saat diklik */}
+                      {expandedTx===tx.id&&(
+                        <div style={{background:"#fff",padding:"10px 12px",borderTop:"1px dashed #f3f4f6"}}>
+                          {tx.items?.map((it,i)=>(
+                            <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12,borderBottom:i<(tx.items.length-1)?"1px dashed #f9fafb":"none"}}>
+                              <span style={{color:"#374151"}}><span style={{color:"#9ca3af"}}>[{it.menuCode}]</span> {it.menuName} ×{it.qty}</span>
+                              <span style={{fontWeight:700,color:"#1c0a00"}}>{idr(it.qty*it.price)}</span>
+                            </div>
+                          ))}
+                          {(!tx.items||tx.items.length===0)&&<p style={{color:"#9ca3af",fontSize:12,margin:0,textAlign:"center"}}>Detail tidak tersedia</p>}
+                          <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:"2px solid #f3f4f6",fontWeight:800,fontSize:13}}>
+                            <span style={{color:"#374151"}}>TOTAL</span>
+                            <span style={{color:"#ea580c"}}>{idr(tx.amount)}</span>
+                          </div>
+                          <p style={{color:"#9ca3af",fontSize:11,margin:"6px 0 0",textAlign:"center"}}>Sisa saldo: <strong style={{color:"#4c1d95"}}>{idr(tx.balanceAfter)}</strong></p>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
