@@ -39,8 +39,6 @@ _gs.textContent = `
 document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
-
-
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
 const todayStr = () => new Date().toISOString().split("T")[0];
@@ -305,7 +303,7 @@ export default function App(){
   // Deteksi URL ?card=PHONE untuk halaman kartu pelanggan publik
   const urlParams=new URLSearchParams(window.location.search);
   const cardPhone=urlParams.get("card");
-  if(cardPhone) return <CustomerCardPage phone={cardPhone} settings={settings} customers={customers} walletLogs={walletLogs} loaded={loaded}/>;
+  if(cardPhone) return <CustomerCardPage phone={cardPhone} settings={settings} customers={customers} walletLogs={walletLogs} transactions={transactions} loaded={loaded}/>;
 
   if(screen==="superadmin") return <SuperAdminDashboard {...commonProps}/>;
   if(screen==="admin") return <AdminDashboard {...commonProps} adminData={session?.data}/>;
@@ -2497,7 +2495,7 @@ function TenantHistory({transactions,tenant,settings}){
 // ═════════════════════════════════════════════════════════════════════════════
 // CUSTOMER CARD PAGE — halaman publik ?card=PHONE
 // ═════════════════════════════════════════════════════════════════════════════
-function CustomerCardPage({phone,settings,customers,walletLogs,loaded}){
+function CustomerCardPage({phone,settings,customers,walletLogs,transactions,loaded}){
   const cleanPhone=phone.replace(/\D/g,"");
   const customer=customers.find(c=>c.phone===cleanPhone||c.phone===phone);
   const bazaarName=settings?.bazaarName||"BazaarPOS";
@@ -2620,13 +2618,15 @@ function CustomerCardPage({phone,settings,customers,walletLogs,loaded}){
                       {/* Detail item - muncul saat diklik */}
                       {expandedTx===tx.id&&(
                         <div style={{background:"#fff",padding:"10px 12px",borderTop:"1px dashed #f3f4f6"}}>
-                          {tx.items?.map((it,i)=>(
-                            <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12,borderBottom:i<(tx.items.length-1)?"1px dashed #f9fafb":"none"}}>
-                              <span style={{color:"#374151"}}><span style={{color:"#9ca3af"}}>[{it.menuCode}]</span> {it.menuName} ×{it.qty}</span>
-                              <span style={{fontWeight:700,color:"#1c0a00"}}>{idr(it.qty*it.price)}</span>
-                            </div>
-                          ))}
-                          {(!tx.items||tx.items.length===0)&&<p style={{color:"#9ca3af",fontSize:12,margin:0,textAlign:"center"}}>Detail tidak tersedia</p>}
+                          {(()=>{
+                            const items=tx.items||(transactions||[]).find(t=>t.nota===tx.nota)?.items||[];
+                            return items.length>0?items.map((it,i)=>(
+                              <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12,borderBottom:i<items.length-1?"1px dashed #f9fafb":"none"}}>
+                                <span style={{color:"#374151"}}><span style={{color:"#9ca3af"}}>[{it.menuCode}]</span> {it.menuName} x{it.qty}</span>
+                                <span style={{fontWeight:700,color:"#1c0a00"}}>{idr(it.qty*it.price)}</span>
+                              </div>
+                            )):<p style={{color:"#9ca3af",fontSize:12,margin:0,textAlign:"center"}}>Detail tidak tersedia</p>;
+                          })()}
                           <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:"2px solid #f3f4f6",fontWeight:800,fontSize:13}}>
                             <span style={{color:"#374151"}}>TOTAL</span>
                             <span style={{color:"#ea580c"}}>{idr(tx.amount)}</span>
