@@ -29,6 +29,7 @@ document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
 
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
 const todayStr = () => new Date().toISOString().split("T")[0];
@@ -1820,19 +1821,6 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
             );
           })}
           {selTn==="all"&&disp.length>1&&(()=>{const gt=filtered.reduce((s,t)=>s+t.total,0);return(
-            <div style={{background:"#1c0a00",borderRadius:16,padding:"18px 22px"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12,marginBottom:12}}>
-                <div><p style={{color:"#fed7aa",fontWeight:700,margin:0,fontSize:14}}>🏆 GRAND TOTAL</p><p style={{color:"#9ca3af",fontSize:12,margin:"2px 0 0"}}>{filtered.length} transaksi • {disp.length} tenant • {filterDate}</p></div>
-                <p style={{color:"#fb923c",fontWeight:900,fontSize:26,margin:0}}>{idr(gt)}</p>
-              </div>
-              <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-                <div style={{background:"rgba(76,29,149,.25)",borderRadius:10,padding:"8px 14px",flex:1}}>
-                  <p style={{margin:"0 0 2px",color:"#c4b5fd",fontSize:11,fontWeight:600}}>🪙 Total Saldo</p>
-                  <p style={{margin:0,color:"#fff",fontWeight:800,fontSize:15}}>{idr(gt)}</p>
-                </div>
-              </div>
-            </div>
-          );})()}
             <div style={{background:"#1c0a00",borderRadius:16,padding:"18px 22px"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12,marginBottom:12}}>
                 <div><p style={{color:"#fed7aa",fontWeight:700,margin:0,fontSize:14}}>🏆 GRAND TOTAL</p><p style={{color:"#9ca3af",fontSize:12,margin:"2px 0 0"}}>{filtered.length} transaksi • {disp.length} tenant • {filterDate}</p></div>
