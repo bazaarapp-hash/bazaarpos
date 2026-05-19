@@ -39,6 +39,15 @@ _gs.textContent = `
 document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
+const db = {
+  async get(k) {
+    try { const r = await window.storage.get(k); return r ? JSON.parse(r.value) : null; } catch { return null; }
+  },
+  async set(k, v) {
+    try { await window.storage.set(k, JSON.stringify(v)); } catch(e) { console.error(e); }
+  },
+};
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
 const todayStr = () => new Date().toISOString().split("T")[0];
@@ -167,7 +176,127 @@ function printA4({title,subtitle,bodyHtml,bazaarName="BazaarPOS"}){
   w.document.write(full);w.document.close();w.focus();setTimeout(()=>w.print(),700);
 }
 
-// ─── Bluetooth Printer ────────────────────────────────────────────────────────
+// ─── Generate Receipt Image (Canvas → JPEG) ──────────────────────────────────
+async function generateReceiptImage({tx, tenantName, tenantCode, bazaarName="BazaarPOS", footer1="Terima kasih!", footer2="Selamat menikmati :)"}){
+  const W=400;
+  const lineH=22;
+  const pad=24;
+  const itemCount=tx.items.length;
+  // Hitung tinggi canvas dinamis
+  const H=120+(itemCount*lineH)+180;
+
+  const canvas=document.createElement("canvas");
+  canvas.width=W; canvas.height=H;
+  const ctx=canvas.getContext("2d");
+
+  // Background putih
+  ctx.fillStyle="#ffffff";
+  ctx.fillRect(0,0,W,H);
+
+  // Header bar
+  const grad=ctx.createLinearGradient(0,0,W,70);
+  grad.addColorStop(0,"#431407"); grad.addColorStop(1,"#ea580c");
+  ctx.fillStyle=grad; ctx.fillRect(0,0,W,72);
+
+  // Bazaar name
+  ctx.fillStyle="#ffffff"; ctx.font="bold 18px Arial"; ctx.textAlign="center";
+  ctx.fillText(bazaarName,W/2,28);
+  // Tenant
+  ctx.font="13px Arial"; ctx.fillStyle="rgba(255,255,255,0.85)";
+  ctx.fillText(`${tenantCode} — ${tenantName}`,W/2,52);
+
+  // Garis putus-putus
+  const dashes=(y)=>{ctx.setLineDash([6,4]);ctx.strokeStyle="#e5e7eb";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(pad,y);ctx.lineTo(W-pad,y);ctx.stroke();ctx.setLineDash([]);};
+
+  // Info nota
+  let y=92;
+  ctx.font="12px Arial"; ctx.textAlign="left"; ctx.fillStyle="#374151";
+  ctx.fillText(`No  : ${tx.nota}`,pad,y); y+=18;
+  ctx.fillText(`Tgl : ${tx.date} ${tx.time}`,pad,y); y+=18;
+  ctx.fillText(`Byr : Saldo`,pad,y); y+=18;
+  if(tx.walletCustomerName){ctx.fillText(`Plgn: ${tx.walletCustomerName}`,pad,y);y+=18;}
+  dashes(y+4); y+=16;
+
+  // Items
+  tx.items.forEach(it=>{
+    ctx.fillStyle="#374151"; ctx.font="12px Arial"; ctx.textAlign="left";
+    const label=`[${it.menuCode}] ${it.menuName} x${it.qty}`;
+    ctx.fillText(label,pad,y);
+    const price=new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(it.qty*it.price);
+    ctx.textAlign="right"; ctx.font="bold 12px Arial"; ctx.fillStyle="#1c0a00";
+    ctx.fillText(price,W-pad,y);
+    y+=lineH;
+  });
+
+  dashes(y+4); y+=16;
+
+  // Total
+  ctx.fillStyle="#ea580c"; ctx.font="bold 16px Arial"; ctx.textAlign="left";
+  ctx.fillText("TOTAL",pad,y);
+  const total=new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(tx.total);
+  ctx.textAlign="right"; ctx.font="bold 18px Arial";
+  ctx.fillText(total,W-pad,y); y+=24;
+
+  // Sisa saldo
+  if(tx.walletBalanceAfter!=null){
+    ctx.fillStyle="#7c3aed"; ctx.font="12px Arial"; ctx.textAlign="center";
+    const sisa=new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(tx.walletBalanceAfter);
+    ctx.fillText(`Sisa Saldo: ${sisa}`,W/2,y); y+=20;
+  }
+
+  dashes(y+4); y+=18;
+
+  // Footer
+  ctx.fillStyle="#6b7280"; ctx.font="13px Arial"; ctx.textAlign="center";
+  ctx.fillText(footer1,W/2,y); y+=18;
+  ctx.font="12px Arial"; ctx.fillStyle="#9ca3af";
+  ctx.fillText(footer2,W/2,y);
+
+  // JPEG dengan quality 0.75 → ukuran file kecil
+  return canvas.toDataURL("image/jpeg",0.75);
+}
+
+// ─── Send Receipt Image via Fonnte atau Web Share ─────────────────────────────
+async function sendReceiptImage({dataUrl, phone, token, caption="Struk belanja kamu 🧾"}){
+  // Konversi data URL ke Blob
+  const res=await fetch(dataUrl);
+  const blob=await res.blob();
+
+  // Coba Fonnte API (kirim gambar langsung)
+  if(token&&phone){
+    try{
+      const target=phone.startsWith("0")?"62"+phone.slice(1):phone.replace(/\D/g,"");
+      const form=new FormData();
+      form.append("target",target);
+      form.append("message",caption);
+      form.append("file",blob,"struk.jpg");
+      const r=await fetch("https://api.fonnte.com/send",{
+        method:"POST",
+        headers:{"Authorization":token},
+        body:form,
+      });
+      const d=await r.json();
+      if(d.status===true||d.status==="true") return {ok:true,via:"fonnte"};
+    }catch(e){console.error("Fonnte image error:",e);}
+  }
+
+  // Fallback: Web Share API (mobile Chrome/Safari)
+  if(navigator.share&&navigator.canShare&&navigator.canShare({files:[new File([blob],"struk.jpg",{type:"image/jpeg"})]})){
+    try{
+      await navigator.share({files:[new File([blob],"struk.jpg",{type:"image/jpeg"})],title:"Struk Belanja",text:caption});
+      return {ok:true,via:"webshare"};
+    }catch(e){if(e.name!=="AbortError")console.error("Share error:",e);}
+  }
+
+  // Fallback terakhir: download gambar + buka WA text
+  const a=document.createElement("a");
+  a.href=dataUrl; a.download="struk.jpg"; a.click();
+  if(phone){
+    const waPhone=phone.startsWith("0")?"62"+phone.slice(1):phone.replace(/\D/g,"");
+    setTimeout(()=>window.open(`https://wa.me/${waPhone}?text=${encodeURIComponent(caption)}`,"_blank"),800);
+  }
+  return {ok:true,via:"download"};
+}
 async function connectBTPrinter(){
   if(!navigator.bluetooth){alert("Browser ini tidak mendukung Web Bluetooth. Gunakan Chrome di Android.");return null;}
   try{
@@ -2149,20 +2278,22 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
   };
 
   const doPrint=async()=>{
-    // Buat teks struk untuk WhatsApp
-    const payLabel="Saldo";
-    const itemLines=lastNota.items.map(it=>`[${it.menuCode}] ${it.menuName} ×${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
-    const receiptText=`🏪 *${settings?.bazaarName||"BazaarPOS"}*\n${tenant.code} — ${tenant.name}\n${"─".repeat(28)}\nNo  : ${lastNota.nota}\nTgl : ${lastNota.date} ${lastNota.time}\nByr : ${payLabel}${lastNota.walletCustomerName?"\nPlgn: "+lastNota.walletCustomerName:""}\n${"─".repeat(28)}\n${itemLines}\n${"─".repeat(28)}\n*TOTAL: ${idr(lastNota.total)}*${lastNota.walletBalanceAfter!=null?"\nSisa Saldo: "+idr(lastNota.walletBalanceAfter):""}\n${"─".repeat(28)}\n${settings?.receiptFooter1||"Terima kasih!"}\n${settings?.receiptFooter2||"Selamat menikmati :)"}`;
-
-    // Kirim via Fonnte jika token tersedia
-    if(settings?.fonnteToken&&lastNota.walletCustomerPhone){
-      await sendWhatsApp({token:settings.fonnteToken,phone:lastNota.walletCustomerPhone,message:receiptText});
+    const caption=`Struk belanja ${tenant.name}\nNota: ${lastNota.nota}\nTotal: ${idr(lastNota.total)}${lastNota.walletBalanceAfter!=null?"\nSisa saldo: "+idr(lastNota.walletBalanceAfter):""}`;
+    try{
+      const dataUrl=await generateReceiptImage({
+        tx:lastNota, tenantName:tenant.name, tenantCode:tenant.code,
+        bazaarName:settings?.bazaarName||"BazaarPOS",
+        footer1:settings?.receiptFooter1||"Terima kasih!",
+        footer2:settings?.receiptFooter2||"Selamat menikmati :)"
+      });
+      await sendReceiptImage({
+        dataUrl, phone:lastNota.walletCustomerPhone,
+        token:settings?.fonnteToken, caption
+      });
       setPrinted(true);
-    } else {
-      // Fallback: buka WA dengan teks struk
-      const waUrl=`https://wa.me/?text=${encodeURIComponent(receiptText)}`;
-      window.open(waUrl,"_blank");
-      setPrinted(true);
+    }catch(e){
+      console.error("Receipt error:",e);
+      setPrinted(true); // tetap enable tombol transaksi baru
     }
   };
 
@@ -2405,14 +2536,19 @@ function TenantHistory({transactions,tenant,settings}){
 
   const sendReceiptWA=async(tx)=>{
     setSending(tx.id);
-    const itemLines=tx.items.map(it=>`[${it.menuCode}] ${it.menuName} ×${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
-    const receiptText=`🏪 *${settings?.bazaarName||"BazaarPOS"}*\n${tenant.code} — ${tenant.name}\n${"─".repeat(28)}\nNo  : ${tx.nota}\nTgl : ${tx.date} ${tx.time}\nByr : Saldo${tx.walletCustomerName?"\nPlgn: "+tx.walletCustomerName:""}\n${"─".repeat(28)}\n${itemLines}\n${"─".repeat(28)}\n*TOTAL: ${idr(tx.total)}*\n${"─".repeat(28)}\n${settings?.receiptFooter1||"Terima kasih!"}\n${settings?.receiptFooter2||"Selamat menikmati :)"}`;
-
-    if(settings?.fonnteToken&&tx.walletCustomerPhone){
-      await sendWhatsApp({token:settings.fonnteToken,phone:tx.walletCustomerPhone,message:receiptText});
-    } else {
-      window.open(`https://wa.me/?text=${encodeURIComponent(receiptText)}`,"_blank");
-    }
+    const caption=`Struk belanja ${tenant.name}\nNota: ${tx.nota}\nTotal: ${idr(tx.total)}${tx.walletBalanceAfter!=null?"\nSisa saldo: "+idr(tx.walletBalanceAfter):""}`;
+    try{
+      const dataUrl=await generateReceiptImage({
+        tx, tenantName:tenant.name, tenantCode:tenant.code,
+        bazaarName:settings?.bazaarName||"BazaarPOS",
+        footer1:settings?.receiptFooter1||"Terima kasih!",
+        footer2:settings?.receiptFooter2||"Selamat menikmati :)"
+      });
+      await sendReceiptImage({
+        dataUrl, phone:tx.walletCustomerPhone,
+        token:settings?.fonnteToken, caption
+      });
+    }catch(e){console.error("Receipt error:",e);}
     setSending(null);
   };
   const filtered=[...transactions.filter(t=>t.date===filterDate)].sort((a,b)=>b.nota.localeCompare(a.nota));
