@@ -39,7 +39,14 @@ _gs.textContent = `
 document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
-
+const db = {
+  async get(k) {
+    try { const r = await window.storage.get(k); return r ? JSON.parse(r.value) : null; } catch { return null; }
+  },
+  async set(k, v) {
+    try { await window.storage.set(k, JSON.stringify(v)); } catch(e) { console.error(e); }
+  },
+};
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
@@ -1767,7 +1774,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
                       <p style={{fontWeight:900,color:log.type==="topup"?"#16a34a":"#ea580c",fontSize:16,margin:0}}>
                         {log.type==="topup"?"+":"-"}{idr(log.amount)}
                       </p>
-                      <p style={{color:"#9ca3af",fontSize:11,margin:"3px 0 0"}}>Sisa: <strong style={{color:"#374151"}}>{idr(log.balanceAfter)}</strong></p>
+                      <p style={{color:"#374151",fontSize:11,margin:"3px 0 0",fontWeight:600}}>Saldo: <strong style={{color:"#111111"}}>{idr(log.balanceAfter)}</strong></p>
                     </div>
                   </div>
                 </div>
