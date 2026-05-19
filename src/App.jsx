@@ -15,6 +15,8 @@ _gs.textContent = `
   @keyframes slideUp{from{opacity:0;transform:translateY(30px)}to{opacity:1;transform:translateY(0)}}
   @keyframes pop{0%{transform:scale(.9);opacity:0}100%{transform:scale(1);opacity:1}}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+  .spinning{animation:spin .8s linear infinite}
   .fade-in{animation:fadeIn .35s ease forwards}
   .slide-up{animation:slideUp .4s ease forwards}
   .pop-in{animation:pop .25s ease forwards}
@@ -24,11 +26,19 @@ _gs.textContent = `
   .pulse{animation:pulse 1.8s infinite}
   @keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-6px)}80%{transform:translateX(6px)}}
   input[type="date"]{color:#111!important}
+  input,textarea,select{color:#111!important;background:#fff!important;-webkit-text-fill-color:#111!important}
+  input:-webkit-autofill,input:-webkit-autofill:hover,input:-webkit-autofill:focus{
+    -webkit-text-fill-color:#111!important;
+    -webkit-box-shadow:0 0 0 1000px #fff inset!important;
+    background-color:#fff!important;
+  }
+  @media(prefers-color-scheme:dark){
+    input,textarea,select{color:#111!important;background:#fff!important}
+  }
 `;
 document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
-
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
@@ -235,6 +245,25 @@ export default function App(){
   const saveAlerts=async d=>{setAlerts(d);await db.set("bzr_alerts",d);};
   const saveCustomers=async d=>{setCustomers(d);await db.set("bzr_customers",d);};
   const saveWalletLogs=async d=>{setWalletLogs(d);await db.set("bzr_wallet_logs",d);};
+  const [refreshing,setRefreshing]=useState(false);
+  const doRefresh=async()=>{
+    setRefreshing(true);
+    try{
+      const t=await db.get("bzr_tenants")||[];
+      const m=await db.get("bzr_menus")||[];
+      const tx=await db.get("bzr_transactions")||[];
+      const s=await db.get("bzr_settings")||{};
+      const a=await db.get("bzr_admins")||[];
+      const al=await db.get("bzr_alerts")||[];
+      const cu=await db.get("bzr_customers")||[];
+      const wl=await db.get("bzr_wallet_logs")||[];
+      setTenants(t);setMenus(m);setTransactions(tx);
+      setSettings({...DEF,...s});setAdmins(a);setAlerts(al);
+      setCustomers(cu);setWalletLogs(wl);
+    }catch(e){console.error("Refresh error:",e);}
+    setTimeout(()=>setRefreshing(false),800);
+  };
+
   const logout=()=>{setSession(null);setScreen("login");};
 
   const restoreBackup=async(bk)=>{
@@ -262,7 +291,7 @@ export default function App(){
     onSaveTenants:saveTenants, onSaveMenus:saveMenus, onSaveTx:saveTx,
     onSaveSettings:saveSettings, onSaveAdmins:saveAdmins, onSaveAlerts:saveAlerts,
     onSaveCustomers:saveCustomers, onSaveWalletLogs:saveWalletLogs,
-    onRestoreBackup:restoreBackup,
+    onRestoreBackup:restoreBackup, onRefresh:doRefresh, refreshing,
     onLogout:logout,
   };
 
@@ -275,7 +304,7 @@ export default function App(){
   // Deteksi URL ?card=PHONE untuk halaman kartu pelanggan publik
   const urlParams=new URLSearchParams(window.location.search);
   const cardPhone=urlParams.get("card");
-  if(cardPhone) return <CustomerCardPage phone={cardPhone} settings={settings} customers={customers} loaded={loaded}/>;
+  if(cardPhone) return <CustomerCardPage phone={cardPhone} settings={settings} customers={customers} walletLogs={walletLogs} loaded={loaded}/>;
 
   if(screen==="superadmin") return <SuperAdminDashboard {...commonProps}/>;
   if(screen==="admin") return <AdminDashboard {...commonProps} adminData={session?.data}/>;
@@ -288,6 +317,7 @@ export default function App(){
       onSaveMenus={saveMenus} onSaveTx={saveTx}
       onSaveCustomers={saveCustomers} onSaveWalletLogs={saveWalletLogs}
       onSaveAlerts={saveAlerts} alerts={alerts}
+      onRefresh={doRefresh} refreshing={refreshing}
       onLogout={logout}/>);
 
   return <LoginScreen tenants={tenants} admins={admins} settings={settings}
@@ -520,7 +550,7 @@ function SuperAdminDashboard(props){
             </div>
           )}
           {alerts.length>0&&<button onClick={()=>setShowAlertPop(true)} className="pulse" style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontWeight:700,fontSize:13}}>🆘 {alerts.length}</button>}
-          <button onClick={()=>window.location.reload()} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}} title="Refresh">🔄</button>
+          <button onClick={onRefresh} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}} title="Refresh" className={refreshing?"spinning":""}>🔄</button>
           <button onClick={onLogout} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}}>Keluar</button>
         </div>
       </div>
@@ -539,7 +569,7 @@ function SuperAdminDashboard(props){
       <div style={{padding:20,maxWidth:1100,margin:"0 auto"}} className="fade-in">
         {tab==="tenants"&&<AdminTenants {...props}/>}
         {tab==="admins"&&<AdminUsers {...props}/>}
-        {tab==="wallet"&&<KasirTopUp {...props}/>}
+        {tab==="wallet"&&<KasirTopUp {...props} adminData={{name:"Super Admin",username:"superadmin"}}/>}
         {tab==="transactions"&&<AdminTransactions {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
         {tab==="report"&&<AdminTenantReport {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
         {tab==="summary"&&<AdminSummary {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
@@ -581,7 +611,7 @@ function AdminDashboard(props){
         <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
           <span style={{color:"#fff",fontSize:16,fontWeight:800}}>{settings.bazaarName}</span>
           {alerts.length>0&&<button onClick={()=>setShowAlertPop(true)} className="pulse" style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontWeight:700,fontSize:13}}>🆘 {alerts.length}</button>}
-          <button onClick={()=>window.location.reload()} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}} title="Refresh">🔄</button>
+          <button onClick={onRefresh} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}} title="Refresh" className={refreshing?"spinning":""}>🔄</button>
           <button onClick={onLogout} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}}>Keluar</button>
         </div>
       </div>
@@ -1344,7 +1374,7 @@ function generateCustomerCard({customer, bazaarName}){
 }
 
 // ─── Kasir Top Up ─────────────────────────────────────────────────────────────
-function KasirTopUp({customers,walletLogs,settings,onSaveCustomers,onSaveWalletLogs}){
+function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustomers,onSaveWalletLogs}){
   const [tab,setTab]=useState("customers");
   const [form,setForm]=useState({phone:"",name:"",amount:""});
   const [selCust,setSelCust]=useState(null); // customer dipilih untuk top up
@@ -1380,6 +1410,7 @@ function KasirTopUp({customers,walletLogs,settings,onSaveCustomers,onSaveWalletL
     const logEntry={
       id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
       type:"topup",amount,balanceBefore:balBefore,balanceAfter:balAfter,
+      adminName:adminData?.name||adminData?.username||"Super Admin",
       timestamp:now.toISOString(),date:todayStr(),time:timeStr(),
     };
 
@@ -1599,6 +1630,7 @@ function KasirTopUp({customers,walletLogs,settings,onSaveCustomers,onSaveWalletL
                       </div>
                       <p style={{fontWeight:700,color:"#1c0a00",margin:"0 0 2px",fontSize:14}}>{log.customerName}</p>
                       <p style={{color:"#9ca3af",fontSize:12,margin:0}}>📱 {log.customerPhone} • {log.time}</p>
+                      {log.adminName&&<p style={{color:"#6b7280",fontSize:11,margin:"2px 0 0"}}>👤 Admin: <strong>{log.adminName}</strong></p>}
                     </div>
                     <div style={{textAlign:"right"}}>
                       <p style={{fontWeight:900,color:log.type==="topup"?"#16a34a":"#ea580c",fontSize:16,margin:0}}>
@@ -1652,6 +1684,7 @@ function AdminTransactions({tenants,transactions,settings,filterDate,setFilterDa
                     <PayBadge method={tx.paymentMethod}/>
                   </div>
                   <p style={{fontWeight:700,color:"#1c0a00",margin:"6px 0 2px",fontSize:14}}>{tn.name||"—"}</p>
+                  {tx.walletCustomerName&&<p style={{color:"#7c3aed",fontSize:12,margin:"2px 0 0",fontWeight:600}}>🪙 {tx.walletCustomerName}</p>}
                   <p style={{color:"#9ca3af",fontSize:12,margin:0}}>{tx.date} • {tx.time}</p>
                 </div>
                 <p style={{color:"#ea580c",fontWeight:800,fontSize:20,margin:0}}>{idr(tx.total)}</p>
@@ -1705,7 +1738,7 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
       const tt=txs.reduce((s,t)=>s+t.total,0);
       const ms={};txs.forEach(tx=>tx.items.forEach(it=>{if(!ms[it.menuCode])ms[it.menuCode]={name:it.menuName,qty:0,total:0};ms[it.menuCode].qty+=it.qty;ms[it.menuCode].total+=it.qty*it.price;}));
       const mr=Object.entries(ms).map(([c,m])=>`<tr><td>[${c}]</td><td>${m.name}</td><td style="text-align:center">${m.qty}</td><td style="text-align:right">${idr(m.total)}</td></tr>`).join("");
-      const nr=txs.map(tx=>`<tr><td>${tx.nota}</td><td>${tx.time}</td><td class="pe">🪙 Saldo</td><td style="font-size:10px">${tx.items.map(it=>`[${it.menuCode}] ${it.menuName} ×${it.qty}=${idr(it.qty*it.price)}`).join("<br/>")}</td><td style="text-align:right;font-weight:700">${idr(tx.total)}</td></tr>`).join("");
+      const nr=txs.map(tx=>`<tr><td>${tx.nota}</td><td>${tx.time}</td><td class="pe">🪙 Saldo</td><td style="font-size:10px">${tx.walletCustomerName?`<strong>👤 ${tx.walletCustomerName}</strong><br/>`:""}${tx.items.map(it=>`[${it.menuCode}] ${it.menuName} ×${it.qty}=${idr(it.qty*it.price)}`).join("<br/>")}</td><td style="text-align:right;font-weight:700">${idr(tx.total)}</td></tr>`).join("");
       body+=`<div class="th"><h3>${tn.code} — ${tn.name}</h3><p>${txs.length} transaksi &nbsp;|&nbsp; <span class="pe">🪙 Saldo: ${idr(tt)}</span> &nbsp;|&nbsp; Total: <strong>${idr(tt)}</strong></p></div><div class="sec">Ringkasan Menu</div><table><thead><tr><th>Kode</th><th>Nama Menu</th><th style="text-align:center">Terjual</th><th style="text-align:right">Subtotal</th></tr></thead><tbody>${mr}</tbody><tfoot><tr><td colspan="3"><strong>Total</strong></td><td style="text-align:right"><strong>${idr(tt)}</strong></td></tr></tfoot></table><div class="sec">Rincian Nota</div><table><thead><tr><th>No Nota</th><th>Jam</th><th>Pembayaran</th><th>Item</th><th style="text-align:right">Total</th></tr></thead><tbody>${nr}</tbody><tfoot><tr><td colspan="4"><strong>Total ${tn.name}</strong></td><td style="text-align:right"><strong>${idr(tt)}</strong></td></tr></tfoot></table>`;
     });
     if(selTn==="all"&&disp.length>1){const gt=filtered.reduce((s,t)=>s+t.total,0);body+=`<div style="background:#fff7ed;border:2px solid #ea580c;border-radius:6px;padding:12px 16px;margin-top:16px"><strong>🏆 GRAND TOTAL — ${filterDate}</strong><br/><span class="pe">🪙 Total Saldo: ${idr(gt)}</span> &nbsp;|&nbsp; <strong style="color:#ea580c">Grand Total: ${idr(gt)}</strong></div>`;}
@@ -1782,7 +1815,8 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
                             <span style={{fontSize:12,color:"#6b7280",display:"inline-block",transform:exp[tx.id]?"rotate(90deg)":"rotate(0)",transition:"transform .2s"}}>▶</span>
                             <span style={{background:`${ac}15`,color:ac,fontSize:11,fontWeight:800,padding:"3px 8px",borderRadius:20}}>#{tx.nota}</span>
                             <PayBadge method={tx.paymentMethod}/>
-                            <span style={{color:"#9ca3af",fontSize:12}}>{tx.time} • {tx.items.length} item</span>
+                            {tx.walletCustomerName&&<span style={{background:"#f5f0ff",color:"#7c3aed",fontSize:11,fontWeight:700,padding:"3px 8px",borderRadius:20}}>👤 {tx.walletCustomerName}</span>}
+                              <span style={{color:"#9ca3af",fontSize:12}}>{tx.time} • {tx.items.length} item</span>
                           </div>
                           <span style={{fontWeight:800,color:"#1c0a00",fontSize:14}}>{idr(tx.total)}</span>
                         </button>
@@ -1921,7 +1955,7 @@ function AdminSummary({tenants,transactions,settings,filterDate,setFilterDate}){
 // ═════════════════════════════════════════════════════════════════════════════
 // TENANT APP
 // ═════════════════════════════════════════════════════════════════════════════
-function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,customers,walletLogs,onSaveMenus,onSaveTx,onSaveCustomers,onSaveWalletLogs,onSaveAlerts,alerts,onLogout}){
+function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,customers,walletLogs,onSaveMenus,onSaveTx,onSaveCustomers,onSaveWalletLogs,onSaveAlerts,alerts,onRefresh,refreshing,onLogout}){
   const [tab,setTab]=useState("pos");
   const {BackConfirmModal}=useBackConfirm(true);
   const [btPrinter,setBtPrinter]=useState(null);
@@ -1976,7 +2010,7 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
             <button onClick={connectBT} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}} disabled={btConnecting}>
               {btConnecting?"⏳":"🖨️"} {btPrinter?"Ganti BT":"Koneksi BT"}
             </button>
-            <button onClick={()=>window.location.reload()} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}} title="Refresh">🔄</button>
+            <button onClick={onRefresh} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}} title="Refresh" className={refreshing?"spinning":""}>🔄</button>
             <button onClick={onLogout} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}}>Keluar</button>
           </div>
         </div>
@@ -2114,12 +2148,22 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
     setLastNota(tx);setPrinted(false);setCart([]);
   };
 
-  const doPrint=()=>{
-    printThermal({tx:lastNota,tenantName:tenant.name,tenantCode:tenant.code,
-      bazaarName:settings?.bazaarName||"BazaarPOS",
-      footer1:settings?.receiptFooter1||"Terima kasih!",
-      footer2:settings?.receiptFooter2||"Selamat menikmati :)"});
-    setPrinted(true);
+  const doPrint=async()=>{
+    // Buat teks struk untuk WhatsApp
+    const payLabel="Saldo";
+    const itemLines=lastNota.items.map(it=>`[${it.menuCode}] ${it.menuName} ×${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
+    const receiptText=`🏪 *${settings?.bazaarName||"BazaarPOS"}*\n${tenant.code} — ${tenant.name}\n${"─".repeat(28)}\nNo  : ${lastNota.nota}\nTgl : ${lastNota.date} ${lastNota.time}\nByr : ${payLabel}${lastNota.walletCustomerName?"\nPlgn: "+lastNota.walletCustomerName:""}\n${"─".repeat(28)}\n${itemLines}\n${"─".repeat(28)}\n*TOTAL: ${idr(lastNota.total)}*${lastNota.walletBalanceAfter!=null?"\nSisa Saldo: "+idr(lastNota.walletBalanceAfter):""}\n${"─".repeat(28)}\n${settings?.receiptFooter1||"Terima kasih!"}\n${settings?.receiptFooter2||"Selamat menikmati :)"}`;
+
+    // Kirim via Fonnte jika token tersedia
+    if(settings?.fonnteToken&&lastNota.walletCustomerPhone){
+      await sendWhatsApp({token:settings.fonnteToken,phone:lastNota.walletCustomerPhone,message:receiptText});
+      setPrinted(true);
+    } else {
+      // Fallback: buka WA dengan teks struk
+      const waUrl=`https://wa.me/?text=${encodeURIComponent(receiptText)}`;
+      window.open(waUrl,"_blank");
+      setPrinted(true);
+    }
   };
 
   return(
@@ -2222,9 +2266,9 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
           </div>
 
           <button onClick={doPrint}
-            style={{width:"100%",padding:"12px",background:"#1c0a00",color:"#fff",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
-            onMouseOver={e=>e.currentTarget.style.background="#431407"} onMouseOut={e=>e.currentTarget.style.background="#1c0a00"}>
-            🖨️ {printed?"Cetak Ulang Struk":"Cetak Struk Thermal"}
+            style={{width:"100%",padding:"12px",background:"#16a34a",color:"#fff",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+            onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
+            💬 {printed?"Kirim Ulang Struk WA":"Kirim Struk via WhatsApp"}
           </button>
           <button onClick={()=>{setLastNota(null);setPrinted(false);}} disabled={!printed}
             style={{width:"100%",padding:"12px",background:printed?"#16a34a":"#e5e7eb",color:printed?"#fff":"#9ca3af",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:printed?"pointer":"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif",transition:"all .2s"}}
@@ -2291,7 +2335,12 @@ function TenantMenuMgr({tenant,menus,allMenus,allTransactions,onSaveMenus}){
   const [editing,setEditing]=useState(null);
   const [form,setForm]=useState({code:"",name:"",price:""});
   const usedIds=new Set(allTransactions.flatMap(tx=>tx.items.map(it=>it.menuId)));
-  const openAdd=()=>{setForm({code:"",name:"",price:""});setEditing(null);setShowForm(true);};
+  const genCode=()=>{
+    const nums=menus.map(m=>parseInt(m.code.replace(/\D/g,""))||0);
+    const next=(nums.length>0?Math.max(...nums):0)+1;
+    return "M"+String(next).padStart(3,"0");
+  };
+  const openAdd=()=>{setForm({code:genCode(),name:"",price:""});setEditing(null);setShowForm(true);};
   const openEdit=m=>{
     if(usedIds.has(m.id)){alert("❌ Menu yang sudah dipakai dalam transaksi tidak bisa diedit!");return;}
     setForm({code:m.code,name:m.name,price:m.price.toString()});setEditing(m.id);setShowForm(true);
@@ -2396,6 +2445,7 @@ function TenantHistory({transactions,tenant,settings}){
                     <Bdg color="#f0fdf4" tc="#16a34a" bc="#bbf7d0" label={`#${tx.nota}`}/>
                     <PayBadge method={tx.paymentMethod}/>
                   </div>
+                  {tx.walletCustomerName&&<p style={{color:"#7c3aed",fontSize:12,margin:"2px 0 2px",fontWeight:700}}>👤 {tx.walletCustomerName}</p>}
                   <p style={{color:"#9ca3af",fontSize:11,margin:0}}>{tx.date} • {tx.time}</p>
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -2427,7 +2477,7 @@ function TenantHistory({transactions,tenant,settings}){
 // ═════════════════════════════════════════════════════════════════════════════
 // CUSTOMER CARD PAGE — halaman publik ?card=PHONE
 // ═════════════════════════════════════════════════════════════════════════════
-function CustomerCardPage({phone,settings,customers,loaded}){
+function CustomerCardPage({phone,settings,customers,walletLogs,loaded}){
   const cleanPhone=phone.replace(/\D/g,"");
   const customer=customers.find(c=>c.phone===cleanPhone||c.phone===phone);
   const bazaarName=settings?.bazaarName||"BazaarPOS";
@@ -2514,6 +2564,37 @@ function CustomerCardPage({phone,settings,customers,loaded}){
 
           {/* Info & Share */}
           <div style={{padding:"16px 24px"}}>
+            {/* Last top up info */}
+            {(()=>{
+              const lastTopUp=(walletLogs||[]).filter(l=>l.customerId===customer.id&&l.type==="topup").sort((a,b)=>b.timestamp?.localeCompare(a.timestamp)||0)[0];
+              return lastTopUp?(
+                <div style={{background:"#f0fdf4",borderRadius:12,padding:"10px 14px",marginBottom:12}}>
+                  <p style={{margin:"0 0 2px",color:"#16a34a",fontSize:12,fontWeight:700}}>💰 Top Up Terakhir</p>
+                  <p style={{margin:"0 0 2px",color:"#1c0a00",fontSize:13,fontWeight:700}}>+{idr(lastTopUp.amount)}</p>
+                  <p style={{margin:0,color:"#6b7280",fontSize:12}}>{new Date(lastTopUp.timestamp).toLocaleString("id-ID")} • oleh <strong>{lastTopUp.adminName||"Admin"}</strong></p>
+                </div>
+              ):null;
+            })()}
+
+            {/* Recent transactions */}
+            {(()=>{
+              const recentTx=(walletLogs||[]).filter(l=>l.customerId===customer.id&&l.type==="payment").sort((a,b)=>b.timestamp?.localeCompare(a.timestamp)||0).slice(0,3);
+              return recentTx.length>0?(
+                <div style={{marginBottom:14}}>
+                  <p style={{color:"#374151",fontSize:13,fontWeight:700,margin:"0 0 8px"}}>🛒 Transaksi Terakhir</p>
+                  {recentTx.map(tx=>(
+                    <div key={tx.id} style={{background:"#f9fafb",borderRadius:10,padding:"8px 12px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <p style={{margin:0,color:"#374151",fontSize:13,fontWeight:600}}>{tx.tenantName||"Tenant"}</p>
+                        <p style={{margin:"1px 0 0",color:"#9ca3af",fontSize:11}}>{tx.nota} • {tx.time}</p>
+                      </div>
+                      <p style={{margin:0,color:"#ea580c",fontWeight:800,fontSize:14}}>-{idr(tx.amount)}</p>
+                    </div>
+                  ))}
+                </div>
+              ):null;
+            })()}
+
             <p style={{color:"#6b7280",fontSize:12,margin:"0 0 12px",textAlign:"center"}}>
               ID: <span style={{fontFamily:"monospace",color:"#374151",fontWeight:600}}>{customer.id?.slice(0,8).toUpperCase()}</span>
             </p>
