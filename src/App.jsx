@@ -505,7 +505,7 @@ function AlertPopup({alerts,onDismiss}){
 // SUPER ADMIN DASHBOARD
 // ═════════════════════════════════════════════════════════════════════════════
 function SuperAdminDashboard(props){
-  const {tenants,transactions,settings,alerts,allAlerts,onSaveAlerts,onSaveSettings,onLogout}=props;
+  const {tenants,transactions,settings,alerts,allAlerts,onSaveAlerts,onSaveSettings,onRefresh,refreshing,onLogout}=props;
   const [tab,setTab]=useState("tenants");
   const [filterDate,setFilterDate]=useState(todayStr());
   const [editBazaar,setEditBazaar]=useState(false);
@@ -585,7 +585,7 @@ function SuperAdminDashboard(props){
 // ADMIN BIASA DASHBOARD
 // ═════════════════════════════════════════════════════════════════════════════
 function AdminDashboard(props){
-  const {tenants,transactions,settings,alerts,allAlerts,onSaveAlerts,adminData,onLogout}=props;
+  const {tenants,transactions,settings,alerts,allAlerts,onSaveAlerts,adminData,onRefresh,refreshing,onLogout}=props;
   const [tab,setTab]=useState("tenants");
   const [filterDate,setFilterDate]=useState(todayStr());
   const {BackConfirmModal}=useBackConfirm(true);
