@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────34
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -40,7 +39,6 @@ _gs.textContent = `
 document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
-
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
@@ -702,7 +700,7 @@ function SuperAdminDashboard(props){
         {tab==="tenants"&&<AdminTenants {...props}/>}
         {tab==="admins"&&<AdminUsers {...props}/>}
         {tab==="wallet"&&<KasirTopUp {...props} adminData={{name:"Super Admin",username:"superadmin"}}/>}
-        {tab==="transactions"&&<AdminTransactions {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
+        {tab==="transactions"&&<AdminTransactions {...props} filterDate={filterDate} setFilterDate={setFilterDate} isSuperAdmin={true}/>}
         {tab==="report"&&<AdminTenantReport {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
         {tab==="summary"&&<AdminSummary {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
         {tab==="settings"&&<SettingsPanel {...props}/>}
@@ -1781,13 +1779,48 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
 }
 
 // ─── Admin Transactions ───────────────────────────────────────────────────────
-function AdminTransactions({tenants,transactions,settings,filterDate,setFilterDate}){
+function AdminTransactions({tenants,transactions,settings,customers,walletLogs,onSaveTx,onSaveCustomers,onSaveWalletLogs,filterDate,setFilterDate,isSuperAdmin}){
   const getTn=id=>tenants.find(t=>t.id===id)||{};
-  const filtered=[...transactions.filter(t=>t.date===filterDate)].sort((a,b)=>b.nota.localeCompare(a.nota));
+  const [searchNota,setSearchNota]=useState("");
+  const [refunding,setRefunding]=useState(null);
+  const [refundMsg,setRefundMsg]=useState("");
+  const [showConfirmId,setShowConfirmId]=useState(null);
   const bname=settings?.bazaarName||"BazaarPOS";
 
-
+  // Filter: tanggal + search nota
+  const byDate=transactions.filter(t=>t.date===filterDate);
+  const filtered=searchNota.trim()
+    ?transactions.filter(t=>t.nota.toLowerCase().includes(searchNota.trim().toLowerCase()))
+    :byDate;
+  const sorted=[...filtered].sort((a,b)=>b.nota.localeCompare(a.nota));
   const gt=filtered.reduce((s,t)=>s+t.total,0);
+
+  const doRefund=async(tx)=>{
+    setRefunding(tx.id); setShowConfirmId(null);
+    try{
+      const updTx=transactions.map(t=>t.id===tx.id?{...t,refunded:true,refundedAt:new Date().toISOString()}:t);
+      await onSaveTx(updTx);
+      if(tx.walletCustomerPhone){
+        const cust=(customers||[]).find(c=>c.phone===tx.walletCustomerPhone);
+        if(cust){
+          const balBefore=cust.balance; const balAfter=balBefore+tx.total;
+          await onSaveCustomers(customers.map(c=>c.phone===tx.walletCustomerPhone?{...c,balance:balAfter}:c));
+          const logEntry={id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
+            type:"refund",amount:tx.total,balanceBefore:balBefore,balanceAfter:balAfter,
+            nota:tx.nota,tenantId:tx.tenantId,tenantName:tenants.find(t=>t.id===tx.tenantId)?.name||"",
+            timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
+          await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+          if(settings?.fonnteToken){
+            sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:`🏪 *${bname}*\n\n↩️ *Refund/Pembatalan*\n📋 Nota: ${tx.nota}\n💰 Refund: +${idr(tx.total)}\n🪙 Saldo: ${idr(balAfter)}\n🕐 ${new Date().toLocaleString("id-ID")}\n\nTerima kasih! 🙏`});
+          }
+          setRefundMsg(`✅ Refund berhasil! Saldo ${cust.name} +${idr(tx.total)} → ${idr(balAfter)}`);
+        } else { setRefundMsg("✅ Transaksi dibatalkan. Pelanggan tidak ditemukan."); }
+      } else { setRefundMsg("✅ Transaksi dibatalkan."); }
+    }catch(e){ setRefundMsg("❌ Gagal: "+e.message); }
+    setRefunding(null);
+    setTimeout(()=>setRefundMsg(""),5000);
+  };
+
 
   const doPrint=()=>{
     const rows=filtered.map(tx=>{const tn=getTn(tx.tenantId);const its=tx.items.map(it=>`[${it.menuCode}] ${it.menuName} ×${it.qty}=${idr(it.qty*it.price)}`).join("<br/>");return`<tr><td><strong>${tx.nota}</strong></td><td><strong>${tn.code||""}</strong><br/><span style="color:#6b7280;font-size:10px">${tn.name||""}</span></td><td>${tx.date}<br/>${tx.time}</td><td class="pe">🪙 Saldo</td><td style="font-size:10px">${its}</td><td style="text-align:right;font-weight:700">${idr(tx.total)}</td></tr>`;}).join("");
@@ -1796,24 +1829,38 @@ function AdminTransactions({tenants,transactions,settings,filterDate,setFilterDa
 
   return(
     <div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:12}}>
+      {/* Notif refund */}
+      {refundMsg&&<div className="pop-in" style={{background:refundMsg.startsWith("✅")?"#f0fdf4":"#fef2f2",border:`1px solid ${refundMsg.startsWith("✅")?"#bbf7d0":"#fca5a5"}`,borderRadius:12,padding:"10px 16px",marginBottom:16,fontWeight:600,fontSize:13,color:refundMsg.startsWith("✅")?"#16a34a":"#dc2626"}}>{refundMsg}</div>}
+
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:12}}>
         <div><h2 style={{margin:0,fontSize:20,fontWeight:800,color:"#1c0a00"}}>Data Transaksi</h2>
           <p style={{color:"#9ca3af",margin:"4px 0 0",fontSize:13}}>{filtered.length} transaksi ditemukan</p></div>
         <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-          <DP value={filterDate} onChange={setFilterDate}/>
+          <DP value={filterDate} onChange={v=>{setFilterDate(v);setSearchNota("");}}/>
           {filtered.length>0&&<button onClick={doPrint} style={{background:"#1c0a00",color:"#fff",border:"none",borderRadius:12,padding:"10px 16px",fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}} onMouseOver={e=>e.currentTarget.style.background="#431407"} onMouseOut={e=>e.currentTarget.style.background="#1c0a00"}>🖨️ Print A4</button>}
         </div>
       </div>
-      {filtered.length===0?<EmptyState icon="📋" text="Tidak ada transaksi pada tanggal ini."/>:
+
+      {/* Search nota */}
+      <div style={{position:"relative",marginBottom:16}}>
+        <input placeholder="🔍 Cari nomor nota... (contoh: T001-20260519-001)"
+          value={searchNota} onChange={e=>setSearchNota(e.target.value)}
+          style={{width:"100%",border:"2px solid #e5e7eb",borderRadius:12,padding:"11px 14px",fontSize:14,outline:"none",color:"#111",boxSizing:"border-box",fontFamily:"'Plus Jakarta Sans',sans-serif",transition:"border-color .2s"}}
+          onFocus={e=>e.target.style.borderColor="#ea580c"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
+        {searchNota&&<button onClick={()=>setSearchNota("")} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:"#9ca3af",fontSize:18}}>✕</button>}
+      </div>
+
+      {filtered.length===0?<EmptyState icon="📋" text={searchNota?"Nota tidak ditemukan.":"Tidak ada transaksi pada tanggal ini."}/>:
         <div style={{display:"flex",flexDirection:"column",gap:12}}>
-          {filtered.map(tx=>{const tn=getTn(tx.tenantId);return(
-            <div key={tx.id} className="card-hover" style={{background:"#fff",border:"1px solid #f3f4f6",borderRadius:16,padding:18,boxShadow:"0 2px 8px rgba(0,0,0,.05)"}}>
+          {sorted.map(tx=>{const tn=getTn(tx.tenantId);return(
+            <div key={tx.id} className="card-hover" style={{background:tx.refunded?"#fafafa":"#fff",border:`1px solid ${tx.refunded?"#fca5a5":"#f3f4f6"}`,borderRadius:16,padding:18,boxShadow:"0 2px 8px rgba(0,0,0,.05)",opacity:tx.refunded?0.7:1}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
                 <div>
                   <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:4}}>
                     <Bdg color="#fff7ed" tc="#ea580c" bc="#fed7aa" label={tn.code||"?"}/>
                     <Bdg color="#f0fdf4" tc="#16a34a" bc="#bbf7d0" label={`#${tx.nota}`}/>
                     <PayBadge method={tx.paymentMethod}/>
+                    {tx.refunded&&<Bdg color="#fef2f2" tc="#dc2626" bc="#fca5a5" label="↩️ Direfund"/>}
                   </div>
                   <p style={{fontWeight:700,color:"#1c0a00",margin:"6px 0 2px",fontSize:14}}>{tn.name||"—"}</p>
                   {tx.walletCustomerName&&<p style={{color:"#7c3aed",fontSize:12,margin:"2px 0 0",fontWeight:600}}>🪙 {tx.walletCustomerName}</p>}
@@ -1821,7 +1868,39 @@ function AdminTransactions({tenants,transactions,settings,filterDate,setFilterDa
                 </div>
                 <p style={{color:"#ea580c",fontWeight:800,fontSize:20,margin:0}}>{idr(tx.total)}</p>
               </div>
-              <div style={{marginTop:12,borderTop:"1px dashed #f3f4f6",paddingTop:10}}>
+              </div>
+
+              {/* Tombol Refund — hanya Super Admin, hanya yang belum direfund */}
+              {isSuperAdmin&&!tx.refunded&&(
+                <div style={{marginTop:10,borderTop:"1px dashed #f3f4f6",paddingTop:10}}>
+                  {showConfirmId===tx.id?(
+                    <div style={{background:"#fef2f2",borderRadius:10,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                      <p style={{margin:0,fontSize:13,color:"#dc2626",fontWeight:600}}>↩️ Yakin refund nota #{tx.nota}? Saldo {idr(tx.total)} akan dikembalikan.</p>
+                      <div style={{display:"flex",gap:8}}>
+                        <button onClick={()=>setShowConfirmId(null)} style={{padding:"6px 14px",background:"#f3f4f6",color:"#374151",border:"none",borderRadius:8,cursor:"pointer",fontWeight:600,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>Batal</button>
+                        <button onClick={()=>doRefund(tx)} disabled={refunding===tx.id}
+                          style={{padding:"6px 14px",background:"#dc2626",color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                          {refunding===tx.id?"⏳ Proses...":"✅ Ya, Refund"}
+                        </button>
+                      </div>
+                    </div>
+                  ):(
+                    <button onClick={()=>setShowConfirmId(tx.id)}
+                      style={{padding:"7px 16px",background:"#fef2f2",color:"#dc2626",border:"1px solid #fca5a5",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                      onMouseOver={e=>e.currentTarget.style.background="#fee2e2"} onMouseOut={e=>e.currentTarget.style.background="#fef2f2"}>
+                      ↩️ Cancel / Refund
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {tx.refunded&&(
+                <div style={{marginTop:10,borderTop:"1px dashed #f3f4f6",paddingTop:8}}>
+                  <p style={{color:"#dc2626",fontSize:12,margin:0,fontWeight:600}}>↩️ Transaksi ini sudah direfund pada {tx.refundedAt?new Date(tx.refundedAt).toLocaleString("id-ID"):"-"}</p>
+                </div>
+              )}
+
+              <div style={{marginTop:10,borderTop:"1px dashed #f3f4f6",paddingTop:10}}>
                 <table style={{width:"100%",fontSize:13,borderCollapse:"collapse"}}>
                   <thead><tr style={{color:"#9ca3af"}}><th style={{textAlign:"left",padding:"3px 0",fontWeight:600}}>Menu</th><th style={{textAlign:"center",padding:"3px 8px",fontWeight:600}}>Qty</th><th style={{textAlign:"right",fontWeight:600}}>Harga</th><th style={{textAlign:"right",fontWeight:600}}>Subtotal</th></tr></thead>
                   <tbody>{tx.items.map((it,i)=>(
