@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────34
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -1867,7 +1867,6 @@ function AdminTransactions({tenants,transactions,settings,customers,walletLogs,o
                   <p style={{color:"#9ca3af",fontSize:12,margin:0}}>{tx.date} • {tx.time}</p>
                 </div>
                 <p style={{color:"#ea580c",fontWeight:800,fontSize:20,margin:0}}>{idr(tx.total)}</p>
-              </div>
               </div>
 
               {/* Tombol Refund — hanya Super Admin, hanya yang belum direfund */}
