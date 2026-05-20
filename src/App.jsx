@@ -39,14 +39,6 @@ _gs.textContent = `
 document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
-const db = {
-  async get(k) {
-    try { const r = await window.storage.get(k); return r ? JSON.parse(r.value) : null; } catch { return null; }
-  },
-  async set(k, v) {
-    try { await window.storage.set(k, JSON.stringify(v)); } catch(e) { console.error(e); }
-  },
-};
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
