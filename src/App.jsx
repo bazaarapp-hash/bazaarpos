@@ -40,6 +40,7 @@ document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
 
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
 const todayStr = () => new Date().toISOString().split("T")[0];
@@ -324,13 +325,13 @@ function printQRCard({customer, bazaarName="BazaarPOS", walletLogs=[]}){
   <hr class="d"/>
   <p style="margin:3px 0;font-size:16px">💰 Saldo :</p>
   <p class="b" style="font-size:20px;margin:2px 0 6px">${fmt(customer.balance)}</p>
-  ${lastTopUp?`<p style="margin:3px 0;font-size:14px">📅 Top Up : ${new Date(lastTopUp.timestamp).toLocaleDateString("id-ID")}</p><p style="margin:3px 0;font-size:14px">👤 Admin  : ${lastTopUp.adminName||"Admin"}</p>`:""}
+  ${lastTopUp?`<p style="margin:3px 0;font-size:16px">📅 Top Up : ${new Date(lastTopUp.timestamp).toLocaleDateString("id-ID")}</p><p style="margin:3px 0;font-size:16px">👤 Admin  : ${lastTopUp.adminName||"Admin"}</p>`:""}
   <hr class="d"/>
   <p class="c" style="font-size:14px;margin:5px 0 8px">Tunjukkan QR ini saat transaksi</p>
   <div class="c"><img src="${qrUrl}" width="210" height="210" style="display:block;margin:0 auto;border:2px solid #000"/></div>
   <hr class="d"/>
-  <p class="c" style="font-size:12px;margin:4px 0">ID: ${customer.id.slice(0,8).toUpperCase()}</p>
-  <p class="c" style="font-size:12px;margin:3px 0">Dicetak: ${new Date().toLocaleString("id-ID")}</p>
+  <p class="c" style="font-size:18px;margin:4px 0">ID: ${customer.id.slice(0,8).toUpperCase()}</p>
+  <p class="c" style="font-size:18px;margin:3px 0">Dicetak: ${new Date().toLocaleString("id-ID")}</p>
   <br/><br/>
   </body></html>`;
 
