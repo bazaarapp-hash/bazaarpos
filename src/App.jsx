@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
+
 // ─── Fonts & Global Style ─────────────────────────────────────────────────────
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
@@ -299,6 +300,48 @@ async function sendReceiptImage({dataUrl, phone, token, caption="Struk belanja �
   onStatus&&onStatus("📥 Gambar struk didownload. Kirim manual ke WhatsApp pelanggan.");
   return "download";
 }
+
+// ─── Print QR Card Thermal 80mm ───────────────────────────────────────────────
+function printQRCard({customer, bazaarName="BazaarPOS", walletLogs=[]}){
+  const lastTopUp=(walletLogs||[]).filter(l=>l.customerId===customer.id&&l.type==="topup")
+    .sort((a,b)=>(b.timestamp||"").localeCompare(a.timestamp||""))[0];
+  const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(customer.phone)}&bgcolor=ffffff&color=000000&margin=8`;
+  const fmt=n=>new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n||0);
+
+  const html=`<!DOCTYPE html><html><head><title>Kartu QR ${customer.name}</title>
+  <style>
+    @page{size:80mm auto;margin:4mm 5mm}
+    *{font-family:'Courier New',Courier,monospace;box-sizing:border-box}
+    body{width:70mm;margin:0;padding:0;color:#000;font-size:12px}
+    .c{text-align:center}.b{font-weight:bold}
+    .d{border:none;border-top:1px dashed #000;margin:6px 0}
+    @media print{html,body{width:80mm}*{-webkit-print-color-adjust:exact}}
+  </style></head><body>
+  <p class="c b" style="font-size:15px;margin:0 0 2px">🏪 ${bazaarName}</p>
+  <p class="c" style="font-size:11px;margin:0 0 4px;color:#555">Kartu Saldo Pelanggan</p>
+  <hr class="d"/>
+  <p class="b" style="font-size:14px;margin:2px 0">${customer.name}</p>
+  <p style="margin:2px 0;font-size:12px">📱 ${customer.phone}</p>
+  <hr class="d"/>
+  <p style="margin:2px 0;font-size:12px">💰 Saldo : <b>${fmt(customer.balance)}</b></p>
+  ${lastTopUp?`<p style="margin:2px 0;font-size:11px">📅 Top Up : ${new Date(lastTopUp.timestamp).toLocaleDateString("id-ID")}</p><p style="margin:2px 0;font-size:11px">👤 Admin  : ${lastTopUp.adminName||"Admin"}</p>`:""}
+  <hr class="d"/>
+  <p class="c" style="font-size:11px;margin:4px 0 6px">Tunjukkan QR ini saat transaksi</p>
+  <div class="c"><img src="${qrUrl}" width="190" height="190" style="display:block;margin:0 auto;border:1px solid #eee"/></div>
+  <hr class="d"/>
+  <p class="c" style="font-size:10px;margin:3px 0">ID: ${customer.id.slice(0,8).toUpperCase()}</p>
+  <p class="c" style="font-size:10px;margin:2px 0">Dicetak: ${new Date().toLocaleString("id-ID")}</p>
+  <br/><br/>
+  </body></html>`;
+
+  const w=window.open("","_blank","width=420,height=750,scrollbars=no");
+  if(!w){alert("Izinkan popup untuk cetak kartu!");return;}
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(()=>w.print(),1200); // tunggu QR image load
+}
+
 async function connectBTPrinter(){
   if(!navigator.bluetooth){alert("Browser ini tidak mendukung Web Bluetooth. Gunakan Chrome di Android.");return null;}
   try{
@@ -1635,6 +1678,11 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
                         style={{padding:"8px 14px",background:"#f0fdf4",color:"#16a34a",border:"1px solid #bbf7d0",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
                         💬 Share Kartu
                       </button>
+                      <button onClick={()=>printQRCard({customer:c,bazaarName:settings?.bazaarName||"BazaarPOS",walletLogs})}
+                        style={{padding:"8px 14px",background:"#fff7ed",color:"#ea580c",border:"1px solid #fed7aa",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                        onMouseOver={e=>e.currentTarget.style.background="#fef3c7"} onMouseOut={e=>e.currentTarget.style.background="#fff7ed"}>
+                        🖨️ Cetak Kartu QR
+                      </button>
                       <button onClick={()=>{
                         const link=`${window.location.origin}${window.location.pathname}?card=${c.phone}`;
                         window.open(link,"_blank");
@@ -2362,25 +2410,37 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
   const [sendStatus,setSendStatus]=useState("");
 
   const doPrint=async()=>{
-    setSendStatus("⏳ Membuat gambar struk...");
-    const caption=`Struk belanja ${tenant.name}\nNota: ${lastNota.nota} • ${lastNota.date} ${lastNota.time}\nTotal: ${idr(lastNota.total)}${lastNota.walletCustomerName?"\nPelanggan: "+lastNota.walletCustomerName:""}${lastNota.walletBalanceAfter!=null?"\nSisa saldo: "+idr(lastNota.walletBalanceAfter):""}`;
+    setSendStatus("⏳ Mengirim struk...");
+    const lines=lastNota.items.map(it=>
+      `  🍽️ ${it.menuName}\n     ${it.qty} x ${idr(it.price)} = *${idr(it.qty*it.price)}*`
+    ).join("\n");
+    const receiptText=
+`━━━━━━━━━━━━━━━━━━━━━━━
+🏪 *${settings?.bazaarName||"BazaarPOS"}*
+📍 ${tenant.code} — ${tenant.name}
+━━━━━━━━━━━━━━━━━━━━━━━
+🧾 Nota  : *${lastNota.nota}*
+📅 Tgl   : ${lastNota.date} ${lastNota.time}
+💳 Bayar : Saldo${lastNota.walletCustomerName?`\n👤 Plgn  : ${lastNota.walletCustomerName}`:""}
+━━━━━━━━━━━━━━━━━━━━━━━
+${lines}
+━━━━━━━━━━━━━━━━━━━━━━━
+💰 *TOTAL : ${idr(lastNota.total)}*${lastNota.walletBalanceAfter!=null?`\n🪙 Sisa Saldo : ${idr(lastNota.walletBalanceAfter)}`:""}
+━━━━━━━━━━━━━━━━━━━━━━━
+${settings?.receiptFooter1||"Terima kasih!"}
+${settings?.receiptFooter2||"Selamat menikmati :)"}`;
+
     try{
-      const dataUrl=await generateReceiptImage({
-        tx:lastNota, tenantName:tenant.name, tenantCode:tenant.code,
-        bazaarName:settings?.bazaarName||"BazaarPOS",
-        footer1:settings?.receiptFooter1||"Terima kasih!",
-        footer2:settings?.receiptFooter2||"Selamat menikmati :)"
-      });
-      setSendStatus("⏳ Mengirim struk...");
-      await sendReceiptImage({
-        dataUrl, phone:lastNota.walletCustomerPhone,
-        token:settings?.fonnteToken, caption,
-        onStatus:(s)=>setSendStatus(s),
-      });
+      if(settings?.fonnteToken&&lastNota.walletCustomerPhone){
+        const ok=await sendWhatsApp({token:settings.fonnteToken,phone:lastNota.walletCustomerPhone,message:receiptText});
+        setSendStatus(ok?"✅ Struk terkirim ke WhatsApp pelanggan!":"⚠️ Gagal kirim WA, coba lagi.");
+      } else {
+        window.open(`https://wa.me/?text=${encodeURIComponent(receiptText)}`,"_blank");
+        setSendStatus("✅ WhatsApp dibuka dengan struk.");
+      }
       setPrinted(true);
     }catch(e){
-      console.error("Receipt error:",e);
-      setSendStatus("⚠️ Gagal kirim, coba lagi.");
+      setSendStatus("⚠️ Gagal, coba lagi.");
       setPrinted(true);
     }
   };
@@ -2625,19 +2685,30 @@ function TenantHistory({transactions,tenant,settings}){
 
   const sendReceiptWA=async(tx)=>{
     setSending(tx.id);
-    const caption=`Struk belanja ${tenant.name}\nNota: ${tx.nota}\nTotal: ${idr(tx.total)}${tx.walletBalanceAfter!=null?"\nSisa saldo: "+idr(tx.walletBalanceAfter):""}`;
-    try{
-      const dataUrl=await generateReceiptImage({
-        tx, tenantName:tenant.name, tenantCode:tenant.code,
-        bazaarName:settings?.bazaarName||"BazaarPOS",
-        footer1:settings?.receiptFooter1||"Terima kasih!",
-        footer2:settings?.receiptFooter2||"Selamat menikmati :)"
-      });
-      await sendReceiptImage({
-        dataUrl, phone:tx.walletCustomerPhone,
-        token:settings?.fonnteToken, caption
-      });
-    }catch(e){console.error("Receipt error:",e);}
+    const lines=tx.items.map(it=>
+      `  🍽️ ${it.menuName}\n     ${it.qty} x ${idr(it.price)} = *${idr(it.qty*it.price)}*`
+    ).join("\n");
+    const receiptText=
+`━━━━━━━━━━━━━━━━━━━━━━━
+🏪 *${settings?.bazaarName||"BazaarPOS"}*
+📍 ${tenant.code} — ${tenant.name}
+━━━━━━━━━━━━━━━━━━━━━━━
+🧾 Nota  : *${tx.nota}*
+📅 Tgl   : ${tx.date} ${tx.time}
+💳 Bayar : Saldo${tx.walletCustomerName?`\n👤 Plgn  : ${tx.walletCustomerName}`:""}
+━━━━━━━━━━━━━━━━━━━━━━━
+${lines}
+━━━━━━━━━━━━━━━━━━━━━━━
+💰 *TOTAL : ${idr(tx.total)}*${tx.walletBalanceAfter!=null?`\n🪙 Sisa Saldo : ${idr(tx.walletBalanceAfter)}`:""}
+━━━━━━━━━━━━━━━━━━━━━━━
+${settings?.receiptFooter1||"Terima kasih!"}
+${settings?.receiptFooter2||"Selamat menikmati :)"}`;
+
+    if(settings?.fonnteToken&&tx.walletCustomerPhone){
+      await sendWhatsApp({token:settings.fonnteToken,phone:tx.walletCustomerPhone,message:receiptText});
+    } else {
+      window.open(`https://wa.me/?text=${encodeURIComponent(receiptText)}`,"_blank");
+    }
     setSending(null);
   };
   const filtered=[...transactions.filter(t=>t.date===filterDate)].sort((a,b)=>b.nota.localeCompare(a.nota));
