@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-
 // ─── Fonts & Global Style ─────────────────────────────────────────────────────
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
@@ -305,32 +304,33 @@ async function sendReceiptImage({dataUrl, phone, token, caption="Struk belanja �
 function printQRCard({customer, bazaarName="BazaarPOS", walletLogs=[]}){
   const lastTopUp=(walletLogs||[]).filter(l=>l.customerId===customer.id&&l.type==="topup")
     .sort((a,b)=>(b.timestamp||"").localeCompare(a.timestamp||""))[0];
-  const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(customer.phone)}&bgcolor=ffffff&color=000000&margin=8`;
+  const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(customer.phone)}&bgcolor=ffffff&color=000000&margin=8`;
   const fmt=n=>new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n||0);
 
   const html=`<!DOCTYPE html><html><head><title>Kartu QR ${customer.name}</title>
   <style>
-    @page{size:80mm auto;margin:4mm 5mm}
+    @page{size:80mm auto;margin:5mm 6mm}
     *{font-family:'Courier New',Courier,monospace;box-sizing:border-box}
-    body{width:70mm;margin:0;padding:0;color:#000;font-size:12px}
+    body{width:68mm;margin:0;padding:0;color:#000}
     .c{text-align:center}.b{font-weight:bold}
-    .d{border:none;border-top:1px dashed #000;margin:6px 0}
+    .d{border:none;border-top:2px dashed #000;margin:8px 0}
     @media print{html,body{width:80mm}*{-webkit-print-color-adjust:exact}}
   </style></head><body>
-  <p class="c b" style="font-size:15px;margin:0 0 2px">🏪 ${bazaarName}</p>
-  <p class="c" style="font-size:11px;margin:0 0 4px;color:#555">Kartu Saldo Pelanggan</p>
+  <p class="c b" style="font-size:18px;margin:0 0 3px">🏪 ${bazaarName}</p>
+  <p class="c" style="font-size:14px;margin:0 0 5px">Kartu Saldo Pelanggan</p>
   <hr class="d"/>
-  <p class="b" style="font-size:14px;margin:2px 0">${customer.name}</p>
-  <p style="margin:2px 0;font-size:12px">📱 ${customer.phone}</p>
+  <p class="b" style="font-size:18px;margin:3px 0">${customer.name}</p>
+  <p style="margin:3px 0;font-size:16px">📱 ${customer.phone}</p>
   <hr class="d"/>
-  <p style="margin:2px 0;font-size:12px">💰 Saldo : <b>${fmt(customer.balance)}</b></p>
-  ${lastTopUp?`<p style="margin:2px 0;font-size:11px">📅 Top Up : ${new Date(lastTopUp.timestamp).toLocaleDateString("id-ID")}</p><p style="margin:2px 0;font-size:11px">👤 Admin  : ${lastTopUp.adminName||"Admin"}</p>`:""}
+  <p style="margin:3px 0;font-size:16px">💰 Saldo :</p>
+  <p class="b" style="font-size:20px;margin:2px 0 6px">${fmt(customer.balance)}</p>
+  ${lastTopUp?`<p style="margin:3px 0;font-size:14px">📅 Top Up : ${new Date(lastTopUp.timestamp).toLocaleDateString("id-ID")}</p><p style="margin:3px 0;font-size:14px">👤 Admin  : ${lastTopUp.adminName||"Admin"}</p>`:""}
   <hr class="d"/>
-  <p class="c" style="font-size:11px;margin:4px 0 6px">Tunjukkan QR ini saat transaksi</p>
-  <div class="c"><img src="${qrUrl}" width="190" height="190" style="display:block;margin:0 auto;border:1px solid #eee"/></div>
+  <p class="c" style="font-size:14px;margin:5px 0 8px">Tunjukkan QR ini saat transaksi</p>
+  <div class="c"><img src="${qrUrl}" width="210" height="210" style="display:block;margin:0 auto;border:2px solid #000"/></div>
   <hr class="d"/>
-  <p class="c" style="font-size:10px;margin:3px 0">ID: ${customer.id.slice(0,8).toUpperCase()}</p>
-  <p class="c" style="font-size:10px;margin:2px 0">Dicetak: ${new Date().toLocaleString("id-ID")}</p>
+  <p class="c" style="font-size:12px;margin:4px 0">ID: ${customer.id.slice(0,8).toUpperCase()}</p>
+  <p class="c" style="font-size:12px;margin:3px 0">Dicetak: ${new Date().toLocaleString("id-ID")}</p>
   <br/><br/>
   </body></html>`;
 
@@ -339,7 +339,7 @@ function printQRCard({customer, bazaarName="BazaarPOS", walletLogs=[]}){
   w.document.write(html);
   w.document.close();
   w.focus();
-  setTimeout(()=>w.print(),1200); // tunggu QR image load
+  setTimeout(()=>w.print(),1200);
 }
 
 async function connectBTPrinter(){
