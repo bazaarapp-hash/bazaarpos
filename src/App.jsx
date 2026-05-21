@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-
 // ─── Fonts & Global Style ─────────────────────────────────────────────────────
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
@@ -1552,13 +1551,14 @@ function generateCustomerCard({customer, bazaarName}){
 function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustomers,onSaveWalletLogs}){
   const [tab,setTab]=useState("customers");
   const [form,setForm]=useState({phone:"",name:"",amount:""});
-  const [selCust,setSelCust]=useState(null); // customer dipilih untuk top up
   const [search,setSearch]=useState("");
   const [sending,setSending]=useState(false);
   const [msg,setMsg]=useState("");
   const [filterDate,setFilterDate]=useState(todayStr());
+  const [showPinModal,setShowPinModal]=useState(null); // customer object
+  const [pinSearch,setPinSearch]=useState("");
 
-  const showMsg=(m,dur=3500)=>{setMsg(m);setTimeout(()=>setMsg(""),dur);};
+  const showMsg=(m,dur=4000)=>{setMsg(m);setTimeout(()=>setMsg(""),dur);};
 
   // Cari atau buat customer
   const findOrCreate=()=>{
@@ -1566,7 +1566,9 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     const phone=form.phone.trim().replace(/\D/g,"");
     let cust=customers.find(c=>c.phone===phone);
     if(!cust){
-      cust={id:uid(),phone,name:form.name.trim(),balance:0,createdAt:new Date().toISOString()};
+      // Generate PIN 4 digit acak untuk pelanggan baru
+      const pin=String(Math.floor(1000+Math.random()*9000));
+      cust={id:uid(),phone,name:form.name.trim(),balance:0,pin,createdAt:new Date().toISOString()};
       return {cust,isNew:true};
     }
     return {cust,isNew:false};
@@ -1605,7 +1607,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
       waSent=await sendWhatsApp({token:settings.fonnteToken,phone:updCust.phone,message:waMsg});
     }
 
-    showMsg(`✅ Top up berhasil!${waSent?" Notif WA + link kartu terkirim!":settings.fonnteToken?" (WA gagal)":""}`);
+    showMsg(`✅ Top up berhasil!${isNew?` PIN pelanggan: ${updCust.pin} (catat & sampaikan ke pelanggan)`:""}${waSent?" WA terkirim!":settings.fonnteToken?" (WA gagal)":""}`);
     setForm({phone:"",name:"",amount:""});
     setSending(false);
   };
@@ -1626,6 +1628,30 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
 
   return(
     <div>
+      {/* ── Modal Lihat PIN ── */}
+      {showPinModal&&(
+        <Modal title="🔐 PIN Pelanggan" onClose={()=>setShowPinModal(null)} accent="#7c3aed">
+          <div style={{background:"#f5f0ff",borderRadius:14,padding:"20px",textAlign:"center",marginBottom:14}}>
+            <p style={{margin:"0 0 4px",color:"#7c3aed",fontSize:14,fontWeight:700}}>👤 {showPinModal.name}</p>
+            <p style={{margin:"0 0 14px",color:"#6b7280",fontSize:13}}>📱 {showPinModal.phone}</p>
+            <p style={{margin:"0 0 10px",color:"#374151",fontSize:13,fontWeight:600}}>PIN Transaksi</p>
+            <div style={{display:"flex",gap:10,justifyContent:"center",marginBottom:6}}>
+              {(showPinModal.pin||"----").split("").map((d,i)=>(
+                <div key={i} style={{width:52,height:64,background:"#fff",border:"2px solid #7c3aed",borderRadius:12,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,fontWeight:900,color:"#4c1d95",boxShadow:"0 2px 8px rgba(124,58,237,.2)"}}>
+                  {d}
+                </div>
+              ))}
+            </div>
+            {!showPinModal.pin&&<p style={{color:"#dc2626",fontSize:12,margin:"8px 0 0"}}>PIN belum ada. Lakukan top up untuk generate PIN.</p>}
+          </div>
+          <div style={{background:"#fef3c7",border:"1px solid #fbbf24",borderRadius:10,padding:"10px 14px",marginBottom:14}}>
+            <p style={{margin:0,fontSize:13,color:"#92400e",fontWeight:600}}>⚠️ Sampaikan PIN langsung ke pelanggan, jangan kirim via chat publik.</p>
+          </div>
+          <p style={{color:"#6b7280",fontSize:13,margin:"0 0 14px",textAlign:"center"}}>Saldo: <strong style={{color:"#16a34a"}}>{idr(showPinModal.balance)}</strong></p>
+          <button onClick={()=>setShowPinModal(null)} style={{width:"100%",padding:"12px",background:"#7c3aed",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>Tutup</button>
+        </Modal>
+      )}
+
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:12}}>
         <div>
           <h2 style={{margin:0,fontSize:20,fontWeight:800,color:"#1c0a00"}}>💰 Kasir Top Up</h2>
@@ -1635,11 +1661,11 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
 
       {msg&&<div className="pop-in" style={{background:msg.startsWith("✅")?"#f0fdf4":"#fef2f2",border:`1px solid ${msg.startsWith("✅")?"#bbf7d0":"#fca5a5"}`,borderRadius:12,padding:"10px 16px",marginBottom:16,fontWeight:600,fontSize:13,color:msg.startsWith("✅")?"#16a34a":"#dc2626"}}>{msg}</div>}
 
-      {/* Sub-tabs */}
+      {/* Sub-tabs + tab PIN */}
       <div style={{display:"flex",gap:4,marginBottom:20,background:"#f9fafb",borderRadius:14,padding:4}}>
-        {[{k:"customers",i:"👥",l:"Pelanggan"},{k:"topup",i:"🪙",l:"Top Up"},{k:"history",i:"📋",l:"Riwayat"}].map(t=>(
+        {[{k:"customers",i:"👥",l:"Pelanggan"},{k:"topup",i:"💳",l:"Top Up"},{k:"pin",i:"🔐",l:"Lihat PIN"},{k:"history",i:"📋",l:"Riwayat"}].map(t=>(
           <button key={t.k} onClick={()=>setTab(t.k)}
-            style={{flex:1,padding:"10px 8px",background:tab===t.k?"#fff":"transparent",border:"none",borderRadius:10,fontWeight:tab===t.k?700:500,color:tab===t.k?"#ea580c":"#6b7280",cursor:"pointer",fontSize:13,boxShadow:tab===t.k?"0 2px 8px rgba(0,0,0,.08)":"none",transition:"all .2s"}}>
+            style={{flex:1,padding:"10px 6px",background:tab===t.k?"#fff":"transparent",border:"none",borderRadius:10,fontWeight:tab===t.k?700:500,color:tab===t.k?"#ea580c":"#6b7280",cursor:"pointer",fontSize:12,boxShadow:tab===t.k?"0 2px 8px rgba(0,0,0,.08)":"none",transition:"all .2s"}}>
             {t.i} {t.l}
           </button>
         ))}
@@ -1671,6 +1697,11 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
                       <button onClick={()=>{setForm({phone:c.phone,name:c.name,amount:""});setTab("topup");}}
                         style={{padding:"8px 14px",background:"#fff7ed",color:"#ea580c",border:"1px solid #fed7aa",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
                         💰 Top Up
+                      </button>
+                      <button onClick={()=>setShowPinModal(c)}
+                        style={{padding:"8px 14px",background:"#f5f0ff",color:"#7c3aed",border:"1px solid #c4b5fd",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                        onMouseOver={e=>e.currentTarget.style.background="#ede9fe"} onMouseOut={e=>e.currentTarget.style.background="#f5f0ff"}>
+                        🔐 PIN
                       </button>
                       <button onClick={()=>{
                         const link=`${window.location.origin}${window.location.pathname}?card=${c.id}`;
@@ -1769,6 +1800,49 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
             </button>
             {!settings.fonnteToken&&<p style={{textAlign:"center",color:"#f97316",fontSize:12,margin:"8px 0 0"}}>⚠️ Fonnte token belum diisi — notifikasi WA tidak akan terkirim</p>}
           </div>
+        </div>
+      )}
+
+      {/* ── Tab Lihat PIN ── */}
+      {tab==="pin"&&(
+        <div style={{maxWidth:500}}>
+          <div style={{background:"#f5f0ff",border:"1px solid #c4b5fd",borderRadius:14,padding:"14px 18px",marginBottom:18}}>
+            <p style={{margin:0,fontWeight:700,color:"#4c1d95",fontSize:14}}>🔐 Cari PIN Pelanggan</p>
+            <p style={{margin:"4px 0 0",color:"#7c3aed",fontSize:13}}>Gunakan untuk membantu pelanggan yang lupa PIN</p>
+          </div>
+          {/* Search */}
+          <div style={{position:"relative",marginBottom:16}}>
+            <input placeholder="🔍 Cari nama atau nomor WA pelanggan..."
+              value={pinSearch} onChange={e=>setPinSearch(e.target.value)}
+              style={{width:"100%",border:"2px solid #e5e7eb",borderRadius:12,padding:"12px 14px",fontSize:14,outline:"none",color:"#111",boxSizing:"border-box",fontFamily:"'Plus Jakarta Sans',sans-serif",transition:"border-color .2s"}}
+              onFocus={e=>e.target.style.borderColor="#7c3aed"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
+            {pinSearch&&<button onClick={()=>setPinSearch("")} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:"#9ca3af",fontSize:18}}>✕</button>}
+          </div>
+          {/* Hasil pencarian */}
+          {pinSearch.trim()?(()=>{
+            const results=customers.filter(c=>
+              c.name.toLowerCase().includes(pinSearch.toLowerCase())||
+              c.phone.includes(pinSearch.replace(/\D/g,""))
+            );
+            return results.length===0
+              ?<EmptyState icon="🔍" text="Pelanggan tidak ditemukan."/>
+              :<div style={{display:"flex",flexDirection:"column",gap:10}}>
+                {results.map(c=>(
+                  <div key={c.id} style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:14,padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                    <div>
+                      <p style={{margin:0,fontWeight:700,color:"#1c0a00",fontSize:15}}>{c.name}</p>
+                      <p style={{margin:"3px 0 0",color:"#6b7280",fontSize:13}}>📱 {c.phone}</p>
+                      <p style={{margin:"3px 0 0",color:"#16a34a",fontSize:13,fontWeight:600}}>🪙 {idr(c.balance)}</p>
+                    </div>
+                    <button onClick={()=>setShowPinModal(c)}
+                      style={{padding:"10px 18px",background:"#7c3aed",color:"#fff",border:"none",borderRadius:12,cursor:"pointer",fontWeight:700,fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                      onMouseOver={e=>e.currentTarget.style.background="#6d28d9"} onMouseOut={e=>e.currentTarget.style.background="#7c3aed"}>
+                      🔐 Lihat PIN
+                    </button>
+                  </div>
+                ))}
+              </div>;
+          })():<EmptyState icon="🔐" text="Ketik nama atau nomor WA untuk mencari pelanggan."/>}
         </div>
       )}
 
@@ -2301,6 +2375,9 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
   const [showScanner,setShowScanner]=useState(false);
   const [scanPhone,setScanPhone]=useState(""); // hasil scan
   const [scanError,setScanError]=useState("");
+  const [pinInput,setPinInput]=useState(""); // PIN yang diinput pelanggan
+  const [pinError,setPinError]=useState("");
+  const [scannedCust,setScannedCust]=useState(null); // customer hasil scan, menunggu PIN
   const videoRef=useRef(null);
   const scanIntervalRef=useRef(null);
 
@@ -2337,10 +2414,10 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
           const code=window.jsQR(imageData.data,imageData.width,imageData.height);
           if(code&&code.data){
             const scanned=code.data.trim();
-            // Cari by ID dulu (QR baru), fallback by phone (QR lama)
             const found=(customers||[]).find(c=>c.id===scanned)||(customers||[]).find(c=>c.phone===scanned.replace(/\D/g,""));
             const identifier=found?found.id:scanned;
             setScanPhone(identifier);
+            if(found) setScannedCust(found);
             stopScanner();
           }
         },500);
@@ -2358,18 +2435,16 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
     }
   };
 
-  const closeScanner=()=>{stopScanner();setShowScanner(false);setScanPhone("");setScanError("");};
+  const closeScanner=()=>{stopScanner();setShowScanner(false);setScanPhone("");setScanError("");setPinInput("");setPinError("");setScannedCust(null);};
 
   // ── Bayar pakai saldo (setelah QR di-scan) ────────────────────────────────
   const handleWalletPay=async()=>{
     if(!scanPhone){setScanError("Scan QR pelanggan terlebih dahulu!");return;}
-    // Cari by ID (baru) atau phone (lama)
-    const cust=customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone);
-    if(!cust){setScanError(`Pelanggan tidak ditemukan!`);return;}
-    if(cust.balance<total){
-      setScanError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(total)}`);
-      return;
-    }
+    const cust=scannedCust||customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone);
+    if(!cust){setScanError("Pelanggan tidak ditemukan!");return;}
+    // Verifikasi PIN
+    if(cust.pin&&pinInput!==cust.pin){setPinError("❌ PIN salah! Coba lagi.");setPinInput("");return;}
+    if(cust.balance<total){setScanError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(total)}`);return;}
     closeScanner();
     await handleCheckout("wallet",cust);
   };
@@ -2467,35 +2542,58 @@ ${settings?.receiptFooter2||"Selamat menikmati :)"}`;
             </div>
           )}
           {scanError&&<div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:10,padding:"10px 14px",color:"#dc2626",fontWeight:600,fontSize:13,marginBottom:12}}>❌ {scanError}</div>}
+
+          {/* Info pelanggan + keypad PIN */}
           {scanPhone&&!scanError&&(()=>{
-            const cust=customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone);
+            const cust=scannedCust||customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone);
+            if(!cust) return <div style={{background:"#fef2f2",borderRadius:12,padding:"12px 16px",marginBottom:12}}><p style={{margin:0,color:"#dc2626",fontWeight:600,fontSize:14}}>❌ Pelanggan tidak ditemukan</p></div>;
             return(
-              <div style={{background:cust?"#f0fdf4":"#fef2f2",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
-                {cust?(
-                  <>
-                    <p style={{margin:"0 0 4px",fontWeight:800,fontSize:16,color:"#14532d"}}>✅ {cust.name}</p>
-                    <p style={{margin:"0 0 4px",color:"#6b7280",fontSize:13}}>📱 {cust.phone}</p>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8,paddingTop:8,borderTop:"1px dashed #dcfce7"}}>
-                      <div>
-                        <p style={{margin:0,color:"#6b7280",fontSize:12}}>Saldo tersedia</p>
-                        <p style={{margin:"2px 0 0",fontWeight:900,color:cust.balance>=total?"#16a34a":"#dc2626",fontSize:18}}>{idr(cust.balance)}</p>
-                      </div>
-                      <div style={{textAlign:"right"}}>
-                        <p style={{margin:0,color:"#6b7280",fontSize:12}}>Total belanja</p>
-                        <p style={{margin:"2px 0 0",fontWeight:900,color:"#ea580c",fontSize:18}}>{idr(total)}</p>
-                      </div>
+              <div>
+                {/* Info pelanggan */}
+                <div style={{background:cust.balance>=total?"#f0fdf4":"#fef2f2",borderRadius:12,padding:"12px 16px",marginBottom:12}}>
+                  <p style={{margin:"0 0 4px",fontWeight:800,fontSize:16,color:"#14532d"}}>✅ {cust.name}</p>
+                  <p style={{margin:"0 0 4px",color:"#6b7280",fontSize:13}}>📱 {cust.phone}</p>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8,paddingTop:8,borderTop:"1px dashed #dcfce7"}}>
+                    <div><p style={{margin:0,color:"#6b7280",fontSize:12}}>Saldo</p><p style={{margin:"2px 0 0",fontWeight:900,color:cust.balance>=total?"#16a34a":"#dc2626",fontSize:18}}>{idr(cust.balance)}</p></div>
+                    <div style={{textAlign:"right"}}><p style={{margin:0,color:"#6b7280",fontSize:12}}>Total belanja</p><p style={{margin:"2px 0 0",fontWeight:900,color:"#ea580c",fontSize:18}}>{idr(total)}</p></div>
+                  </div>
+                  {cust.balance<total&&<p style={{marginTop:8,color:"#dc2626",fontSize:13,fontWeight:600,textAlign:"center"}}>⚠️ Saldo tidak cukup</p>}
+                </div>
+
+                {/* Keypad PIN */}
+                {cust.balance>=total&&cust.pin&&(
+                  <div style={{marginBottom:12}}>
+                    <p style={{textAlign:"center",fontWeight:700,color:"#374151",fontSize:14,margin:"0 0 10px"}}>🔐 Masukkan PIN</p>
+                    {/* Tampilan 4 kotak PIN */}
+                    <div style={{display:"flex",gap:10,justifyContent:"center",marginBottom:8}}>
+                      {[0,1,2,3].map(i=>(
+                        <div key={i} style={{width:50,height:60,background:pinInput.length>i?"#4c1d95":"#f9fafb",border:`2px solid ${pinInput.length>i?"#7c3aed":"#e5e7eb"}`,borderRadius:12,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,color:"#fff",transition:"all .15s"}}>
+                          {pinInput.length>i?"●":""}
+                        </div>
+                      ))}
                     </div>
-                    {cust.balance<total&&<p style={{marginTop:8,color:"#dc2626",fontSize:13,fontWeight:600,textAlign:"center"}}>⚠️ Saldo tidak cukup — perlu top up {idr(total-cust.balance)}</p>}
-                  </>
-                ):(
-                  <p style={{margin:0,color:"#dc2626",fontWeight:600,fontSize:14}}>❌ Pelanggan tidak ditemukan ({scanPhone})</p>
+                    {pinError&&<p style={{textAlign:"center",color:"#dc2626",fontSize:13,fontWeight:600,margin:"4px 0 8px"}}>{pinError}</p>}
+                    {/* Numpad */}
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,maxWidth:220,margin:"0 auto"}}>
+                      {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((k,i)=>(
+                        <button key={i} onClick={()=>{
+                          if(k==="")return;
+                          if(k==="⌫"){setPinInput(p=>p.slice(0,-1));setPinError("");}
+                          else if(pinInput.length<4){setPinInput(p=>p+k);setPinError("");}
+                        }}
+                          style={{padding:"14px 0",background:k==="⌫"?"#fef2f2":k===""?"transparent":"#f9fafb",color:k==="⌫"?"#dc2626":"#1c0a00",border:`1px solid ${k==="⌫"?"#fca5a5":k===""?"transparent":"#e5e7eb"}`,borderRadius:12,fontSize:20,fontWeight:700,cursor:k===""?"default":"pointer",fontFamily:"'Plus Jakarta Sans',sans-serif",visibility:k===""?"hidden":"visible"}}>
+                          {k}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
             );
           })()}
           <div style={{display:"flex",gap:10}}>
             <button onClick={closeScanner} style={{...btnSec,flex:1}}>Batal</button>
-            {scanPhone&&(customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone))&&(customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone)).balance>=total?(
+            {scanPhone&&(customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone))&&(customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone)).balance>=total&&(pinInput.length===4||!(customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone)).pin)?(
               <button onClick={handleWalletPay}
                 style={{flex:2,padding:"13px",background:"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
                 onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
