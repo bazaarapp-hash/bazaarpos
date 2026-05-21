@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
+
 // ─── Fonts & Global Style ─────────────────────────────────────────────────────
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
@@ -39,7 +40,6 @@ _gs.textContent = `
 document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
-
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
@@ -305,7 +305,8 @@ async function sendReceiptImage({dataUrl, phone, token, caption="Struk belanja �
 function printQRCard({customer, bazaarName="BazaarPOS", walletLogs=[]}){
   const lastTopUp=(walletLogs||[]).filter(l=>l.customerId===customer.id&&l.type==="topup")
     .sort((a,b)=>(b.timestamp||"").localeCompare(a.timestamp||""))[0];
-  const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(customer.phone)}&bgcolor=ffffff&color=000000&margin=8`;
+  // QR berisi customer ID (aman, tidak expose nomor HP)
+  const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(customer.id)}&bgcolor=ffffff&color=000000&margin=8`;
   const fmt=n=>new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n||0);
 
   const html=`<!DOCTYPE html><html><head><title>Kartu QR ${customer.name}</title>
@@ -1593,8 +1594,8 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     await onSaveCustomers(newCusts);
     await onSaveWalletLogs([logEntry,...walletLogs]);
 
-    // Link kartu pelanggan
-    const cardLink=`${window.location.origin}${window.location.pathname}?card=${updCust.phone}`;
+    // Link kartu pakai customer ID (aman, tidak expose nomor HP)
+    const cardLink=`${window.location.origin}${window.location.pathname}?card=${updCust.id}`;
 
     // Pesan WA dengan link kartu
     const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\nHalo *${updCust.name}*! 👋\n\n✅ *Top Up Berhasil*\n💰 Nominal   : ${idr(amount)}\n📊 Saldo Lama: ${idr(balBefore)}\n🪙 Saldo Baru: ${idr(balAfter)}\n🕐 Waktu: ${now.toLocaleString("id-ID")}\n\n🔗 *Kartu Saldo Kamu:*\n${cardLink}\n\n_(Simpan link ini untuk cek saldo & QR Code)_\n\nTerima kasih! 🙏`;
@@ -1672,7 +1673,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
                         💰 Top Up
                       </button>
                       <button onClick={()=>{
-                        const link=`${window.location.origin}${window.location.pathname}?card=${c.phone}`;
+                        const link=`${window.location.origin}${window.location.pathname}?card=${c.id}`;
                         const waText=`https://wa.me/?text=${encodeURIComponent(`Halo ${c.name}! Cek saldo & QR Code kamu di:\n${link}`)}`;
                         window.open(waText,"_blank");
                       }}
@@ -1685,7 +1686,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
                         🖨️ Cetak Kartu QR
                       </button>
                       <button onClick={()=>{
-                        const link=`${window.location.origin}${window.location.pathname}?card=${c.phone}`;
+                        const link=`${window.location.origin}${window.location.pathname}?card=${c.id}`;
                         window.open(link,"_blank");
                       }}
                         style={{padding:"8px 14px",background:"#f0f9ff",color:"#0284c7",border:"1px solid #bae6fd",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
@@ -2335,8 +2336,11 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
           const imageData=ctx.getImageData(0,0,canvas.width,canvas.height);
           const code=window.jsQR(imageData.data,imageData.width,imageData.height);
           if(code&&code.data){
-            const phone=code.data.replace(/\D/g,"");
-            setScanPhone(phone);
+            const scanned=code.data.trim();
+            // Cari by ID dulu (QR baru), fallback by phone (QR lama)
+            const found=(customers||[]).find(c=>c.id===scanned)||(customers||[]).find(c=>c.phone===scanned.replace(/\D/g,""));
+            const identifier=found?found.id:scanned;
+            setScanPhone(identifier);
             stopScanner();
           }
         },500);
@@ -2359,8 +2363,9 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
   // ── Bayar pakai saldo (setelah QR di-scan) ────────────────────────────────
   const handleWalletPay=async()=>{
     if(!scanPhone){setScanError("Scan QR pelanggan terlebih dahulu!");return;}
-    const cust=customers.find(c=>c.phone===scanPhone);
-    if(!cust){setScanError(`Pelanggan dengan nomor ${scanPhone} tidak ditemukan!`);return;}
+    // Cari by ID (baru) atau phone (lama)
+    const cust=customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone);
+    if(!cust){setScanError(`Pelanggan tidak ditemukan!`);return;}
     if(cust.balance<total){
       setScanError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(total)}`);
       return;
@@ -2463,7 +2468,7 @@ ${settings?.receiptFooter2||"Selamat menikmati :)"}`;
           )}
           {scanError&&<div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:10,padding:"10px 14px",color:"#dc2626",fontWeight:600,fontSize:13,marginBottom:12}}>❌ {scanError}</div>}
           {scanPhone&&!scanError&&(()=>{
-            const cust=customers.find(c=>c.phone===scanPhone);
+            const cust=customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone);
             return(
               <div style={{background:cust?"#f0fdf4":"#fef2f2",borderRadius:12,padding:"14px 16px",marginBottom:12}}>
                 {cust?(
@@ -2490,7 +2495,7 @@ ${settings?.receiptFooter2||"Selamat menikmati :)"}`;
           })()}
           <div style={{display:"flex",gap:10}}>
             <button onClick={closeScanner} style={{...btnSec,flex:1}}>Batal</button>
-            {scanPhone&&customers.find(c=>c.phone===scanPhone)&&customers.find(c=>c.phone===scanPhone).balance>=total?(
+            {scanPhone&&(customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone))&&(customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone)).balance>=total?(
               <button onClick={handleWalletPay}
                 style={{flex:2,padding:"13px",background:"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
                 onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
@@ -2793,10 +2798,12 @@ ${settings?.receiptFooter2||"Selamat menikmati :)"}`;
 // CUSTOMER CARD PAGE — halaman publik ?card=PHONE
 // ═════════════════════════════════════════════════════════════════════════════
 function CustomerCardPage({phone,settings,customers,walletLogs,transactions,loaded}){
-  const cleanPhone=phone.replace(/\D/g,"");
-  const customer=customers.find(c=>c.phone===cleanPhone||c.phone===phone);
+  // Cari customer by ID (format baru, aman) atau phone (backward compat QR lama)
+  const param=(phone||"").trim();
+  const customer=customers.find(c=>c.id===param)||customers.find(c=>c.phone===param)||customers.find(c=>c.phone===param.replace(/\D/g,""));
   const bazaarName=settings?.bazaarName||"BazaarPOS";
-  const shareUrl=`${window.location.origin}${window.location.pathname}?card=${phone}`;
+  // Share link selalu pakai customer ID — tidak expose nomor HP
+  const shareUrl=customer?`${window.location.origin}${window.location.pathname}?card=${customer.id}`:window.location.href;
   const waShare=`https://wa.me/?text=${encodeURIComponent(`Cek saldo kamu di ${bazaarName}:\n${shareUrl}`)}`;
   const [expandedTx,setExpandedTx]=useState(null);
 
@@ -2823,7 +2830,8 @@ function CustomerCardPage({phone,settings,customers,walletLogs,transactions,load
   );
 
   const balanceColor=customer.balance>0?"#16a34a":"#dc2626";
-  const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(customer.phone)}&bgcolor=ffffff&color=4c1d95&margin=10`;
+  // QR code berisi customer ID (bukan nomor HP)
+  const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(customer.id)}&bgcolor=ffffff&color=4c1d95&margin=10`;
 
   return(
     <div style={{minHeight:"100vh",background:"linear-gradient(145deg,#4c1d95,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
