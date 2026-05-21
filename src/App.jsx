@@ -749,8 +749,7 @@ function SuperAdminDashboard(props){
         {tab==="summary"&&<AdminSummary {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
         {tab==="settings"&&<SettingsPanel {...props}/>}
         {tab==="backup"&&<BackupPanel {...props} isSuperAdmin={true}/>}
-        {tab==="reset"&&<ResetPanel {...props}/>}
-      </div>
+        {tab==="reset"&&<ResetPanel {...props}/>}      </div>
     </div>
   );
 }
@@ -1332,35 +1331,68 @@ function BackupPanel({tenants,menus,transactions,settings,admins,onSaveSettings,
 }
 
 // ─── Reset Panel ──────────────────────────────────────────────────────────────
-function ResetPanel({transactions,settings,onSaveTx}){
+function ResetPanel({transactions,tenants,menus,customers,walletLogs,settings,onSaveTx,onSaveTenants,onSaveMenus,onSaveCustomers,onSaveWalletLogs}){
   const [pass,setPass]=useState("");
   const [unlocked,setUnlocked]=useState(false);
-  const [step,setStep]=useState(0); // 0=idle, 1=konfirmasi1, 2=konfirmasi2, 3=done
+  const [mode,setMode]=useState(null);    // "tx" | "full" | "tenant"
+  const [step,setStep]=useState(0);       // 0=idle,1=confirm1,2=confirm2,3=done
   const [loading,setLoading]=useState(false);
+  const [doneMsg,setDoneMsg]=useState("");
+
+  const txCount=transactions.length;
+  const custCount=customers?.length||0;
+  const tenantCount=tenants?.length||0;
+  const menuCount=menus?.length||0;
+  const txCleared=txCount===0;
 
   const tryUnlock=()=>{
-    const resetPass=settings?.resetPass||"reset123";
-    if(pass.trim()===resetPass){setUnlocked(true);setPass("");setStep(0);}
+    if(pass.trim()===(settings?.resetPass||"reset123")){setUnlocked(true);setPass("");setStep(0);setMode(null);}
     else alert("❌ Password reset salah!");
   };
 
   const doReset=async()=>{
     setLoading(true);
     try{
-      await onSaveTx([]);
+      if(mode==="tx"){
+        await onSaveTx([]);
+        setDoneMsg(`✅ ${txCount} transaksi berhasil dihapus.`);
+      } else if(mode==="full"){
+        await onSaveTx([]);
+        await onSaveCustomers([]);
+        await onSaveWalletLogs([]);
+        setDoneMsg(`✅ Reset penuh selesai. Transaksi, pelanggan & saldo dihapus.`);
+      } else if(mode==="tenant"){
+        await onSaveTenants([]);
+        await onSaveMenus([]);
+        setDoneMsg(`✅ ${tenantCount} tenant & ${menuCount} menu berhasil dihapus.`);
+      }
       setStep(3);
-    }catch(e){
-      alert("❌ Gagal reset: "+e.message);
-    }
+    }catch(e){ alert("❌ Gagal reset: "+e.message); }
     setLoading(false);
   };
 
-  const lockBack=()=>{setUnlocked(false);setStep(0);setPass("");};
+  const lockBack=()=>{setUnlocked(false);setStep(0);setMode(null);setPass("");setDoneMsg("");};
+  const startMode=(m)=>{setMode(m);setStep(1);};
+
+  // Info per mode
+  const modeInfo={
+    tx:{icon:"📋",label:"Reset Transaksi",color:"#ea580c",border:"#fed7aa",bg:"#fff7ed",
+      desc:`Hapus semua data transaksi (${txCount} transaksi). Data pelanggan & saldo tetap.`,
+      confirm:`${txCount} transaksi akan dihapus permanen.`},
+    full:{icon:"🔥",label:"Reset Penuh (Event Baru)",color:"#dc2626",border:"#fca5a5",bg:"#fef2f2",
+      desc:`Hapus SEMUA transaksi (${txCount}), pelanggan (${custCount}), dan riwayat saldo. Gunakan untuk memulai event baru dari awal.`,
+      confirm:`${txCount} transaksi, ${custCount} pelanggan & semua riwayat saldo akan dihapus PERMANEN.`},
+    tenant:{icon:"🏪",label:"Reset Tenant & Menu",color:"#7c3aed",border:"#c4b5fd",bg:"#f5f0ff",
+      desc:`Hapus semua tenant (${tenantCount}) dan menu (${menuCount}). Hanya aktif setelah transaksi dikosongkan.`,
+      confirm:`${tenantCount} tenant dan ${menuCount} menu akan dihapus permanen.`,
+      disabled:!txCleared,
+      disabledMsg:`Tidak bisa dihapus — masih ada ${txCount} transaksi aktif. Reset transaksi dulu.`},
+  };
 
   return(
-    <div style={{maxWidth:500}}>
-      <h2 style={{margin:"0 0 6px",fontSize:20,fontWeight:800,color:"#dc2626"}}>🗑️ Reset Data Transaksi</h2>
-      <p style={{color:"#6b7280",fontSize:13,margin:"0 0 20px"}}>Hapus SEMUA data transaksi secara permanen. Gunakan dengan sangat hati-hati.</p>
+    <div style={{maxWidth:560}}>
+      <h2 style={{margin:"0 0 6px",fontSize:20,fontWeight:800,color:"#dc2626"}}>🗑️ Reset Data</h2>
+      <p style={{color:"#6b7280",fontSize:13,margin:"0 0 20px"}}>Hapus data sistem secara permanen. Gunakan dengan sangat hati-hati.</p>
 
       {/* ── TERKUNCI ── */}
       {!unlocked&&(
@@ -1379,59 +1411,63 @@ function ResetPanel({transactions,settings,onSaveTx}){
         </div>
       )}
 
-      {/* ── TERBUKA — IDLE ── */}
+      {/* ── TERBUKA — PILIH MODE ── */}
       {unlocked&&step===0&&(
-        <div style={{background:"#fff",borderRadius:18,padding:24,border:"2px solid #fecaca"}}>
-          <div style={{background:"#fef2f2",borderRadius:12,padding:16,marginBottom:20}}>
-            <p style={{color:"#dc2626",fontWeight:700,margin:"0 0 6px",fontSize:14}}>⚠️ Perhatian!</p>
-            <p style={{color:"#374151",fontSize:13,margin:0}}>Saat ini terdapat <strong style={{color:"#dc2626"}}>{transactions.length} transaksi</strong> yang akan dihapus permanen. Pastikan sudah backup sebelum melanjutkan.</p>
-          </div>
-          <button onClick={()=>setStep(1)}
-            style={{width:"100%",padding:"14px",background:"#dc2626",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:"pointer",fontSize:15,fontFamily:"'Plus Jakarta Sans',sans-serif",marginBottom:10}}
-            onMouseOver={e=>e.currentTarget.style.background="#b91c1c"} onMouseOut={e=>e.currentTarget.style.background="#dc2626"}>
-            🗑️ Reset Semua Transaksi
-          </button>
+        <div style={{display:"flex",flexDirection:"column",gap:12}}>
+          {Object.entries(modeInfo).map(([k,m])=>(
+            <div key={k} style={{background:"#fff",border:`2px solid ${m.border}`,borderRadius:16,padding:18}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap",marginBottom:10}}>
+                <div style={{flex:1}}>
+                  <p style={{margin:"0 0 4px",fontWeight:800,color:m.color,fontSize:15}}>{m.icon} {m.label}</p>
+                  <p style={{margin:0,color:"#6b7280",fontSize:13}}>{m.desc}</p>
+                  {m.disabled&&<p style={{margin:"6px 0 0",color:"#9ca3af",fontSize:12,fontWeight:600}}>🔒 {m.disabledMsg}</p>}
+                </div>
+              </div>
+              <button onClick={()=>!m.disabled&&startMode(k)} disabled={m.disabled}
+                style={{width:"100%",padding:"11px",background:m.disabled?"#f3f4f6":m.bg,color:m.disabled?"#9ca3af":m.color,border:`1px solid ${m.disabled?"#e5e7eb":m.border}`,borderRadius:10,fontWeight:700,cursor:m.disabled?"not-allowed":"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                {m.disabled?"🔒 Tidak Tersedia":`${m.icon} Lanjut Reset ${m.label}`}
+              </button>
+            </div>
+          ))}
           <button onClick={lockBack}
-            style={{width:"100%",padding:"12px",background:"#f3f4f6",color:"#6b7280",border:"none",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-            🔒 Kunci Kembali
+            style={{padding:"12px",background:"#f3f4f6",color:"#6b7280",border:"none",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+            🔒 Kunci Panel
           </button>
         </div>
       )}
 
-      {/* ── KONFIRMASI TAHAP 1 ── */}
-      {unlocked&&step===1&&(
-        <div className="pop-in" style={{background:"#fff",borderRadius:18,padding:24,border:"2px solid #f97316"}}>
+      {/* ── KONFIRMASI 1 ── */}
+      {unlocked&&step===1&&mode&&(
+        <div className="pop-in" style={{background:"#fff",borderRadius:18,padding:24,border:`2px solid ${modeInfo[mode].border}`}}>
           <div style={{textAlign:"center",marginBottom:18}}>
             <div style={{fontSize:48,marginBottom:8}}>⚠️</div>
-            <h3 style={{margin:0,fontSize:18,fontWeight:800,color:"#ea580c"}}>Konfirmasi Pertama</h3>
-            <p style={{color:"#374151",fontSize:14,margin:"10px 0 0"}}>Anda yakin ingin menghapus <strong>{transactions.length} transaksi</strong>?</p>
+            <h3 style={{margin:0,fontSize:18,fontWeight:800,color:modeInfo[mode].color}}>Konfirmasi — {modeInfo[mode].label}</h3>
+            <p style={{color:"#374151",fontSize:14,margin:"10px 0 0"}}>{modeInfo[mode].confirm}</p>
             <p style={{color:"#9ca3af",fontSize:13,margin:"6px 0 0"}}>Tindakan ini <strong>tidak dapat dibatalkan.</strong></p>
           </div>
           <div style={{display:"flex",gap:12}}>
             <button onClick={()=>setStep(0)} style={{...btnSec,flex:1}}>Batal</button>
             <button onClick={()=>setStep(2)}
-              style={{flex:1,padding:"13px",background:"#ea580c",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
-              onMouseOver={e=>e.currentTarget.style.background="#c2410c"} onMouseOut={e=>e.currentTarget.style.background="#ea580c"}>
+              style={{flex:1,padding:"13px",background:modeInfo[mode].color,color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
               Ya, Lanjutkan →
             </button>
           </div>
         </div>
       )}
 
-      {/* ── KONFIRMASI TAHAP 2 ── */}
-      {unlocked&&step===2&&(
+      {/* ── KONFIRMASI 2 ── */}
+      {unlocked&&step===2&&mode&&(
         <div className="pop-in" style={{background:"#fff",borderRadius:18,padding:24,border:"2px solid #dc2626"}}>
           <div style={{textAlign:"center",marginBottom:18}}>
             <div style={{fontSize:48,marginBottom:8}}>🚨</div>
             <h3 style={{margin:0,fontSize:18,fontWeight:800,color:"#dc2626"}}>Konfirmasi Akhir</h3>
-            <p style={{color:"#374151",fontSize:14,margin:"10px 0 0"}}>Ini adalah konfirmasi terakhir.</p>
-            <p style={{color:"#dc2626",fontSize:14,margin:"6px 0 0",fontWeight:700}}>Semua {transactions.length} transaksi akan dihapus PERMANEN.</p>
+            <p style={{color:"#dc2626",fontSize:14,margin:"10px 0 0",fontWeight:700}}>{modeInfo[mode].confirm}</p>
+            <p style={{color:"#9ca3af",fontSize:13,margin:"6px 0 0"}}>Ini adalah konfirmasi terakhir sebelum data dihapus.</p>
           </div>
           <div style={{display:"flex",gap:12}}>
             <button onClick={()=>setStep(0)} style={{...btnSec,flex:1}}>Batalkan</button>
             <button onClick={doReset} disabled={loading}
-              style={{flex:1,padding:"13px",background:loading?"#9ca3af":"#dc2626",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:loading?"not-allowed":"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
-              onMouseOver={e=>{if(!loading)e.currentTarget.style.background="#b91c1c";}} onMouseOut={e=>{if(!loading)e.currentTarget.style.background="#dc2626";}}>
+              style={{flex:1,padding:"13px",background:loading?"#9ca3af":"#dc2626",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:loading?"not-allowed":"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
               {loading?"⏳ Menghapus...":"🗑️ HAPUS SEKARANG"}
             </button>
           </div>
@@ -1443,7 +1479,7 @@ function ResetPanel({transactions,settings,onSaveTx}){
         <div className="pop-in" style={{background:"#fff",borderRadius:18,padding:32,border:"2px solid #dcfce7",textAlign:"center"}}>
           <div style={{fontSize:56,marginBottom:12}}>✅</div>
           <h3 style={{margin:"0 0 8px",fontSize:18,fontWeight:800,color:"#16a34a"}}>Reset Berhasil!</h3>
-          <p style={{color:"#6b7280",fontSize:14,margin:"0 0 20px"}}>Semua data transaksi telah dihapus.</p>
+          <p style={{color:"#6b7280",fontSize:14,margin:"0 0 20px"}}>{doneMsg}</p>
           <button onClick={lockBack}
             style={{width:"100%",padding:"13px",background:"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
             onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
