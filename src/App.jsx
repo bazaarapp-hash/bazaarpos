@@ -770,6 +770,7 @@ function AdminDashboard(props){
   const todayTx=transactions.filter(t=>t.date===todayStr());
   const tabs=[
     {k:"tenants",i:"🏪",l:"Tenant"},{k:"wallet",i:"💰",l:"Kasir Top Up"},
+    {k:"po",i:"📦",l:"Pre-Order"},
     {k:"transactions",i:"📋",l:"Transaksi"},
     {k:"report",i:"📑",l:"Laporan"},{k:"summary",i:"📊",l:"Rekap"},{k:"backup",i:"💾",l:"Backup"},
   ];
@@ -1944,13 +1945,16 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
 }
 
 // ─── Pre-Order Manager (Admin & SuperAdmin) ───────────────────────────────────
+// ─── Pre-Order Manager (Admin & SuperAdmin) ───────────────────────────────────
+// Setiap order disimpan TERPISAH per tenant (1 sesi checkout → N order records)
+// groupNota menghubungkan semua order dari sesi yang sama
 function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCustomers,onSaveWalletLogs,onSaveOrders,adminData}){
   const [subTab,setSubTab]=useState("new");
+  // PO Baru
   const [custSearch,setCustSearch]=useState("");
   const [selCust,setSelCust]=useState(null);
   const [activeTenant,setActiveTenant]=useState(null);
-  const [cart,setCart]=useState([]);
-  const [showCheckout,setShowCheckout]=useState(false);
+  const [cart,setCart]=useState([]); // [{tenantId,tenantName,tenantCode,menuId,menuCode,menuName,price,qty}]
   const [showScanner,setShowScanner]=useState(false);
   const [scanPhone,setScanPhone]=useState("");
   const [scanError,setScanError]=useState("");
@@ -1960,8 +1964,8 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
   const [processing,setProcessing]=useState(false);
   const [successMsg,setSuccessMsg]=useState("");
   // PO Tercatat
-  const [poTenantFilter,setPOTenantFilter]=useState("all");
   const [poSearch,setPOSearch]=useState("");
+  const [poTenantFilter,setPOTenantFilter]=useState("all");
   const [verifyOrderId,setVerifyOrderId]=useState(null);
   const [showVerifyScanner,setShowVerifyScanner]=useState(false);
   const [verifyScan,setVerifyScan]=useState("");
@@ -1970,17 +1974,18 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
   const scanRef=useRef(null);
 
   const total=cart.reduce((s,it)=>s+it.price*it.qty,0);
+  const tenantIds=[...new Set(cart.map(it=>it.tenantId))];
 
   const addToCart=(menu,tenant)=>{
     const ex=cart.find(c=>c.menuId===menu.id);
     if(ex) setCart(p=>p.map(c=>c.menuId===menu.id?{...c,qty:c.qty+1}:c));
-    else setCart(p=>[...p,{menuId:menu.id,menuCode:menu.code,menuName:menu.name,price:menu.price,qty:1,tenantId:tenant.id,tenantName:tenant.name}]);
+    else setCart(p=>[...p,{menuId:menu.id,menuCode:menu.code,menuName:menu.name,price:menu.price,qty:1,tenantId:tenant.id,tenantCode:tenant.code,tenantName:tenant.name}]);
   };
   const updQty=(menuId,q)=>{if(q<=0)setCart(p=>p.filter(c=>c.menuId!==menuId));else setCart(p=>p.map(c=>c.menuId===menuId?{...c,qty:q}:c));};
 
-  // QR Scanner for checkout
-  const startScanner=async()=>{
-    setScanPhone("");setScanError("");setPinInput("");setPinError("");setScannedCust(null);setShowScanner(true);
+  // QR Scanner
+  const startScan=async(onFound)=>{
+    setScanPhone("");setScanError("");setPinInput("");setPinError("");setScannedCust(null);
     if(!window.jsQR){await new Promise((res,rej)=>{const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
     try{
       const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"},audio:false});
@@ -1989,97 +1994,122 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
           if(!videoRef.current||!window.jsQR)return;
           const c=document.createElement("canvas");c.width=videoRef.current.videoWidth;c.height=videoRef.current.videoHeight;
           const ctx=c.getContext("2d");ctx.drawImage(videoRef.current,0,0);
-          const img=ctx.getImageData(0,0,c.width,c.height);
-          const code=window.jsQR(img.data,img.width,img.height);
+          const code=window.jsQR(ctx.getImageData(0,0,c.width,c.height).data,c.width,c.height);
           if(code&&code.data){
             const sc=code.data.trim();
             const found=(customers||[]).find(c=>c.id===sc)||(customers||[]).find(c=>c.phone===sc.replace(/\D/g,""));
-            if(found){setScanPhone(found.id);setScannedCust(found);}
-            else setScanPhone(sc);
-            stopScanner();
+            onFound(sc,found);
+            stopScan();
           }
         },500);
       }
     }catch(e){setScanError("Gagal akses kamera: "+e.message);}
   };
-  const stopScanner=()=>{clearInterval(scanRef.current);if(videoRef.current&&videoRef.current.srcObject){videoRef.current.srcObject.getTracks().forEach(t=>t.stop());videoRef.current.srcObject=null;}};
-  const closeScanner=()=>{stopScanner();setShowScanner(false);setScanPhone("");setScanError("");setPinInput("");setPinError("");setScannedCust(null);};
+  const stopScan=()=>{clearInterval(scanRef.current);if(videoRef.current?.srcObject){videoRef.current.srcObject.getTracks().forEach(t=>t.stop());videoRef.current.srcObject=null;}};
+  const closeScanner=()=>{stopScan();setShowScanner(false);setScanPhone("");setScanError("");setPinInput("");setPinError("");setScannedCust(null);};
+  const closeVerify=()=>{stopScan();setShowVerifyScanner(false);setVerifyOrderId(null);setVerifyScan("");setVerifyError("");};
 
+  // Proses checkout: buat order TERPISAH per tenant
   const handleCheckout=async()=>{
     const cust=scannedCust||customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone);
     if(!cust){setScanError("Pelanggan tidak ditemukan!");return;}
+    // Verifikasi: QR harus cocok dengan pelanggan yang dipilih
+    if(selCust&&cust.id!==selCust.id){setScanError(`❌ QR Code bukan milik ${selCust.name}! Scan QR yang benar.`);return;}
     if(cust.pin&&pinInput!==cust.pin){setPinError("❌ PIN salah!");setPinInput("");return;}
     if(cust.balance<total){setScanError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(total)}`);return;}
     setProcessing(true);
-    const nota=`PO-${todayStr().replace(/-/g,"")}-${String((orders||[]).filter(o=>o.date===todayStr()).length+1).padStart(3,"0")}`;
+
+    // Generate group nota
+    const todayOrders=(orders||[]).filter(o=>o.date===todayStr());
+    const groupSeq=String(todayOrders.reduce((max,o)=>Math.max(max,parseInt((o.groupNota||"PO-0-0").split("-").pop())||0),0)+1).padStart(3,"0");
+    const groupNota=`PO-${todayStr().replace(/-/g,"")}-${groupSeq}`;
+    const groupId=uid();
     const balBefore=cust.balance; const balAfter=balBefore-total;
-    const order={id:uid(),nota,customerId:cust.id,customerName:cust.name,customerPhone:cust.phone,
-      items:cart,total,balanceBefore:balBefore,balanceAfter:balAfter,
-      status:"pending",date:todayStr(),time:timeStr(),timestamp:new Date().toISOString(),
-      createdBy:adminData?.name||"Admin"};
-    await onSaveOrders([...(orders||[]),order]);
-    const updCusts=customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c);
-    await onSaveCustomers(updCusts);
+
+    // Buat 1 order record per tenant
+    const newOrders=[];
+    for(const tenantId of tenantIds){
+      const tenant=tenants.find(t=>t.id===tenantId);
+      const items=cart.filter(it=>it.tenantId===tenantId);
+      const subtotal=items.reduce((s,it)=>s+it.price*it.qty,0);
+      const nota=`${groupNota}/${tenant?.code||tenantId}`;
+      newOrders.push({
+        id:uid(), groupId, groupNota, nota,
+        customerId:cust.id, customerName:cust.name, customerPhone:cust.phone,
+        tenantId, tenantCode:tenant?.code||"", tenantName:tenant?.name||"",
+        items:items.map(it=>({menuId:it.menuId,menuCode:it.menuCode,menuName:it.menuName,price:it.price,qty:it.qty})),
+        subtotal, groupTotal:total, status:"pending",
+        date:todayStr(), time:timeStr(), timestamp:new Date().toISOString(),
+        createdBy:adminData?.name||"Admin",
+      });
+    }
+    await onSaveOrders([...(orders||[]),...newOrders]);
+
+    // Potong saldo sekali untuk total group
+    await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
     const logEntry={id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
       type:"payment",amount:total,balanceBefore:balBefore,balanceAfter:balAfter,
-      nota,tenantId:"PO",tenantName:"Pre-Order",
+      nota:groupNota,tenantId:"PO",tenantName:"Pre-Order",
       items:cart,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
     await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+
+    // Kirim WA nota PO
     if(settings?.fonnteToken){
-      const lines=cart.map(it=>`🍽️ [${it.tenantName}] ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
-      sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n📦 *Pre-Order Terdaftar!*\n📋 Nota: ${nota}\n👤 Nama: ${cust.name}\n━━━━━━━━━━━━━━━\n${lines}\n━━━━━━━━━━━━━━━\n💰 *TOTAL: ${idr(total)}*\n🪙 Sisa Saldo: ${idr(balAfter)}\n\nAmbil pesanan saat bazaar berlangsung. Terima kasih! 🙏`});
+      const lines=tenantIds.map(tid=>{
+        const t=tenants.find(x=>x.id===tid);
+        const its=cart.filter(it=>it.tenantId===tid);
+        return `🏪 *${t?.name||tid}*\n`+its.map(it=>`  🍽️ ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
+      }).join("\n");
+      const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n📦 *NOTA PRE-ORDER*\n📋 Nota: *${groupNota}*\n👤 Nama: ${cust.name}\n📅 ${todayStr()} ${timeStr()}\n━━━━━━━━━━━━━━━\n${lines}\n━━━━━━━━━━━━━━━\n💰 *TOTAL: ${idr(total)}*\n🪙 Sisa Saldo: ${idr(balAfter)}\n\nAmbil pesanan saat bazaar. Terima kasih! 🙏`;
+      sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg});
     }
-    closeScanner();setCart([]);setShowCheckout(false);setSelCust(null);setProcessing(false);
-    setSuccessMsg(`✅ PO ${nota} berhasil! Saldo ${cust.name} -${idr(total)}`);
+
+    closeScanner();setCart([]);setSelCust(null);setProcessing(false);
+    setSuccessMsg(`✅ ${newOrders.length} PO (${groupNota}) berhasil! Saldo -${idr(total)}`);
     setTimeout(()=>setSuccessMsg(""),5000);
   };
 
-  // Verify PO (ubah status pending → completed)
-  const startVerifyScanner=async(orderId)=>{
-    setVerifyOrderId(orderId);setVerifyScan("");setVerifyError("");setShowVerifyScanner(true);
-    if(!window.jsQR){await new Promise((res,rej)=>{const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
-    try{
-      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"},audio:false});
-      if(videoRef.current){videoRef.current.srcObject=stream;videoRef.current.play();
-        scanRef.current=setInterval(()=>{
-          if(!videoRef.current||!window.jsQR)return;
-          const c=document.createElement("canvas");c.width=videoRef.current.videoWidth;c.height=videoRef.current.videoHeight;
-          const ctx=c.getContext("2d");ctx.drawImage(videoRef.current,0,0);
-          const img=ctx.getImageData(0,0,c.width,c.height);
-          const code=window.jsQR(img.data,img.width,img.height);
-          if(code&&code.data){setVerifyScan(code.data.trim());stopScanner();}
-        },500);
-      }
-    }catch(e){setVerifyError("Gagal akses kamera: "+e.message);}
-  };
-  const closeVerifyScanner=()=>{stopScanner();setShowVerifyScanner(false);setVerifyOrderId(null);setVerifyScan("");setVerifyError("");};
-
+  // Verifikasi pengambilan PO (per tenant order)
   const doVerify=async()=>{
     const order=(orders||[]).find(o=>o.id===verifyOrderId);
     if(!order){setVerifyError("PO tidak ditemukan!");return;}
-    const scanned=verifyScan.trim();
-    const cust=customers.find(c=>c.id===scanned)||customers.find(c=>c.phone===scanned.replace(/\D/g,""));
-    if(!cust||cust.id!==order.customerId){setVerifyError("❌ QR Code tidak cocok dengan pelanggan PO ini!");return;}
-    const updOrders=(orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",verifiedAt:new Date().toISOString(),verifiedBy:adminData?.name||"Admin"}:o);
-    await onSaveOrders(updOrders);
-    closeVerifyScanner();
-    setSuccessMsg(`✅ PO ${order.nota} verified — status Selesai!`);
+    const sc=verifyScan.trim();
+    const cust=customers.find(c=>c.id===sc)||customers.find(c=>c.phone===sc.replace(/\D/g,""));
+    if(!cust||cust.id!==order.customerId){setVerifyError("❌ QR tidak cocok dengan pelanggan PO ini!");return;}
+    await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",verifiedAt:new Date().toISOString(),verifiedBy:adminData?.name||"Admin"}:o));
+    closeVerify();
+    setSuccessMsg(`✅ PO ${order.nota} (${order.tenantName}) — Selesai!`);
     setTimeout(()=>setSuccessMsg(""),4000);
   };
 
-  const pendingOrders=(orders||[]).filter(o=>o.status==="pending");
-  const filteredPO=pendingOrders.filter(o=>{
-    const tenantOk=poTenantFilter==="all"||o.items.some(it=>it.tenantId===poTenantFilter);
-    const searchOk=!poSearch||o.customerName.toLowerCase().includes(poSearch.toLowerCase())||o.nota.toLowerCase().includes(poSearch.toLowerCase());
+  // Kirim ulang nota PO
+  const resendPO=async(order)=>{
+    if(!settings?.fonnteToken){alert("Fonnte token belum diisi di Pengaturan.");return;}
+    const cust=customers.find(c=>c.id===order.customerId);
+    if(!cust){alert("Pelanggan tidak ditemukan.");return;}
+    const items=order.items.map(it=>`  🍽️ ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
+    const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n📦 *Nota Pre-Order (${order.status==="pending"?"Belum Diambil":"Sudah Selesai"})*\n📋 Nota: *${order.nota}*\n🏪 Tenant: ${order.tenantName}\n👤 Nama: ${cust.name}\n📅 ${order.date}\n━━━━━━━━━━━━━━━\n${items}\n━━━━━━━━━━━━━━━\n💰 *SUBTOTAL: ${idr(order.subtotal)}*\n\n${order.status==="completed"?"✅ Pesanan ini sudah diambil.":"⏳ Pesanan belum diambil."}\n\nTerima kasih! 🙏`;
+    const ok=await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg});
+    alert(ok?"✅ Nota PO berhasil dikirim!":"❌ Gagal kirim WA.");
+  };
+
+  // Data PO Tercatat — filtered per tenant
+  const allPending=(orders||[]).filter(o=>o.status==="pending");
+  const filteredPO=allPending.filter(o=>{
+    const tenantOk=poTenantFilter==="all"||o.tenantId===poTenantFilter;
+    const searchOk=!poSearch.trim()||(o.customerName.toLowerCase().includes(poSearch.toLowerCase())||o.customerPhone.replace(/\D/g,"").includes(poSearch.replace(/\D/g,""))||o.nota.toLowerCase().includes(poSearch.toLowerCase()));
     return tenantOk&&searchOk;
   });
 
   return(
     <div>
-      {/* Modal checkout QR scan */}
+      {/* ── Modal Checkout Scan QR ── */}
       {showScanner&&(
-        <Modal title="📷 Scan QR + Verifikasi PIN" onClose={closeScanner}>
-          <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>Arahkan kamera ke QR Code kartu pelanggan.</p>
+        <Modal title="📷 Verifikasi Pelanggan + PIN" onClose={closeScanner}>
+          {selCust&&<div style={{background:"#f0f9ff",borderRadius:10,padding:"8px 14px",marginBottom:10}}>
+            <p style={{margin:0,fontSize:13,color:"#0284c7",fontWeight:600}}>⚠️ QR harus milik: <strong>{selCust.name}</strong></p>
+          </div>}
+          <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>Scan QR Code pelanggan.</p>
           {!scanPhone&&(
             <div style={{position:"relative",borderRadius:14,overflow:"hidden",background:"#000",marginBottom:12,height:220}}>
               <video ref={videoRef} style={{width:"100%",height:"100%",objectFit:"cover"}} playsInline muted/>
@@ -2091,7 +2121,10 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
           {scanError&&<div style={{background:"#fef2f2",borderRadius:10,padding:"8px 12px",color:"#dc2626",fontWeight:600,fontSize:13,marginBottom:10}}>❌ {scanError}</div>}
           {scanPhone&&!scanError&&(()=>{
             const cust=scannedCust||customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone);
-            if(!cust) return <div style={{background:"#fef2f2",borderRadius:12,padding:"12px",marginBottom:12}}><p style={{margin:0,color:"#dc2626",fontWeight:600}}>❌ Pelanggan tidak ditemukan</p></div>;
+            const matched=cust&&(!selCust||cust.id===selCust.id);
+            if(!cust||!matched) return <div style={{background:"#fef2f2",borderRadius:12,padding:"12px",marginBottom:10}}>
+              <p style={{margin:0,color:"#dc2626",fontWeight:700}}>❌ {!cust?"Pelanggan tidak ditemukan":`QR bukan milik ${selCust?.name}`}</p>
+            </div>;
             return(
               <div>
                 <div style={{background:cust.balance>=total?"#f0fdf4":"#fef2f2",borderRadius:12,padding:"12px",marginBottom:10}}>
@@ -2105,11 +2138,9 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
                 </div>
                 {cust.balance>=total&&cust.pin&&(
                   <div style={{marginBottom:10}}>
-                    <p style={{textAlign:"center",fontWeight:700,color:"#374151",fontSize:13,margin:"0 0 8px"}}>🔐 Masukkan PIN Pelanggan</p>
+                    <p style={{textAlign:"center",fontWeight:700,color:"#374151",fontSize:13,margin:"0 0 8px"}}>🔐 PIN Pelanggan</p>
                     <div style={{display:"flex",gap:8,justifyContent:"center",marginBottom:6}}>
-                      {[0,1,2,3].map(i=>(
-                        <div key={i} style={{width:46,height:56,background:pinInput.length>i?"#4c1d95":"#f9fafb",border:`2px solid ${pinInput.length>i?"#7c3aed":"#e5e7eb"}`,borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,color:"#fff"}}>{pinInput.length>i?"●":""}</div>
-                      ))}
+                      {[0,1,2,3].map(i=><div key={i} style={{width:46,height:56,background:pinInput.length>i?"#4c1d95":"#f9fafb",border:`2px solid ${pinInput.length>i?"#7c3aed":"#e5e7eb"}`,borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,color:"#fff"}}>{pinInput.length>i?"●":""}</div>)}
                     </div>
                     {pinError&&<p style={{textAlign:"center",color:"#dc2626",fontSize:12,fontWeight:600,margin:"2px 0 6px"}}>{pinError}</p>}
                     <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,maxWidth:200,margin:"0 auto"}}>
@@ -2127,7 +2158,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
           })()}
           <div style={{display:"flex",gap:10,marginTop:8}}>
             <button onClick={closeScanner} style={{...btnSec,flex:1}}>Batal</button>
-            {scanPhone&&(()=>{const cust=scannedCust||customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone);return cust&&cust.balance>=total&&(pinInput.length===4||!cust.pin);})()?
+            {scanPhone&&(()=>{const cust=scannedCust||customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone);const ok=cust&&(!selCust||cust.id===selCust.id)&&cust.balance>=total&&(pinInput.length===4||!cust.pin);return ok;})()?
               <button onClick={handleCheckout} disabled={processing}
                 style={{flex:2,padding:"13px",background:processing?"#9ca3af":"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:processing?"not-allowed":"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
                 {processing?"⏳ Memproses...":"✅ Konfirmasi PO"}
@@ -2136,10 +2167,11 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
         </Modal>
       )}
 
-      {/* Modal verify QR */}
+      {/* ── Modal Verify Scan ── */}
       {showVerifyScanner&&(
-        <Modal title="📷 Scan QR Verifikasi Pengambilan" onClose={closeVerifyScanner}>
-          <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>Scan QR pelanggan untuk konfirmasi pengambilan PO — tidak memotong saldo.</p>
+        <Modal title="📷 Scan QR — Konfirmasi Pengambilan" onClose={closeVerify}>
+          <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>Scan QR pelanggan untuk konfirmasi pengambilan. Tidak memotong saldo.</p>
+          {(()=>{const ord=(orders||[]).find(o=>o.id===verifyOrderId);return ord&&<div style={{background:"#f0f9ff",borderRadius:10,padding:"8px 14px",marginBottom:10}}><p style={{margin:0,fontSize:13,color:"#0284c7",fontWeight:600}}>📋 {ord.nota} — {ord.tenantName} — {ord.customerName}</p></div>;})()} 
           {!verifyScan&&(
             <div style={{position:"relative",borderRadius:14,overflow:"hidden",background:"#000",marginBottom:12,height:220}}>
               <video ref={videoRef} style={{width:"100%",height:"100%",objectFit:"cover"}} playsInline muted/>
@@ -2149,24 +2181,19 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
             </div>
           )}
           {verifyError&&<div style={{background:"#fef2f2",borderRadius:10,padding:"8px 12px",color:"#dc2626",fontWeight:600,fontSize:13,marginBottom:10}}>❌ {verifyError}</div>}
-          {verifyScan&&!verifyError&&(()=>{
-            const order=(orders||[]).find(o=>o.id===verifyOrderId);
-            const cust=order?customers.find(c=>c.id===order.customerId):null;
-            const scannedOk=cust&&(verifyScan===cust.id||verifyScan.replace(/\D/g,"")===cust.phone);
-            return(
-              <div style={{background:scannedOk?"#f0fdf4":"#fef2f2",borderRadius:12,padding:"12px",marginBottom:10}}>
-                <p style={{margin:"0 0 4px",fontWeight:800,color:scannedOk?"#14532d":"#dc2626"}}>{scannedOk?"✅ QR Cocok!":"❌ QR Tidak Cocok"}</p>
-                {cust&&<p style={{margin:0,color:"#6b7280",fontSize:13}}>{cust.name} • {order?.nota}</p>}
-                {!scannedOk&&<p style={{margin:"4px 0 0",color:"#dc2626",fontSize:12}}>QR bukan milik pelanggan PO ini.</p>}
-              </div>
-            );
+          {verifyScan&&(()=>{
+            const ord=(orders||[]).find(o=>o.id===verifyOrderId);
+            const cust=ord&&customers.find(c=>c.id===ord.customerId);
+            const ok=cust&&(verifyScan===cust.id||verifyScan.replace(/\D/g,"")===cust.phone);
+            return<div style={{background:ok?"#f0fdf4":"#fef2f2",borderRadius:12,padding:"12px",marginBottom:10}}>
+              <p style={{margin:"0 0 2px",fontWeight:800,color:ok?"#14532d":"#dc2626"}}>{ok?"✅ QR Cocok!":"❌ QR Tidak Cocok"}</p>
+              {cust&&<p style={{margin:0,color:"#6b7280",fontSize:13}}>{cust.name}</p>}
+            </div>;
           })()}
-          <div style={{display:"flex",gap:10,marginTop:8}}>
-            <button onClick={closeVerifyScanner} style={{...btnSec,flex:1}}>Batal</button>
-            {verifyScan&&(()=>{const order=(orders||[]).find(o=>o.id===verifyOrderId);const cust=order&&customers.find(c=>c.id===order.customerId);return cust&&(verifyScan===cust.id||verifyScan.replace(/\D/g,"")===cust.phone);})()?
-              <button onClick={doVerify} style={{flex:2,padding:"13px",background:"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-                ✅ Selesaikan PO
-              </button>:null}
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={closeVerify} style={{...btnSec,flex:1}}>Batal</button>
+            {verifyScan&&(()=>{const ord=(orders||[]).find(o=>o.id===verifyOrderId);const cust=ord&&customers.find(c=>c.id===ord.customerId);return cust&&(verifyScan===cust.id||verifyScan.replace(/\D/g,"")===cust.phone);})()?
+              <button onClick={doVerify} style={{flex:2,padding:"13px",background:"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>✅ Selesaikan PO</button>:null}
           </div>
         </Modal>
       )}
@@ -2175,10 +2202,9 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:10}}>
         <div>
           <h2 style={{margin:0,fontSize:20,fontWeight:800,color:"#1c0a00"}}>📦 Pre-Order</h2>
-          <p style={{color:"#9ca3af",margin:"4px 0 0",fontSize:13}}>{(orders||[]).filter(o=>o.status==="pending").length} PO belum selesai • {(orders||[]).filter(o=>o.status==="completed").length} selesai</p>
+          <p style={{color:"#9ca3af",margin:"4px 0 0",fontSize:13}}>{allPending.length} PO belum selesai • {(orders||[]).filter(o=>o.status==="completed").length} selesai</p>
         </div>
       </div>
-
       {successMsg&&<div className="pop-in" style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:12,padding:"10px 16px",marginBottom:16,fontWeight:600,fontSize:13,color:"#16a34a"}}>{successMsg}</div>}
 
       {/* Sub-tabs */}
@@ -2194,21 +2220,19 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
       {/* ── Tab PO Baru ── */}
       {subTab==="new"&&(
         <div>
-          {/* Step 1: Pilih Pelanggan */}
-          <div style={{background:"#fff",borderRadius:16,padding:18,boxShadow:"0 2px 8px rgba(0,0,0,.05)",marginBottom:16}}>
-            <p style={{fontWeight:800,color:"#ea580c",fontSize:14,margin:"0 0 12px",borderLeft:"4px solid #ea580c",paddingLeft:10}}>👤 Pilih Pelanggan</p>
-            <div style={{position:"relative",marginBottom:10}}>
-              <input placeholder="🔍 Cari nama atau nomor WA..." value={custSearch} onChange={e=>setCustSearch(e.target.value)}
-                style={{width:"100%",border:"2px solid #e5e7eb",borderRadius:10,padding:"10px 14px",fontSize:14,outline:"none",color:"#111",boxSizing:"border-box",fontFamily:"'Plus Jakarta Sans',sans-serif"}}
-                onFocus={e=>e.target.style.borderColor="#ea580c"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
-            </div>
+          {/* Pilih Pelanggan */}
+          <div style={{background:"#fff",borderRadius:16,padding:18,boxShadow:"0 2px 8px rgba(0,0,0,.05)",marginBottom:14}}>
+            <p style={{fontWeight:800,color:"#ea580c",fontSize:14,margin:"0 0 10px",borderLeft:"4px solid #ea580c",paddingLeft:10}}>👤 Pilih Pelanggan</p>
+            <input placeholder="🔍 Cari nama atau nomor WA..." value={custSearch} onChange={e=>setCustSearch(e.target.value)}
+              style={{width:"100%",border:"2px solid #e5e7eb",borderRadius:10,padding:"10px 14px",fontSize:14,outline:"none",color:"#111",boxSizing:"border-box",fontFamily:"'Plus Jakarta Sans',sans-serif",marginBottom:8}}
+              onFocus={e=>e.target.style.borderColor="#ea580c"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
             {custSearch&&(()=>{
-              const results=customers.filter(c=>c.name.toLowerCase().includes(custSearch.toLowerCase())||c.phone.includes(custSearch.replace(/\D/g,"")));
-              return results.length===0?<p style={{color:"#9ca3af",fontSize:13,textAlign:"center",margin:"8px 0"}}>Pelanggan tidak ditemukan</p>:
-                <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                  {results.slice(0,5).map(c=>(
+              const res=customers.filter(c=>c.name.toLowerCase().includes(custSearch.toLowerCase())||c.phone.replace(/\D/g,"").includes(custSearch.replace(/\D/g,"")));
+              return res.length===0?<p style={{color:"#9ca3af",fontSize:13,textAlign:"center",margin:"6px 0"}}>Tidak ditemukan</p>:
+                <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                  {res.slice(0,5).map(c=>(
                     <button key={c.id} onClick={()=>{setSelCust(c);setCustSearch("");}}
-                      style={{width:"100%",padding:"10px 14px",background:selCust?.id===c.id?"#fff7ed":"#f9fafb",border:`2px solid ${selCust?.id===c.id?"#ea580c":"#f3f4f6"}`,borderRadius:10,cursor:"pointer",textAlign:"left",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                      style={{padding:"10px 14px",background:selCust?.id===c.id?"#fff7ed":"#f9fafb",border:`2px solid ${selCust?.id===c.id?"#ea580c":"#f3f4f6"}`,borderRadius:10,cursor:"pointer",textAlign:"left",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
                       <p style={{margin:0,fontWeight:700,color:"#1c0a00",fontSize:14}}>{c.name}</p>
                       <p style={{margin:"2px 0 0",color:"#6b7280",fontSize:12}}>📱 {c.phone} • 🪙 {idr(c.balance)}</p>
                     </button>
@@ -2216,10 +2240,10 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
                 </div>;
             })()}
             {selCust&&(
-              <div style={{background:"#fff7ed",borderRadius:12,padding:"12px 16px",marginTop:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{background:"#fff7ed",borderRadius:12,padding:"12px 16px",marginTop:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div>
                   <p style={{margin:0,fontWeight:800,color:"#1c0a00",fontSize:15}}>{selCust.name}</p>
-                  <p style={{margin:"3px 0 0",color:"#6b7280",fontSize:13}}>📱 {selCust.phone}</p>
+                  <p style={{margin:"2px 0 0",color:"#6b7280",fontSize:13}}>📱 {selCust.phone}</p>
                 </div>
                 <div style={{textAlign:"right"}}>
                   <p style={{margin:0,color:"#9ca3af",fontSize:12}}>Saldo</p>
@@ -2229,64 +2253,73 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
             )}
           </div>
 
-          {/* Step 2: Pilih Menu per Tenant */}
-          <div style={{background:"#fff",borderRadius:16,padding:18,boxShadow:"0 2px 8px rgba(0,0,0,.05)",marginBottom:16}}>
-            <p style={{fontWeight:800,color:"#ea580c",fontSize:14,margin:"0 0 12px",borderLeft:"4px solid #ea580c",paddingLeft:10}}>🍽️ Pilih Menu</p>
-            {/* Tab tenant */}
+          {/* Pilih Menu per Tenant */}
+          <div style={{background:"#fff",borderRadius:16,padding:18,boxShadow:"0 2px 8px rgba(0,0,0,.05)",marginBottom:14}}>
+            <p style={{fontWeight:800,color:"#ea580c",fontSize:14,margin:"0 0 10px",borderLeft:"4px solid #ea580c",paddingLeft:10}}>🍽️ Pilih Menu per Tenant</p>
             <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
               {tenants.map(t=>(
-                <button key={t.id} onClick={()=>setActiveTenant(t)}
+                <button key={t.id} onClick={()=>setActiveTenant(activeTenant?.id===t.id?null:t)}
                   style={{padding:"7px 14px",background:activeTenant?.id===t.id?"#ea580c":"#f9fafb",color:activeTenant?.id===t.id?"#fff":"#374151",border:`1px solid ${activeTenant?.id===t.id?"#ea580c":"#e5e7eb"}`,borderRadius:20,cursor:"pointer",fontWeight:600,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-                  {t.code} — {t.name}
+                  {t.code} — {t.name} {cart.filter(c=>c.tenantId===t.id).length>0&&`(${cart.filter(c=>c.tenantId===t.id).reduce((s,c)=>s+c.qty,0)} item)`}
                 </button>
               ))}
             </div>
             {activeTenant&&(()=>{
               const tMenus=(menus||[]).filter(m=>m.tenantId===activeTenant.id);
-              return tMenus.length===0?<p style={{color:"#9ca3af",fontSize:13,textAlign:"center"}}>Belum ada menu untuk tenant ini.</p>:
+              return tMenus.length===0?<p style={{color:"#9ca3af",fontSize:13,textAlign:"center"}}>Belum ada menu.</p>:
                 <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10}}>
                   {tMenus.map(m=>(
                     <button key={m.id} onClick={()=>addToCart(m,activeTenant)} className="btn-press"
-                      style={{background:"#f9fafb",border:"1px solid #e5e7eb",borderRadius:12,padding:"12px",cursor:"pointer",textAlign:"left",fontFamily:"'Plus Jakarta Sans',sans-serif",transition:"all .15s"}}>
-                      <p style={{margin:"0 0 2px",fontSize:11,color:"#9ca3af"}}>[{m.code}]</p>
-                      <p style={{margin:"0 0 6px",fontWeight:700,color:"#1c0a00",fontSize:13,lineHeight:1.3}}>{m.name}</p>
-                      <p style={{margin:0,color:"#16a34a",fontWeight:800,fontSize:14}}>{idr(m.price)}</p>
-                      <p style={{margin:"4px 0 0",fontSize:11,color:"#6b7280",background:"#f0fdf4",borderRadius:6,padding:"2px 6px",display:"inline-block"}}>+ Tambah</p>
+                      style={{background:"#f9fafb",border:"1px solid #e5e7eb",borderRadius:12,padding:"12px",cursor:"pointer",textAlign:"left",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                      <p style={{margin:"0 0 2px",fontSize:10,color:"#9ca3af"}}>[{m.code}]</p>
+                      <p style={{margin:"0 0 4px",fontWeight:700,color:"#1c0a00",fontSize:13,lineHeight:1.3}}>{m.name}</p>
+                      <p style={{margin:0,color:"#16a34a",fontWeight:800,fontSize:13}}>{idr(m.price)}</p>
+                      {cart.find(c=>c.menuId===m.id)&&<p style={{margin:"3px 0 0",fontSize:11,color:"#ea580c",fontWeight:600}}>× {cart.find(c=>c.menuId===m.id).qty} di keranjang</p>}
                     </button>
                   ))}
                 </div>;
             })()}
           </div>
 
-          {/* Keranjang PO */}
+          {/* Keranjang */}
           {cart.length>0&&(
             <div style={{background:"#fff",borderRadius:16,padding:18,boxShadow:"0 4px 16px rgba(234,88,12,.1)",border:"1px solid #fed7aa",position:"sticky",bottom:10}}>
-              <p style={{fontWeight:800,color:"#ea580c",fontSize:14,margin:"0 0 10px"}}>🛒 Keranjang PO</p>
-              <div style={{maxHeight:160,overflowY:"auto",marginBottom:10}}>
-                {cart.map(it=>(
-                  <div key={it.menuId} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0",borderBottom:"1px solid #f9fafb"}}>
-                    <div style={{flex:1}}>
-                      <p style={{margin:0,fontWeight:600,color:"#1c0a00",fontSize:13}}>{it.menuName}</p>
-                      <p style={{margin:0,color:"#9ca3af",fontSize:11}}>{it.tenantName} • {idr(it.price)}/pcs</p>
-                    </div>
-                    <div style={{display:"flex",alignItems:"center",gap:6}}>
-                      <button onClick={()=>updQty(it.menuId,it.qty-1)} style={{width:26,height:26,borderRadius:"50%",background:"#fef2f2",color:"#dc2626",border:"none",cursor:"pointer",fontWeight:800,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"}}>−</button>
-                      <span style={{width:24,textAlign:"center",fontWeight:700,fontSize:14}}>{it.qty}</span>
-                      <button onClick={()=>updQty(it.menuId,it.qty+1)} style={{width:26,height:26,borderRadius:"50%",background:"#dcfce7",color:"#16a34a",border:"none",cursor:"pointer",fontWeight:800,fontSize:14,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
-                    </div>
-                    <span style={{fontWeight:700,color:"#1c0a00",fontSize:13,width:70,textAlign:"right"}}>{idr(it.qty*it.price)}</span>
+              <p style={{fontWeight:800,color:"#ea580c",fontSize:14,margin:"0 0 10px"}}>🛒 Keranjang PO — {tenantIds.length} Tenant</p>
+              {/* Group per tenant */}
+              {tenantIds.map(tid=>{
+                const tItems=cart.filter(it=>it.tenantId===tid);
+                const tTotal=tItems.reduce((s,it)=>s+it.price*it.qty,0);
+                const tName=tItems[0]?.tenantName||"";
+                return(
+                  <div key={tid} style={{marginBottom:10,background:"#f9fafb",borderRadius:10,padding:"10px 12px"}}>
+                    <p style={{margin:"0 0 6px",fontWeight:700,color:"#374151",fontSize:13}}>🏪 {tName} — {idr(tTotal)}</p>
+                    {tItems.map(it=>(
+                      <div key={it.menuId} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",borderBottom:"1px dashed #e5e7eb"}}>
+                        <span style={{flex:1,fontSize:13,color:"#1c0a00",fontWeight:600}}>{it.menuName}</span>
+                        <div style={{display:"flex",alignItems:"center",gap:6}}>
+                          <button onClick={()=>updQty(it.menuId,it.qty-1)} style={{width:24,height:24,borderRadius:"50%",background:"#fef2f2",color:"#dc2626",border:"none",cursor:"pointer",fontWeight:800,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center"}}>−</button>
+                          <span style={{width:22,textAlign:"center",fontWeight:700,fontSize:13}}>{it.qty}</span>
+                          <button onClick={()=>updQty(it.menuId,it.qty+1)} style={{width:24,height:24,borderRadius:"50%",background:"#dcfce7",color:"#16a34a",border:"none",cursor:"pointer",fontWeight:800,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
+                        </div>
+                        <span style={{fontWeight:700,color:"#1c0a00",fontSize:13,width:66,textAlign:"right"}}>{idr(it.qty*it.price)}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                );
+              })}
               <div style={{display:"flex",justifyContent:"space-between",borderTop:"2px solid #fed7aa",paddingTop:10,marginBottom:12}}>
                 <p style={{margin:0,fontWeight:700,color:"#374151"}}>TOTAL PO</p>
                 <p style={{margin:0,fontWeight:900,color:"#ea580c",fontSize:18}}>{idr(total)}</p>
               </div>
-              <button onClick={()=>{if(!selCust){alert("Pilih pelanggan terlebih dahulu!");return;}startScanner();}}
+              <button onClick={()=>{
+                  if(!selCust){alert("Pilih pelanggan terlebih dahulu!");return;}
+                  setShowScanner(true);
+                  startScan((sc,found)=>{setScanPhone(found?found.id:sc);setScannedCust(found||null);});
+                }}
                 style={{width:"100%",padding:"14px",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",color:"#fff",border:"none",borderRadius:12,fontWeight:800,fontSize:15,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
                 📷 Scan QR & Proses PO
               </button>
-              {!selCust&&<p style={{textAlign:"center",color:"#f97316",fontSize:12,margin:"6px 0 0"}}>⚠️ Pilih pelanggan dulu di atas</p>}
+              {!selCust&&<p style={{textAlign:"center",color:"#f97316",fontSize:12,margin:"6px 0 0"}}>⚠️ Pilih pelanggan dulu</p>}
             </div>
           )}
         </div>
@@ -2295,80 +2328,98 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
       {/* ── Tab PO Tercatat ── */}
       {subTab==="recorded"&&(
         <div>
+          {/* Filter & Search */}
           <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap"}}>
-            <input placeholder="🔍 Cari nama pelanggan atau nota..." value={poSearch} onChange={e=>setPOSearch(e.target.value)}
+            <input placeholder="🔍 Cari nama atau nomor HP pelanggan..."
+              value={poSearch} onChange={e=>setPOSearch(e.target.value)}
               style={{flex:1,minWidth:180,border:"2px solid #e5e7eb",borderRadius:10,padding:"10px 14px",fontSize:14,outline:"none",color:"#111",fontFamily:"'Plus Jakarta Sans',sans-serif"}}
               onFocus={e=>e.target.style.borderColor="#ea580c"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
             <select value={poTenantFilter} onChange={e=>setPOTenantFilter(e.target.value)}
-              style={{border:"2px solid #e5e7eb",borderRadius:10,padding:"10px 12px",fontSize:13,color:"#374151",fontFamily:"'Plus Jakarta Sans',sans-serif",outline:"none",cursor:"pointer"}}>
+              style={{border:"2px solid #e5e7eb",borderRadius:10,padding:"10px 12px",fontSize:13,color:"#374151",fontFamily:"'Plus Jakarta Sans',sans-serif",outline:"none"}}>
               <option value="all">Semua Tenant</option>
               {tenants.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
           </div>
 
-          {/* Stats */}
+          {/* Statistik */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
-            <div style={{background:"#fef3c7",border:"1px solid #fbbf24",borderRadius:12,padding:"10px 14px",textAlign:"center"}}>
+            <div style={{background:"#fef3c7",border:"1px solid #fbbf24",borderRadius:12,padding:"10px",textAlign:"center"}}>
               <p style={{margin:0,color:"#92400e",fontSize:12,fontWeight:600}}>⏳ Belum Selesai</p>
-              <p style={{margin:"4px 0 0",color:"#78350f",fontWeight:900,fontSize:22}}>{(orders||[]).filter(o=>o.status==="pending").length}</p>
+              <p style={{margin:"4px 0 0",color:"#78350f",fontWeight:900,fontSize:20}}>{filteredPO.length}</p>
             </div>
-            <div style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:12,padding:"10px 14px",textAlign:"center"}}>
+            <div style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:12,padding:"10px",textAlign:"center"}}>
               <p style={{margin:0,color:"#14532d",fontSize:12,fontWeight:600}}>✅ Selesai</p>
-              <p style={{margin:"4px 0 0",color:"#15803d",fontWeight:900,fontSize:22}}>{(orders||[]).filter(o=>o.status==="completed").length}</p>
+              <p style={{margin:"4px 0 0",color:"#15803d",fontWeight:900,fontSize:20}}>{(orders||[]).filter(o=>o.status==="completed"&&(poTenantFilter==="all"||o.tenantId===poTenantFilter)).length}</p>
             </div>
           </div>
 
           {filteredPO.length===0?<EmptyState icon="📦" text="Tidak ada PO yang menunggu."/>:
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
               {filteredPO.map(order=>(
-                <div key={order.id} style={{background:"#fff",border:"2px solid #fbbf24",borderRadius:16,padding:16,boxShadow:"0 2px 8px rgba(0,0,0,.04)"}}>
+                <div key={order.id} style={{background:"#fff",border:"2px solid #fbbf24",borderRadius:16,padding:16}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8,marginBottom:10}}>
                     <div>
                       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:4}}>
                         <span style={{background:"#fef3c7",color:"#92400e",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #fbbf24"}}>⏳ Belum Selesai</span>
-                        <span style={{background:"#f0f9ff",color:"#0284c7",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20}}>📋 {order.nota}</span>
+                        <span style={{background:"#fff7ed",color:"#ea580c",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20}}>🏪 {order.tenantName}</span>
+                        <span style={{background:"#f0f9ff",color:"#0284c7",fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>📋 {order.nota}</span>
                       </div>
                       <p style={{margin:"0 0 2px",fontWeight:800,color:"#1c0a00",fontSize:15}}>{order.customerName}</p>
                       <p style={{margin:"0 0 2px",color:"#6b7280",fontSize:12}}>📱 {order.customerPhone} • {order.date} {order.time}</p>
-                      <p style={{margin:0,color:"#9ca3af",fontSize:11}}>Dibuat oleh: {order.createdBy||"Admin"}</p>
+                      <p style={{margin:0,color:"#9ca3af",fontSize:11}}>Dibuat: {order.createdBy}</p>
                     </div>
-                    <p style={{margin:0,fontWeight:900,color:"#ea580c",fontSize:18}}>{idr(order.total)}</p>
+                    <p style={{margin:0,fontWeight:900,color:"#ea580c",fontSize:16}}>{idr(order.subtotal)}</p>
                   </div>
-                  {/* Items */}
                   <div style={{background:"#f9fafb",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
                     {order.items.map((it,i)=>(
-                      <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"3px 0",fontSize:12,borderBottom:i<order.items.length-1?"1px dashed #e5e7eb":"none"}}>
-                        <span style={{color:"#374151"}}><span style={{color:"#9ca3af"}}>[{it.tenantName}]</span> {it.menuName} ×{it.qty}</span>
+                      <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"3px 0",fontSize:13,borderBottom:i<order.items.length-1?"1px dashed #e5e7eb":"none"}}>
+                        <span style={{color:"#374151",fontWeight:600}}>{it.menuName} <span style={{color:"#9ca3af"}}>×{it.qty}</span></span>
                         <span style={{fontWeight:700}}>{idr(it.qty*it.price)}</span>
                       </div>
                     ))}
                   </div>
-                  {/* Tombol Verifikasi */}
-                  <button onClick={()=>startVerifyScanner(order.id)}
-                    style={{width:"100%",padding:"11px",background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
-                    onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
-                    📷 Scan QR — Selesaikan PO
-                  </button>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={()=>{setVerifyOrderId(order.id);setShowVerifyScanner(true);startScan((sc)=>setVerifyScan(sc));}}
+                      style={{flex:2,padding:"11px",background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",gap:6,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                      📷 Scan QR — Selesaikan
+                    </button>
+                    <button onClick={()=>resendPO(order)}
+                      style={{flex:1,padding:"11px",background:"#f0f9ff",color:"#0284c7",border:"1px solid #bae6fd",borderRadius:10,fontWeight:600,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                      💬 Kirim Ulang
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>}
 
-          {/* PO yang sudah selesai */}
-          {(orders||[]).filter(o=>o.status==="completed"&&(poSearch?o.customerName.toLowerCase().includes(poSearch.toLowerCase())||o.nota.toLowerCase().includes(poSearch.toLowerCase()):true)).slice(0,10).map(order=>(
-            <div key={order.id} style={{background:"#f9fafb",border:"1px solid #dcfce7",borderRadius:14,padding:14,marginTop:8,opacity:0.7}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-                <div>
-                  <div style={{display:"flex",gap:6,marginBottom:4}}>
-                    <span style={{background:"#f0fdf4",color:"#16a34a",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #bbf7d0"}}>✅ Selesai</span>
-                    <span style={{background:"#f0f9ff",color:"#0284c7",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20}}>📋 {order.nota}</span>
+          {/* PO Selesai */}
+          {(()=>{
+            const done=(orders||[]).filter(o=>o.status==="completed"&&(poTenantFilter==="all"||o.tenantId===poTenantFilter)&&(!poSearch||o.customerName.toLowerCase().includes(poSearch.toLowerCase())||o.customerPhone.replace(/\D/g,"").includes(poSearch.replace(/\D/g,"")))).slice(0,10);
+            return done.length>0?(
+              <div style={{marginTop:16}}>
+                <p style={{fontWeight:700,color:"#6b7280",fontSize:13,margin:"0 0 8px"}}>✅ PO Selesai</p>
+                {done.map(o=>(
+                  <div key={o.id} style={{background:"#f9fafb",border:"1px solid #dcfce7",borderRadius:14,padding:14,marginBottom:8,opacity:0.75}}>
+                    <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8,alignItems:"center"}}>
+                      <div>
+                        <div style={{display:"flex",gap:6,marginBottom:4}}>
+                          <span style={{background:"#f0fdf4",color:"#16a34a",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #bbf7d0"}}>✅ Selesai</span>
+                          <span style={{background:"#fff7ed",color:"#ea580c",fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>🏪 {o.tenantName}</span>
+                          <span style={{background:"#f0f9ff",color:"#0284c7",fontSize:11,padding:"2px 8px",borderRadius:20}}>{o.nota}</span>
+                        </div>
+                        <p style={{margin:0,fontWeight:700,color:"#374151",fontSize:14}}>{o.customerName}</p>
+                        <p style={{margin:"2px 0 0",color:"#9ca3af",fontSize:11}}>✅ {o.verifiedAt?new Date(o.verifiedAt).toLocaleString("id-ID"):"-"} oleh {o.verifiedBy}</p>
+                      </div>
+                      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                        <p style={{margin:0,fontWeight:800,color:"#16a34a",fontSize:14}}>{idr(o.subtotal)}</p>
+                        <button onClick={()=>resendPO(o)} style={{padding:"6px 12px",background:"#f0f9ff",color:"#0284c7",border:"1px solid #bae6fd",borderRadius:8,fontWeight:600,cursor:"pointer",fontSize:12,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>💬 Kirim</button>
+                      </div>
+                    </div>
                   </div>
-                  <p style={{margin:"0 0 2px",fontWeight:700,color:"#374151",fontSize:14}}>{order.customerName}</p>
-                  <p style={{margin:0,color:"#9ca3af",fontSize:11}}>✅ Diverifikasi: {order.verifiedAt?new Date(order.verifiedAt).toLocaleString("id-ID"):"-"} oleh {order.verifiedBy||"-"}</p>
-                </div>
-                <p style={{margin:0,fontWeight:800,color:"#16a34a",fontSize:16}}>{idr(order.total)}</p>
+                ))}
               </div>
-            </div>
-          ))}
+            ):null;
+          })()}
         </div>
       )}
 
@@ -2384,18 +2435,18 @@ function POReport({orders,tenants,customers}){
   const [filterStatus,setFilterStatus]=useState("all");
 
   const filtered=orders.filter(o=>{
-    const tenantOk=filterTenant==="all"||o.items.some(it=>it.tenantId===filterTenant);
+    const tenantOk=filterTenant==="all"||o.tenantId===filterTenant;
     const statusOk=filterStatus==="all"||(filterStatus==="pending"&&o.status==="pending")||(filterStatus==="completed"&&o.status==="completed");
     return tenantOk&&statusOk;
   });
-  const totalAll=filtered.reduce((s,o)=>s+o.total,0);
+  const totalAll=filtered.reduce((s,o)=>s+o.subtotal,0);
 
   const doExport=()=>{
     const rows=[];
     filtered.forEach(o=>o.items.forEach((it,i)=>{
-      rows.push([i===0?o.nota:"",i===0?o.customerName:"",i===0?o.customerPhone:"",it.tenantName,it.menuName,it.qty,it.price,it.qty*it.price,i===0?o.total:"",i===0?(o.status==="pending"?"Belum Selesai":"Selesai"):"",i===0?o.date:""]);
+      rows.push([i===0?o.nota:"",i===0?o.customerName:"",i===0?o.customerPhone:"",o.tenantName,it.menuName,it.qty,it.price,it.qty*it.price,i===0?o.subtotal:"",i===0?(o.status==="pending"?"Belum Selesai":"Selesai"):"",i===0?o.date:""]);
     }));
-    exportToExcel({filename:`Laporan-PO.xlsx`,sheets:[{name:"Pre-Order",headers:["Nota","Pelanggan","No WA","Tenant","Menu","Qty","Harga","Subtotal","Total","Status","Tanggal"],rows}]});
+    exportToExcel({filename:`Laporan-PO${filterTenant!=="all"?"-"+tenants.find(t=>t.id===filterTenant)?.name:""}.xlsx`,sheets:[{name:"Pre-Order",headers:["Nota","Pelanggan","No WA","Tenant","Menu","Qty","Harga","Subtotal","Total Tenant","Status","Tanggal"],rows}]});
   };
 
   return(
@@ -2413,53 +2464,51 @@ function POReport({orders,tenants,customers}){
           <option value="pending">Belum Selesai</option>
           <option value="completed">Selesai</option>
         </select>
-        <button onClick={doExport} style={{padding:"9px 16px",background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-          📊 Export Excel
-        </button>
+        <button onClick={doExport} style={{padding:"9px 16px",background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>📊 Export Excel</button>
       </div>
 
-      {/* Ringkasan per tenant */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,marginBottom:16}}>
-        {tenants.map(t=>{
-          const tOrders=filtered.filter(o=>o.items.some(it=>it.tenantId===t.id));
-          const tTotal=tOrders.reduce((s,o)=>s+o.items.filter(it=>it.tenantId===t.id).reduce((ss,it)=>ss+it.qty*it.price,0),0);
-          const tPending=tOrders.filter(o=>o.status==="pending").length;
-          return(
-            <div key={t.id} style={{background:"#fff",border:"1px solid #f3f4f6",borderRadius:14,padding:14}}>
-              <p style={{margin:"0 0 2px",fontWeight:700,color:"#1c0a00",fontSize:14}}>{t.name}</p>
-              <p style={{margin:"0 0 6px",color:"#9ca3af",fontSize:12}}>{tOrders.length} PO • {tPending} belum selesai</p>
-              <p style={{margin:0,fontWeight:800,color:"#ea580c",fontSize:16}}>{idr(tTotal)}</p>
-            </div>
-          );
-        })}
-      </div>
+      {/* Ringkasan per tenant — hanya jika filter "all" */}
+      {filterTenant==="all"&&(
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:10,marginBottom:16}}>
+          {tenants.map(t=>{
+            const tO=orders.filter(o=>o.tenantId===t.id&&(filterStatus==="all"||(filterStatus==="pending"&&o.status==="pending")||(filterStatus==="completed"&&o.status==="completed")));
+            if(tO.length===0) return null;
+            return(
+              <div key={t.id} style={{background:"#fff",border:"1px solid #f3f4f6",borderRadius:14,padding:14}}>
+                <p style={{margin:"0 0 2px",fontWeight:700,color:"#1c0a00",fontSize:13}}>{t.name}</p>
+                <p style={{margin:"0 0 4px",color:"#9ca3af",fontSize:11}}>{tO.length} PO • {tO.filter(o=>o.status==="pending").length} pending</p>
+                <p style={{margin:0,fontWeight:800,color:"#ea580c",fontSize:15}}>{idr(tO.reduce((s,o)=>s+o.subtotal,0))}</p>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-      {filtered.length===0?<EmptyState icon="📦" text="Belum ada data PO."/>:
+      {filtered.length===0?<EmptyState icon="📦" text="Tidak ada data PO."/>:
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
           {filtered.map(order=>(
             <div key={order.id} style={{background:"#fff",border:`1px solid ${order.status==="pending"?"#fbbf24":"#bbf7d0"}`,borderRadius:14,padding:14}}>
-              <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:8}}>
+              <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:6}}>
                 <div>
-                  <div style={{display:"flex",gap:6,marginBottom:4}}>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:4}}>
                     <span style={{background:order.status==="pending"?"#fef3c7":"#f0fdf4",color:order.status==="pending"?"#92400e":"#16a34a",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:`1px solid ${order.status==="pending"?"#fbbf24":"#bbf7d0"}`}}>
                       {order.status==="pending"?"⏳ Belum Selesai":"✅ Selesai"}
                     </span>
-                    <span style={{background:"#f0f9ff",color:"#0284c7",fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>{order.nota}</span>
+                    <span style={{background:"#fff7ed",color:"#ea580c",fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>🏪 {order.tenantName}</span>
+                    <span style={{background:"#f0f9ff",color:"#0284c7",fontSize:11,padding:"2px 8px",borderRadius:20}}>{order.nota}</span>
                   </div>
                   <p style={{margin:"0 0 2px",fontWeight:700,color:"#1c0a00",fontSize:14}}>{order.customerName}</p>
-                  <p style={{margin:0,color:"#6b7280",fontSize:12}}>{order.date} {order.time} • {order.createdBy||"Admin"}</p>
+                  <p style={{margin:0,color:"#6b7280",fontSize:12}}>{order.date} {order.time}</p>
                 </div>
-                <p style={{margin:0,fontWeight:900,color:"#ea580c",fontSize:16}}>{idr(order.total)}</p>
+                <p style={{margin:0,fontWeight:900,color:"#ea580c",fontSize:16}}>{idr(order.subtotal)}</p>
               </div>
-              <div style={{fontSize:12,color:"#6b7280"}}>
-                {order.items.map((it,i)=>(
-                  <span key={i} style={{marginRight:10}}>[{it.tenantName}] {it.menuName} ×{it.qty}</span>
-                ))}
+              <div style={{fontSize:12,color:"#6b7280",display:"flex",flexWrap:"wrap",gap:8}}>
+                {order.items.map((it,i)=><span key={i} style={{background:"#f9fafb",padding:"2px 8px",borderRadius:8}}>{it.menuName} ×{it.qty}</span>)}
               </div>
             </div>
           ))}
           <div style={{background:"#fff7ed",borderRadius:12,padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <span style={{fontWeight:700,color:"#374151"}}>TOTAL {filtered.length} PO</span>
+            <span style={{fontWeight:700,color:"#374151"}}>{filterTenant!=="all"?`${tenants.find(t=>t.id===filterTenant)?.name} — `:""}TOTAL {filtered.length} PO</span>
             <span style={{fontWeight:900,color:"#ea580c",fontSize:18}}>{idr(totalAll)}</span>
           </div>
         </div>}
@@ -2478,12 +2527,11 @@ function POTenant({tenant,orders,customers,onSaveOrders}){
   const videoRef=useRef(null);
   const scanRef=useRef(null);
 
-  // Filter PO untuk tenant ini
-  const myOrders=(orders||[]).filter(o=>o.items.some(it=>it.tenantId===tenant.id));
-  const pendingOrders=myOrders.filter(o=>o.status==="pending"&&(!poSearch||o.customerName.toLowerCase().includes(poSearch.toLowerCase())||o.nota.toLowerCase().includes(poSearch.toLowerCase())));
-  const completedOrders=myOrders.filter(o=>o.status==="completed"&&(!poSearch||o.customerName.toLowerCase().includes(poSearch.toLowerCase()))).slice(0,5);
+  const myOrders=(orders||[]).filter(o=>o.tenantId===tenant.id);
+  const pendingOrders=myOrders.filter(o=>o.status==="pending"&&(!poSearch||o.customerName.toLowerCase().includes(poSearch.toLowerCase())||o.customerPhone.replace(/\D/g,"").includes(poSearch.replace(/\D/g,""))||o.nota.toLowerCase().includes(poSearch.toLowerCase())));
+  const completedOrders=myOrders.filter(o=>o.status==="completed"&&(!poSearch||o.customerName.toLowerCase().includes(poSearch.toLowerCase()))).slice(0,8);
 
-  const startVerifyScanner=async(orderId)=>{
+  const startVerify=async(orderId)=>{
     setVerifyOrderId(orderId);setVerifyScan("");setVerifyError("");setShowScanner(true);
     if(!window.jsQR){await new Promise((res,rej)=>{const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
     try{
@@ -2493,25 +2541,23 @@ function POTenant({tenant,orders,customers,onSaveOrders}){
           if(!videoRef.current||!window.jsQR)return;
           const c=document.createElement("canvas");c.width=videoRef.current.videoWidth;c.height=videoRef.current.videoHeight;
           const ctx=c.getContext("2d");ctx.drawImage(videoRef.current,0,0);
-          const img=ctx.getImageData(0,0,c.width,c.height);
-          const code=window.jsQR(img.data,img.width,img.height);
-          if(code&&code.data){setVerifyScan(code.data.trim());stopScanner();}
+          const code=window.jsQR(ctx.getImageData(0,0,c.width,c.height).data,c.width,c.height);
+          if(code&&code.data){setVerifyScan(code.data.trim());clearInterval(scanRef.current);if(videoRef.current?.srcObject){videoRef.current.srcObject.getTracks().forEach(t=>t.stop());videoRef.current.srcObject=null;}}
         },500);
       }
     }catch(e){setVerifyError("Gagal akses kamera: "+e.message);}
   };
-  const stopScanner=()=>{clearInterval(scanRef.current);if(videoRef.current?.srcObject){videoRef.current.srcObject.getTracks().forEach(t=>t.stop());videoRef.current.srcObject=null;}};
-  const closeScanner=()=>{stopScanner();setShowScanner(false);setVerifyOrderId(null);setVerifyScan("");setVerifyError("");};
+  const closeScanner=()=>{clearInterval(scanRef.current);if(videoRef.current?.srcObject){videoRef.current.srcObject.getTracks().forEach(t=>t.stop());videoRef.current.srcObject=null;}setShowScanner(false);setVerifyOrderId(null);setVerifyScan("");setVerifyError("");};
 
   const doVerify=async()=>{
     const order=(orders||[]).find(o=>o.id===verifyOrderId);
     if(!order){setVerifyError("PO tidak ditemukan!");return;}
-    const cust=customers.find(c=>c.id===verifyScan)||customers.find(c=>c.phone===verifyScan.replace(/\D/g,""));
+    const sc=verifyScan.trim();
+    const cust=customers.find(c=>c.id===sc)||customers.find(c=>c.phone===sc.replace(/\D/g,""));
     if(!cust||cust.id!==order.customerId){setVerifyError("❌ QR tidak cocok dengan pelanggan PO ini!");return;}
-    const updOrders=(orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",verifiedAt:new Date().toISOString(),verifiedBy:tenant.name}:o);
-    await onSaveOrders(updOrders);
+    await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",verifiedAt:new Date().toISOString(),verifiedBy:tenant.name}:o));
     closeScanner();
-    setSuccessMsg(`✅ PO ${order.nota} selesai!`);
+    setSuccessMsg(`✅ PO ${order.nota} — Selesai!`);
     setTimeout(()=>setSuccessMsg(""),4000);
   };
 
@@ -2519,7 +2565,8 @@ function POTenant({tenant,orders,customers,onSaveOrders}){
     <div>
       {showScanner&&(
         <Modal title="📷 Scan QR Verifikasi Pengambilan" onClose={closeScanner}>
-          <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>Scan QR pelanggan untuk verifikasi. Tidak memotong saldo.</p>
+          <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>Scan QR pelanggan. Tidak memotong saldo.</p>
+          {(()=>{const o=(orders||[]).find(x=>x.id===verifyOrderId);return o&&<div style={{background:"#f0f9ff",borderRadius:10,padding:"8px 12px",marginBottom:10}}><p style={{margin:0,fontSize:13,color:"#0284c7",fontWeight:600}}>📋 {o.nota} — {o.customerName}</p></div>;})()} 
           {!verifyScan&&(
             <div style={{position:"relative",borderRadius:14,overflow:"hidden",background:"#000",marginBottom:12,height:220}}>
               <video ref={videoRef} style={{width:"100%",height:"100%",objectFit:"cover"}} playsInline muted/>
@@ -2530,17 +2577,17 @@ function POTenant({tenant,orders,customers,onSaveOrders}){
           )}
           {verifyError&&<div style={{background:"#fef2f2",borderRadius:10,padding:"8px 12px",color:"#dc2626",fontWeight:600,fontSize:13,marginBottom:10}}>❌ {verifyError}</div>}
           {verifyScan&&(()=>{
-            const order=(orders||[]).find(o=>o.id===verifyOrderId);
-            const cust=order&&customers.find(c=>c.id===order.customerId);
+            const ord=(orders||[]).find(o=>o.id===verifyOrderId);
+            const cust=ord&&customers.find(c=>c.id===ord.customerId);
             const ok=cust&&(verifyScan===cust.id||verifyScan.replace(/\D/g,"")===cust.phone);
-            return(<div style={{background:ok?"#f0fdf4":"#fef2f2",borderRadius:12,padding:"12px",marginBottom:10}}>
+            return<div style={{background:ok?"#f0fdf4":"#fef2f2",borderRadius:12,padding:"12px",marginBottom:10}}>
               <p style={{margin:"0 0 2px",fontWeight:800,color:ok?"#14532d":"#dc2626"}}>{ok?"✅ QR Cocok!":"❌ QR Tidak Cocok"}</p>
-              {cust&&<p style={{margin:0,color:"#6b7280",fontSize:13}}>{cust.name} • {order?.nota}</p>}
-            </div>);
+              {cust&&<p style={{margin:0,color:"#6b7280",fontSize:13}}>{cust.name}</p>}
+            </div>;
           })()}
           <div style={{display:"flex",gap:10}}>
             <button onClick={closeScanner} style={{...btnSec,flex:1}}>Batal</button>
-            {verifyScan&&(()=>{const order=(orders||[]).find(o=>o.id===verifyOrderId);const cust=order&&customers.find(c=>c.id===order.customerId);return cust&&(verifyScan===cust.id||verifyScan.replace(/\D/g,"")===cust.phone);})()?
+            {verifyScan&&(()=>{const ord=(orders||[]).find(o=>o.id===verifyOrderId);const cust=ord&&customers.find(c=>c.id===ord.customerId);return cust&&(verifyScan===cust.id||verifyScan.replace(/\D/g,"")===cust.phone);})()?
               <button onClick={doVerify} style={{flex:2,padding:"13px",background:"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>✅ Selesaikan PO</button>:null}
           </div>
         </Modal>
@@ -2548,79 +2595,70 @@ function POTenant({tenant,orders,customers,onSaveOrders}){
 
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
         <div>
-          <h2 style={{margin:0,fontSize:18,fontWeight:800,color:"#14532d"}}>📦 Pre-Order</h2>
-          <p style={{color:"#9ca3af",margin:"4px 0 0",fontSize:13}}>{myOrders.filter(o=>o.status==="pending").length} PO menunggu pengambilan</p>
+          <h2 style={{margin:0,fontSize:18,fontWeight:800,color:"#14532d"}}>📦 Pre-Order — {tenant.name}</h2>
+          <p style={{color:"#9ca3af",margin:"4px 0 0",fontSize:13}}>{myOrders.filter(o=>o.status==="pending").length} menunggu pengambilan</p>
         </div>
       </div>
-
-      {successMsg&&<div className="pop-in" style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:12,padding:"10px 16px",marginBottom:14,fontWeight:600,fontSize:13,color:"#16a34a"}}>{successMsg}</div>}
+      {successMsg&&<div className="pop-in" style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:12,padding:"10px 16px",marginBottom:12,fontWeight:600,fontSize:13,color:"#16a34a"}}>{successMsg}</div>}
 
       <div style={{position:"relative",marginBottom:14}}>
-        <input placeholder="🔍 Cari nama pelanggan atau nomor nota..." value={poSearch} onChange={e=>setPOSearch(e.target.value)}
+        <input placeholder="🔍 Cari nama atau nomor HP pelanggan..."
+          value={poSearch} onChange={e=>setPOSearch(e.target.value)}
           style={{width:"100%",border:"2px solid #e5e7eb",borderRadius:10,padding:"10px 14px",fontSize:14,outline:"none",color:"#111",boxSizing:"border-box",fontFamily:"'Plus Jakarta Sans',sans-serif"}}
           onFocus={e=>e.target.style.borderColor="#16a34a"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
         {poSearch&&<button onClick={()=>setPOSearch("")} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:"#9ca3af",fontSize:18}}>✕</button>}
       </div>
 
-      {pendingOrders.length===0&&!poSearch?<EmptyState icon="📦" text="Tidak ada PO yang menunggu untuk tenant ini."/>:
+      {pendingOrders.length===0&&!poSearch?<EmptyState icon="📦" text="Tidak ada PO untuk tenant ini."/>:
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          {pendingOrders.map(order=>{
-            const myItems=order.items.filter(it=>it.tenantId===tenant.id);
-            const myTotal=myItems.reduce((s,it)=>s+it.qty*it.price,0);
-            return(
-              <div key={order.id} style={{background:"#fff",border:"2px solid #fbbf24",borderRadius:16,padding:16}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8,marginBottom:10}}>
-                  <div>
-                    <div style={{display:"flex",gap:6,marginBottom:4}}>
-                      <span style={{background:"#fef3c7",color:"#92400e",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #fbbf24"}}>⏳ Belum Diambil</span>
-                      <span style={{background:"#f0f9ff",color:"#0284c7",fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>{order.nota}</span>
-                    </div>
-                    <p style={{margin:"0 0 2px",fontWeight:800,color:"#1c0a00",fontSize:15}}>{order.customerName}</p>
-                    <p style={{margin:0,color:"#6b7280",fontSize:12}}>📱 {order.customerPhone} • {order.date}</p>
+          {pendingOrders.map(order=>(
+            <div key={order.id} style={{background:"#fff",border:"2px solid #fbbf24",borderRadius:16,padding:16}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8,marginBottom:10}}>
+                <div>
+                  <div style={{display:"flex",gap:6,marginBottom:4}}>
+                    <span style={{background:"#fef3c7",color:"#92400e",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #fbbf24"}}>⏳ Belum Diambil</span>
+                    <span style={{background:"#f0f9ff",color:"#0284c7",fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>{order.nota}</span>
                   </div>
-                  <p style={{margin:0,fontWeight:900,color:"#ea580c",fontSize:16}}>{idr(myTotal)}</p>
+                  <p style={{margin:"0 0 2px",fontWeight:800,color:"#1c0a00",fontSize:15}}>{order.customerName}</p>
+                  <p style={{margin:0,color:"#6b7280",fontSize:12}}>📱 {order.customerPhone} • {order.date}</p>
                 </div>
-                {/* Hanya tampilkan item milik tenant ini */}
-                <div style={{background:"#f9fafb",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
-                  {myItems.map((it,i)=>(
-                    <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:13,borderBottom:i<myItems.length-1?"1px dashed #e5e7eb":"none"}}>
-                      <span style={{color:"#374151",fontWeight:600}}>{it.menuName} <span style={{color:"#9ca3af"}}>×{it.qty}</span></span>
-                      <span style={{fontWeight:700,color:"#1c0a00"}}>{idr(it.qty*it.price)}</span>
-                    </div>
-                  ))}
-                </div>
-                <button onClick={()=>startVerifyScanner(order.id)}
-                  style={{width:"100%",padding:"12px",background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
-                  onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
-                  📷 Scan QR — Konfirmasi Pengambilan
-                </button>
+                <p style={{margin:0,fontWeight:900,color:"#ea580c",fontSize:16}}>{idr(order.subtotal)}</p>
               </div>
-            );
-          })}
+              <div style={{background:"#f9fafb",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+                {order.items.map((it,i)=>(
+                  <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:13,borderBottom:i<order.items.length-1?"1px dashed #e5e7eb":"none"}}>
+                    <span style={{color:"#374151",fontWeight:600}}>{it.menuName} <span style={{color:"#9ca3af"}}>×{it.qty}</span></span>
+                    <span style={{fontWeight:700}}>{idr(it.qty*it.price)}</span>
+                  </div>
+                ))}
+              </div>
+              <button onClick={()=>startVerify(order.id)}
+                style={{width:"100%",padding:"12px",background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
+                📷 Scan QR — Konfirmasi Pengambilan
+              </button>
+            </div>
+          ))}
 
           {completedOrders.length>0&&(
-            <>
-              <p style={{fontWeight:700,color:"#6b7280",fontSize:13,margin:"8px 0 4px"}}>✅ Sudah Diambil</p>
-              {completedOrders.map(order=>{
-                const myItems=order.items.filter(it=>it.tenantId===tenant.id);
-                const myTotal=myItems.reduce((s,it)=>s+it.qty*it.price,0);
-                return(
-                  <div key={order.id} style={{background:"#f9fafb",border:"1px solid #dcfce7",borderRadius:14,padding:14,opacity:0.7}}>
-                    <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
-                      <div>
-                        <div style={{display:"flex",gap:6,marginBottom:4}}>
-                          <span style={{background:"#f0fdf4",color:"#16a34a",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #bbf7d0"}}>✅ Selesai</span>
-                          <span style={{background:"#f0f9ff",color:"#0284c7",fontSize:11,padding:"2px 8px",borderRadius:20}}>{order.nota}</span>
-                        </div>
-                        <p style={{margin:0,fontWeight:700,color:"#374151",fontSize:14}}>{order.customerName}</p>
-                        <p style={{margin:"2px 0 0",color:"#9ca3af",fontSize:11}}>{order.verifiedAt?new Date(order.verifiedAt).toLocaleString("id-ID"):"-"}</p>
+            <div style={{marginTop:8}}>
+              <p style={{fontWeight:700,color:"#6b7280",fontSize:13,margin:"0 0 8px"}}>✅ Sudah Diambil</p>
+              {completedOrders.map(o=>(
+                <div key={o.id} style={{background:"#f9fafb",border:"1px solid #dcfce7",borderRadius:14,padding:14,marginBottom:8,opacity:0.7}}>
+                  <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+                    <div>
+                      <div style={{display:"flex",gap:6,marginBottom:4}}>
+                        <span style={{background:"#f0fdf4",color:"#16a34a",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #bbf7d0"}}>✅ Selesai</span>
+                        <span style={{background:"#f0f9ff",color:"#0284c7",fontSize:11,padding:"2px 8px",borderRadius:20}}>{o.nota}</span>
                       </div>
-                      <p style={{margin:0,fontWeight:800,color:"#16a34a",fontSize:15}}>{idr(myTotal)}</p>
+                      <p style={{margin:0,fontWeight:700,color:"#374151",fontSize:14}}>{o.customerName}</p>
+                      <p style={{margin:"2px 0 0",color:"#9ca3af",fontSize:11}}>{o.verifiedAt?new Date(o.verifiedAt).toLocaleString("id-ID"):"-"}</p>
                     </div>
+                    <p style={{margin:0,fontWeight:800,color:"#16a34a",fontSize:14}}>{idr(o.subtotal)}</p>
                   </div>
-                );
-              })}
-            </>
+                </div>
+              ))}
+            </div>
           )}
         </div>}
     </div>
