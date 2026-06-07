@@ -1970,6 +1970,8 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
   const [showVerifyScanner,setShowVerifyScanner]=useState(false);
   const [verifyScan,setVerifyScan]=useState("");
   const [verifyError,setVerifyError]=useState("");
+  const [verifyPin,setVerifyPin]=useState("");
+  const [verifyPinError,setVerifyPinError]=useState("");
   const videoRef=useRef(null);
   const scanRef=useRef(null);
 
@@ -2007,7 +2009,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
   };
   const stopScan=()=>{clearInterval(scanRef.current);if(videoRef.current?.srcObject){videoRef.current.srcObject.getTracks().forEach(t=>t.stop());videoRef.current.srcObject=null;}};
   const closeScanner=()=>{stopScan();setShowScanner(false);setScanPhone("");setScanError("");setPinInput("");setPinError("");setScannedCust(null);};
-  const closeVerify=()=>{stopScan();setShowVerifyScanner(false);setVerifyOrderId(null);setVerifyScan("");setVerifyError("");};
+  const closeVerify=()=>{stopScan();setShowVerifyScanner(false);setVerifyOrderId(null);setVerifyScan("");setVerifyError("");setVerifyPin("");setVerifyPinError("");};
 
   // Proses checkout: buat order TERPISAH per tenant
   const handleCheckout=async()=>{
@@ -2076,6 +2078,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
     const sc=verifyScan.trim();
     const cust=customers.find(c=>c.id===sc)||customers.find(c=>c.phone===sc.replace(/\D/g,""));
     if(!cust||cust.id!==order.customerId){setVerifyError("❌ QR tidak cocok dengan pelanggan PO ini!");return;}
+    if(cust.pin&&verifyPin!==cust.pin){setVerifyPinError("❌ PIN salah! Coba lagi.");setVerifyPin("");return;}
     await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",verifiedAt:new Date().toISOString(),verifiedBy:adminData?.name||"Admin"}:o));
     closeVerify();
     setSuccessMsg(`✅ PO ${order.nota} (${order.tenantName}) — Selesai!`);
@@ -2185,14 +2188,41 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
             const ord=(orders||[]).find(o=>o.id===verifyOrderId);
             const cust=ord&&customers.find(c=>c.id===ord.customerId);
             const ok=cust&&(verifyScan===cust.id||verifyScan.replace(/\D/g,"")===cust.phone);
-            return<div style={{background:ok?"#f0fdf4":"#fef2f2",borderRadius:12,padding:"12px",marginBottom:10}}>
-              <p style={{margin:"0 0 2px",fontWeight:800,color:ok?"#14532d":"#dc2626"}}>{ok?"✅ QR Cocok!":"❌ QR Tidak Cocok"}</p>
-              {cust&&<p style={{margin:0,color:"#6b7280",fontSize:13}}>{cust.name}</p>}
-            </div>;
+            return(
+              <div>
+                <div style={{background:ok?"#f0fdf4":"#fef2f2",borderRadius:12,padding:"12px",marginBottom:10}}>
+                  <p style={{margin:"0 0 2px",fontWeight:800,color:ok?"#14532d":"#dc2626"}}>{ok?"✅ QR Cocok!":"❌ QR Tidak Cocok"}</p>
+                  {cust&&<p style={{margin:0,color:"#6b7280",fontSize:13}}>{cust.name}</p>}
+                </div>
+                {ok&&cust.pin&&(
+                  <div style={{marginBottom:10}}>
+                    <p style={{textAlign:"center",fontWeight:700,color:"#374151",fontSize:13,margin:"0 0 8px"}}>🔐 Masukkan PIN Pelanggan</p>
+                    <div style={{display:"flex",gap:8,justifyContent:"center",marginBottom:6}}>
+                      {[0,1,2,3].map(i=><div key={i} style={{width:46,height:56,background:verifyPin.length>i?"#4c1d95":"#f9fafb",border:`2px solid ${verifyPin.length>i?"#7c3aed":"#e5e7eb"}`,borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,color:"#fff"}}>{verifyPin.length>i?"●":""}</div>)}
+                    </div>
+                    {verifyPinError&&<p style={{textAlign:"center",color:"#dc2626",fontSize:12,fontWeight:600,margin:"2px 0 6px"}}>{verifyPinError}</p>}
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,maxWidth:200,margin:"0 auto"}}>
+                      {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((k,i)=>(
+                        <button key={i} onClick={()=>{if(k==="")return;if(k==="⌫"){setVerifyPin(p=>p.slice(0,-1));setVerifyPinError("");}else if(verifyPin.length<4){setVerifyPin(p=>p+k);setVerifyPinError("");}}}
+                          style={{padding:"12px 0",background:k==="⌫"?"#fef2f2":k===""?"transparent":"#f9fafb",color:k==="⌫"?"#dc2626":"#1c0a00",border:`1px solid ${k==="⌫"?"#fca5a5":k===""?"transparent":"#e5e7eb"}`,borderRadius:10,fontSize:18,fontWeight:700,cursor:k===""?"default":"pointer",fontFamily:"'Plus Jakarta Sans',sans-serif",visibility:k===""?"hidden":"visible"}}>
+                          {k}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
           })()}
           <div style={{display:"flex",gap:10}}>
             <button onClick={closeVerify} style={{...btnSec,flex:1}}>Batal</button>
-            {verifyScan&&(()=>{const ord=(orders||[]).find(o=>o.id===verifyOrderId);const cust=ord&&customers.find(c=>c.id===ord.customerId);return cust&&(verifyScan===cust.id||verifyScan.replace(/\D/g,"")===cust.phone);})()?
+            {verifyScan&&(()=>{
+              const ord=(orders||[]).find(o=>o.id===verifyOrderId);
+              const cust=ord&&customers.find(c=>c.id===ord.customerId);
+              const qrOk=cust&&(verifyScan===cust.id||verifyScan.replace(/\D/g,"")===cust.phone);
+              const pinOk=!cust?.pin||verifyPin.length===4;
+              return qrOk&&pinOk;
+            })()?
               <button onClick={doVerify} style={{flex:2,padding:"13px",background:"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>✅ Selesaikan PO</button>:null}
           </div>
         </Modal>
@@ -2523,6 +2553,8 @@ function POTenant({tenant,orders,customers,onSaveOrders}){
   const [verifyOrderId,setVerifyOrderId]=useState(null);
   const [verifyScan,setVerifyScan]=useState("");
   const [verifyError,setVerifyError]=useState("");
+  const [verifyPin,setVerifyPin]=useState("");
+  const [verifyPinError,setVerifyPinError]=useState("");
   const [successMsg,setSuccessMsg]=useState("");
   const videoRef=useRef(null);
   const scanRef=useRef(null);
@@ -2547,7 +2579,7 @@ function POTenant({tenant,orders,customers,onSaveOrders}){
       }
     }catch(e){setVerifyError("Gagal akses kamera: "+e.message);}
   };
-  const closeScanner=()=>{clearInterval(scanRef.current);if(videoRef.current?.srcObject){videoRef.current.srcObject.getTracks().forEach(t=>t.stop());videoRef.current.srcObject=null;}setShowScanner(false);setVerifyOrderId(null);setVerifyScan("");setVerifyError("");};
+  const closeScanner=()=>{clearInterval(scanRef.current);if(videoRef.current?.srcObject){videoRef.current.srcObject.getTracks().forEach(t=>t.stop());videoRef.current.srcObject=null;}setShowScanner(false);setVerifyOrderId(null);setVerifyScan("");setVerifyError("");setVerifyPin("");setVerifyPinError("");};
 
   const doVerify=async()=>{
     const order=(orders||[]).find(o=>o.id===verifyOrderId);
@@ -2555,6 +2587,7 @@ function POTenant({tenant,orders,customers,onSaveOrders}){
     const sc=verifyScan.trim();
     const cust=customers.find(c=>c.id===sc)||customers.find(c=>c.phone===sc.replace(/\D/g,""));
     if(!cust||cust.id!==order.customerId){setVerifyError("❌ QR tidak cocok dengan pelanggan PO ini!");return;}
+    if(cust.pin&&verifyPin!==cust.pin){setVerifyPinError("❌ PIN salah! Coba lagi.");setVerifyPin("");return;}
     await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",verifiedAt:new Date().toISOString(),verifiedBy:tenant.name}:o));
     closeScanner();
     setSuccessMsg(`✅ PO ${order.nota} — Selesai!`);
@@ -2580,14 +2613,41 @@ function POTenant({tenant,orders,customers,onSaveOrders}){
             const ord=(orders||[]).find(o=>o.id===verifyOrderId);
             const cust=ord&&customers.find(c=>c.id===ord.customerId);
             const ok=cust&&(verifyScan===cust.id||verifyScan.replace(/\D/g,"")===cust.phone);
-            return<div style={{background:ok?"#f0fdf4":"#fef2f2",borderRadius:12,padding:"12px",marginBottom:10}}>
-              <p style={{margin:"0 0 2px",fontWeight:800,color:ok?"#14532d":"#dc2626"}}>{ok?"✅ QR Cocok!":"❌ QR Tidak Cocok"}</p>
-              {cust&&<p style={{margin:0,color:"#6b7280",fontSize:13}}>{cust.name}</p>}
-            </div>;
+            return(
+              <div>
+                <div style={{background:ok?"#f0fdf4":"#fef2f2",borderRadius:12,padding:"12px",marginBottom:10}}>
+                  <p style={{margin:"0 0 2px",fontWeight:800,color:ok?"#14532d":"#dc2626"}}>{ok?"✅ QR Cocok!":"❌ QR Tidak Cocok"}</p>
+                  {cust&&<p style={{margin:0,color:"#6b7280",fontSize:13}}>{cust.name}</p>}
+                </div>
+                {ok&&cust.pin&&(
+                  <div style={{marginBottom:10}}>
+                    <p style={{textAlign:"center",fontWeight:700,color:"#374151",fontSize:13,margin:"0 0 8px"}}>🔐 Masukkan PIN Pelanggan</p>
+                    <div style={{display:"flex",gap:8,justifyContent:"center",marginBottom:6}}>
+                      {[0,1,2,3].map(i=><div key={i} style={{width:46,height:56,background:verifyPin.length>i?"#4c1d95":"#f9fafb",border:`2px solid ${verifyPin.length>i?"#7c3aed":"#e5e7eb"}`,borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,color:"#fff"}}>{verifyPin.length>i?"●":""}</div>)}
+                    </div>
+                    {verifyPinError&&<p style={{textAlign:"center",color:"#dc2626",fontSize:12,fontWeight:600,margin:"2px 0 6px"}}>{verifyPinError}</p>}
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6,maxWidth:200,margin:"0 auto"}}>
+                      {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((k,i)=>(
+                        <button key={i} onClick={()=>{if(k==="")return;if(k==="⌫"){setVerifyPin(p=>p.slice(0,-1));setVerifyPinError("");}else if(verifyPin.length<4){setVerifyPin(p=>p+k);setVerifyPinError("");}}}
+                          style={{padding:"12px 0",background:k==="⌫"?"#fef2f2":k===""?"transparent":"#f9fafb",color:k==="⌫"?"#dc2626":"#1c0a00",border:`1px solid ${k==="⌫"?"#fca5a5":k===""?"transparent":"#e5e7eb"}`,borderRadius:10,fontSize:18,fontWeight:700,cursor:k===""?"default":"pointer",fontFamily:"'Plus Jakarta Sans',sans-serif",visibility:k===""?"hidden":"visible"}}>
+                          {k}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
           })()}
           <div style={{display:"flex",gap:10}}>
             <button onClick={closeScanner} style={{...btnSec,flex:1}}>Batal</button>
-            {verifyScan&&(()=>{const ord=(orders||[]).find(o=>o.id===verifyOrderId);const cust=ord&&customers.find(c=>c.id===ord.customerId);return cust&&(verifyScan===cust.id||verifyScan.replace(/\D/g,"")===cust.phone);})()?
+            {verifyScan&&(()=>{
+              const ord=(orders||[]).find(o=>o.id===verifyOrderId);
+              const cust=ord&&customers.find(c=>c.id===ord.customerId);
+              const qrOk=cust&&(verifyScan===cust.id||verifyScan.replace(/\D/g,"")===cust.phone);
+              const pinOk=!cust?.pin||verifyPin.length===4;
+              return qrOk&&pinOk;
+            })()?
               <button onClick={doVerify} style={{flex:2,padding:"13px",background:"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>✅ Selesaikan PO</button>:null}
           </div>
         </Modal>
