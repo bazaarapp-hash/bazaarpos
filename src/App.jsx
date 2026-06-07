@@ -106,6 +106,110 @@ function exportToExcel({filename,sheets}){
   const s=document.createElement("script");s.src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";s.onload=()=>run(window.XLSX);document.head.appendChild(s);
 }
 
+// ─── Export PO Excel — format per tenant dengan judul & kolom rapi ────────────
+function exportPOExcel({orders, tenants, filterTenant, filterStatus}){
+  const fmt=n=>new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n||0);
+
+  const filtered=orders.filter(o=>{
+    const tOk=filterTenant==="all"||o.tenantId===filterTenant;
+    const sOk=filterStatus==="all"||(filterStatus==="pending"&&o.status==="pending")||(filterStatus==="completed"&&o.status==="completed");
+    return tOk&&sOk;
+  });
+
+  const run=X=>{
+    const wb=X.utils.book_new();
+    const data=[];
+
+    // ── Judul file ──
+    const title=`LAPORAN PRE-ORDER${filterTenant!=="all"?" — "+(tenants.find(t=>t.id===filterTenant)?.name||""):""}`;
+    data.push([title]);
+    data.push([`Dicetak: ${new Date().toLocaleString("id-ID")} | Status: ${filterStatus==="all"?"Semua":filterStatus==="pending"?"Belum Selesai":"Selesai"}`]);
+    data.push([]);
+
+    // ── Kelompokkan per tenant ──
+    const tenantIds=filterTenant==="all"
+      ?[...new Set(filtered.map(o=>o.tenantId))]
+      :[filterTenant];
+
+    let grandTotal=0;
+    let grandCount=0;
+
+    tenantIds.forEach(tid=>{
+      const tenant=tenants.find(t=>t.id===tid);
+      const tOrders=filtered.filter(o=>o.tenantId===tid);
+      if(tOrders.length===0)return;
+
+      const tTotal=tOrders.reduce((s,o)=>s+o.subtotal,0);
+      grandTotal+=tTotal;
+      grandCount+=tOrders.length;
+
+      // Header tenant
+      data.push([`🏪 ${tenant?.name||tid} (${tenant?.code||""})`]);
+      // Header kolom
+      data.push(["No","Nota","Pelanggan","No WA","Menu","Qty","Harga Satuan","Subtotal Menu","Total Order","Status","Tanggal","Waktu"]);
+
+      // Data rows
+      let no=1;
+      tOrders.forEach(o=>{
+        o.items.forEach((it,i)=>{
+          data.push([
+            i===0?no:"",
+            i===0?o.nota:"",
+            i===0?o.customerName:"",
+            i===0?o.customerPhone:"",
+            it.menuName,
+            it.qty,
+            it.price,
+            it.qty*it.price,
+            i===0?o.subtotal:"",
+            i===0?(o.status==="pending"?"⏳ Belum Selesai":"✅ Selesai"):"",
+            i===0?o.date:"",
+            i===0?o.time:"",
+          ]);
+        });
+        no++;
+      });
+
+      // Total tenant
+      data.push(["","","","","","","TOTAL "+tenant?.name,fmt(tTotal),"","","",""]);
+      data.push([]); // baris kosong pemisah
+    });
+
+    // Grand total (hanya jika semua tenant)
+    if(filterTenant==="all"&&tenantIds.length>1){
+      data.push(["","","","","","","GRAND TOTAL ("+grandCount+" PO)",fmt(grandTotal),"","","",""]);
+    }
+
+    const ws=X.utils.aoa_to_sheet(data);
+
+    // ── Atur lebar kolom ──
+    ws["!cols"]=[
+      {wch:4},  // No
+      {wch:24}, // Nota
+      {wch:22}, // Pelanggan
+      {wch:16}, // No WA
+      {wch:28}, // Menu
+      {wch:6},  // Qty
+      {wch:16}, // Harga Satuan
+      {wch:16}, // Subtotal Menu
+      {wch:16}, // Total Order
+      {wch:16}, // Status
+      {wch:12}, // Tanggal
+      {wch:8},  // Waktu
+    ];
+
+    const fname=`Laporan-PO${filterTenant!=="all"?"-"+tenants.find(t=>t.id===filterTenant)?.name:""}.xlsx`;
+    X.utils.book_append_sheet(wb,ws,"Pre-Order");
+    X.writeFile(wb,fname);
+  };
+
+  if(window.XLSX){run(window.XLSX);return;}
+  const s=document.createElement("script");
+  s.src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+  s.onload=()=>run(window.XLSX);
+  document.head.appendChild(s);
+}
+
 // ─── Thermal Print ────────────────────────────────────────────────────────────
 function printThermal({tx,tenantName,tenantCode,bazaarName="BazaarPOS",footer1="Terima kasih!",footer2="Selamat menikmati :)"}){
   const payLabel="Saldo";
@@ -2471,13 +2575,7 @@ function POReport({orders,tenants,customers}){
   });
   const totalAll=filtered.reduce((s,o)=>s+o.subtotal,0);
 
-  const doExport=()=>{
-    const rows=[];
-    filtered.forEach(o=>o.items.forEach((it,i)=>{
-      rows.push([i===0?o.nota:"",i===0?o.customerName:"",i===0?o.customerPhone:"",o.tenantName,it.menuName,it.qty,it.price,it.qty*it.price,i===0?o.subtotal:"",i===0?(o.status==="pending"?"Belum Selesai":"Selesai"):"",i===0?o.date:""]);
-    }));
-    exportToExcel({filename:`Laporan-PO${filterTenant!=="all"?"-"+tenants.find(t=>t.id===filterTenant)?.name:""}.xlsx`,sheets:[{name:"Pre-Order",headers:["Nota","Pelanggan","No WA","Tenant","Menu","Qty","Harga","Subtotal","Total Tenant","Status","Tanggal"],rows}]});
-  };
+  const doExport=()=>exportPOExcel({orders,tenants,filterTenant,filterStatus});
 
   return(
     <div>
