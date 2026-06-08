@@ -40,7 +40,6 @@ document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
 
-
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
 const todayStr = () => new Date().toISOString().split("T")[0];
@@ -833,7 +832,7 @@ function SuperAdminDashboard(props){
           )}
           {alerts.length>0&&<button onClick={()=>setShowAlertPop(true)} className="pulse" style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontWeight:700,fontSize:13}}>🆘 {alerts.length}</button>}
           <button onClick={onRefresh} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}} title="Refresh" className={refreshing?"spinning":""}>🔄</button>
-          <button onClick={onLogout} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}}>Keluar</button>
+          <button onClick={()=>{if(window.confirm("Yakin ingin keluar dari aplikasi?"))onLogout();}} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}}>Keluar</button>
         </div>
       </div>
       <div style={{background:"#fff",borderBottom:"1px solid #f3f4f6",padding:"10px 20px",display:"flex",gap:20,overflowX:"auto"}}>
@@ -895,7 +894,7 @@ function AdminDashboard(props){
           <span style={{color:"#fff",fontSize:16,fontWeight:800}}>{settings.bazaarName}</span>
           {alerts.length>0&&<button onClick={()=>setShowAlertPop(true)} className="pulse" style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontWeight:700,fontSize:13}}>🆘 {alerts.length}</button>}
           <button onClick={onRefresh} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}} title="Refresh" className={refreshing?"spinning":""}>🔄</button>
-          <button onClick={onLogout} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}}>Keluar</button>
+          <button onClick={()=>{if(window.confirm("Yakin ingin keluar dari aplikasi?"))onLogout();}} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}}>Keluar</button>
         </div>
       </div>
       <div style={{background:"#fff",borderBottom:"1px solid #f3f4f6",padding:"10px 20px",display:"flex",gap:20,overflowX:"auto"}}>
@@ -3339,7 +3338,7 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
               {btConnecting?"⏳":"🖨️"} {btPrinter?"Ganti BT":"Koneksi BT"}
             </button>
             <button onClick={onRefresh} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}} title="Refresh" className={refreshing?"spinning":""}>🔄</button>
-            <button onClick={onLogout} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}}>Keluar</button>
+            <button onClick={()=>{if(window.confirm("Yakin ingin keluar dari aplikasi?"))onLogout();}} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}}>Keluar</button>
           </div>
         </div>
       </div>
