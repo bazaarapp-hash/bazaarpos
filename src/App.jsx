@@ -1441,7 +1441,7 @@ function BackupPanel({tenants,menus,transactions,settings,admins,onSaveSettings,
 }
 
 // ─── Reset Panel ──────────────────────────────────────────────────────────────
-function ResetPanel({transactions,tenants,menus,customers,walletLogs,settings,onSaveTx,onSaveTenants,onSaveMenus,onSaveCustomers,onSaveWalletLogs}){
+function ResetPanel({transactions,tenants,menus,customers,walletLogs,orders,settings,onSaveTx,onSaveTenants,onSaveMenus,onSaveCustomers,onSaveWalletLogs,onSaveOrders}){
   const [pass,setPass]=useState("");
   const [unlocked,setUnlocked]=useState(false);
   const [mode,setMode]=useState(null);    // "tx" | "full" | "tenant"
@@ -1465,12 +1465,14 @@ function ResetPanel({transactions,tenants,menus,customers,walletLogs,settings,on
     try{
       if(mode==="tx"){
         await onSaveTx([]);
-        setDoneMsg(`✅ ${txCount} transaksi berhasil dihapus.`);
+        await onSaveOrders([]);
+        setDoneMsg(`✅ ${txCount} transaksi & ${orders?.length||0} data PO berhasil dihapus.`);
       } else if(mode==="full"){
         await onSaveTx([]);
+        await onSaveOrders([]);
         await onSaveCustomers([]);
         await onSaveWalletLogs([]);
-        setDoneMsg(`✅ Reset penuh selesai. Transaksi, pelanggan & saldo dihapus.`);
+        setDoneMsg(`✅ Reset penuh selesai. Transaksi, PO, pelanggan & saldo dihapus.`);
       } else if(mode==="tenant"){
         await onSaveTenants([]);
         await onSaveMenus([]);
@@ -1485,13 +1487,14 @@ function ResetPanel({transactions,tenants,menus,customers,walletLogs,settings,on
   const startMode=(m)=>{setMode(m);setStep(1);};
 
   // Info per mode
+  const poCount=orders?.length||0;
   const modeInfo={
-    tx:{icon:"📋",label:"Reset Transaksi",color:"#ea580c",border:"#fed7aa",bg:"#fff7ed",
-      desc:`Hapus semua data transaksi (${txCount} transaksi). Data pelanggan & saldo tetap.`,
-      confirm:`${txCount} transaksi akan dihapus permanen.`},
+    tx:{icon:"📋",label:"Reset Transaksi & PO",color:"#ea580c",border:"#fed7aa",bg:"#fff7ed",
+      desc:`Hapus semua transaksi (${txCount}) dan data Pre-Order (${poCount}). Data pelanggan & saldo tetap.`,
+      confirm:`${txCount} transaksi dan ${poCount} data PO akan dihapus permanen.`},
     full:{icon:"🔥",label:"Reset Penuh (Event Baru)",color:"#dc2626",border:"#fca5a5",bg:"#fef2f2",
-      desc:`Hapus SEMUA transaksi (${txCount}), pelanggan (${custCount}), dan riwayat saldo. Gunakan untuk memulai event baru dari awal.`,
-      confirm:`${txCount} transaksi, ${custCount} pelanggan & semua riwayat saldo akan dihapus PERMANEN.`},
+      desc:`Hapus SEMUA transaksi (${txCount}), PO (${poCount}), pelanggan (${custCount}), dan riwayat saldo. Gunakan untuk memulai event baru dari awal.`,
+      confirm:`${txCount} transaksi, ${poCount} PO, ${custCount} pelanggan & semua riwayat saldo akan dihapus PERMANEN.`},
     tenant:{icon:"🏪",label:"Reset Tenant & Menu",color:"#7c3aed",border:"#c4b5fd",bg:"#f5f0ff",
       desc:`Hapus semua tenant (${tenantCount}) dan menu (${menuCount}). Hanya aktif setelah transaksi dikosongkan.`,
       confirm:`${tenantCount} tenant dan ${menuCount} menu akan dihapus permanen.`,
@@ -2183,9 +2186,24 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
     const cust=customers.find(c=>c.id===sc)||customers.find(c=>c.phone===sc.replace(/\D/g,""));
     if(!cust||cust.id!==order.customerId){setVerifyError("❌ QR tidak cocok dengan pelanggan PO ini!");return;}
     if(cust.pin&&verifyPin!==cust.pin){setVerifyPinError("❌ PIN salah! Coba lagi.");setVerifyPin("");return;}
-    await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",verifiedAt:new Date().toISOString(),verifiedBy:adminData?.name||"Admin"}:o));
+
+    // Jika Belum Lunas — potong saldo dulu
+    if(order.paymentStatus==="unpaid"){
+      if(cust.balance<order.subtotal){setVerifyError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(order.subtotal)}`);return;}
+      const balBefore=cust.balance; const balAfter=balBefore-order.subtotal;
+      await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
+      const logEntry={id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
+        type:"payment",amount:order.subtotal,balanceBefore:balBefore,balanceAfter:balAfter,
+        nota:order.nota,tenantId:order.tenantId,tenantName:order.tenantName,
+        items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
+      await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+      if(settings?.fonnteToken){
+        sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n✅ *Pembayaran & Pengambilan PO*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n💸 Dibayar: ${idr(order.subtotal)}\n🪙 Sisa Saldo: ${idr(balAfter)}\n\nTerima kasih! 🙏`});
+      }
+    }
+    await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",paymentStatus:"paid",verifiedAt:new Date().toISOString(),verifiedBy:adminData?.name||"Admin"}:o));
     closeVerify();
-    setSuccessMsg(`✅ PO ${order.nota} (${order.tenantName}) — Selesai!`);
+    setSuccessMsg(`✅ PO ${order.nota} (${order.tenantName}) — ${order.paymentStatus==="unpaid"?"Dibayar & ":""}Selesai!`);
     setTimeout(()=>setSuccessMsg(""),4000);
   };
 
@@ -2278,7 +2296,12 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
       {showVerifyScanner&&(
         <Modal title="📷 Scan QR — Konfirmasi Pengambilan" onClose={closeVerify}>
           <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>Scan QR pelanggan untuk konfirmasi pengambilan. Tidak memotong saldo.</p>
-          {(()=>{const ord=(orders||[]).find(o=>o.id===verifyOrderId);return ord&&<div style={{background:"#f0f9ff",borderRadius:10,padding:"8px 14px",marginBottom:10}}><p style={{margin:0,fontSize:13,color:"#0284c7",fontWeight:600}}>📋 {ord.nota} — {ord.tenantName} — {ord.customerName}</p></div>;})()} 
+          {(()=>{const ord=(orders||[]).find(o=>o.id===verifyOrderId);return ord&&<div style={{background:ord.paymentStatus==="unpaid"?"#fef2f2":"#f0f9ff",borderRadius:10,padding:"8px 14px",marginBottom:10}}>
+            <p style={{margin:0,fontSize:13,color:ord.paymentStatus==="unpaid"?"#dc2626":"#0284c7",fontWeight:600}}>
+              {ord.paymentStatus==="unpaid"?"💸 BAYAR NANTI — Saldo akan dipotong saat ini":"📋 Sudah Lunas"} | {ord.nota} — {ord.tenantName} — {ord.customerName}
+            </p>
+            {ord.paymentStatus==="unpaid"&&<p style={{margin:"3px 0 0",fontSize:12,color:"#dc2626",fontWeight:700}}>Total yang akan dibayar: {idr(ord.subtotal)}</p>}
+          </div>;})()} 
           {!verifyScan&&(
             <div style={{position:"relative",borderRadius:14,overflow:"hidden",background:"#000",marginBottom:12,height:220}}>
               <video ref={videoRef} style={{width:"100%",height:"100%",objectFit:"cover"}} playsInline muted/>
@@ -2450,8 +2473,43 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
                   setShowScanner(true);
                   startScan((sc,found)=>{setScanPhone(found?found.id:sc);setScannedCust(found||null);});
                 }}
-                style={{width:"100%",padding:"14px",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",color:"#fff",border:"none",borderRadius:12,fontWeight:800,fontSize:15,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-                📷 Scan QR & Proses PO
+                style={{width:"100%",padding:"14px",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",color:"#fff",border:"none",borderRadius:12,fontWeight:800,fontSize:15,cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                📷 Scan QR & Bayar Sekarang
+              </button>
+              <button onClick={async()=>{
+                  if(!selCust){alert("Pilih pelanggan terlebih dahulu!");return;}
+                  if(!window.confirm(`Buat PO "Bayar Nanti" untuk ${selCust.name}?\nSaldo TIDAK dipotong sekarang, pelanggan bayar saat pengambilan.`))return;
+                  const todayOrders=(orders||[]).filter(o=>o.date===todayStr());
+                  const groupSeq=String(todayOrders.reduce((max,o)=>Math.max(max,parseInt((o.groupNota||"PO-0-0").split("-").pop())||0),0)+1).padStart(3,"0");
+                  const groupNota=`PO-${todayStr().replace(/-/g,"")}-${groupSeq}`;
+                  const groupId=uid();
+                  const newOrders=[];
+                  for(const tenantId of tenantIds){
+                    const tenant=tenants.find(t=>t.id===tenantId);
+                    const items=cart.filter(it=>it.tenantId===tenantId);
+                    const subtotal=items.reduce((s,it)=>s+it.price*it.qty,0);
+                    newOrders.push({
+                      id:uid(),groupId,groupNota,nota:`${groupNota}/${tenant?.code||tenantId}`,
+                      customerId:selCust.id,customerName:selCust.name,customerPhone:selCust.phone,
+                      tenantId,tenantCode:tenant?.code||"",tenantName:tenant?.name||"",
+                      items:items.map(it=>({menuId:it.menuId,menuCode:it.menuCode,menuName:it.menuName,price:it.price,qty:it.qty})),
+                      subtotal,groupTotal:total,paymentStatus:"unpaid",status:"pending",
+                      date:todayStr(),time:timeStr(),timestamp:new Date().toISOString(),
+                      createdBy:adminData?.name||"Admin",
+                    });
+                  }
+                  await onSaveOrders([...(orders||[]),...newOrders]);
+                  if(settings?.fonnteToken){
+                    const lines=tenantIds.map(tid=>{const t=tenants.find(x=>x.id===tid);const its=cart.filter(it=>it.tenantId===tid);return`🏪 *${t?.name||tid}*\n`+its.map(it=>`  🍽️ ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");}).join("\n");
+                    sendWhatsApp({token:settings.fonnteToken,phone:selCust.phone,message:`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n📦 *PRE-ORDER — BAYAR NANTI*\n📋 Nota: *${groupNota}*\n👤 Nama: ${selCust.name}\n━━━━━━━━━━━━━━━\n${lines}\n━━━━━━━━━━━━━━━\n💰 *TOTAL: ${idr(total)}*\n⚠️ Pembayaran dilakukan saat pengambilan.\n\nTerima kasih! 🙏`});
+                  }
+                  setCart([]);setSelCust(null);
+                  setSuccessMsg(`✅ PO Bayar Nanti (${groupNota}) dicatat! Bayar saat pengambilan.`);
+                  setTimeout(()=>setSuccessMsg(""),5000);
+                }}
+                style={{width:"100%",padding:"12px",background:"#fff7ed",color:"#ea580c",border:"2px solid #fed7aa",borderRadius:12,fontWeight:800,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                onMouseOver={e=>e.currentTarget.style.background="#fef3c7"} onMouseOut={e=>e.currentTarget.style.background="#fff7ed"}>
+                🕐 Bayar Nanti (Catat Dulu)
               </button>
               {!selCust&&<p style={{textAlign:"center",color:"#f97316",fontSize:12,margin:"6px 0 0"}}>⚠️ Pilih pelanggan dulu</p>}
             </div>
@@ -2495,6 +2553,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
                     <div>
                       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:4}}>
                         <span style={{background:"#fef3c7",color:"#92400e",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #fbbf24"}}>⏳ Belum Selesai</span>
+                        {order.paymentStatus==="unpaid"&&<span style={{background:"#fef2f2",color:"#dc2626",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #fca5a5"}}>💸 Belum Lunas</span>}
                         <span style={{background:"#fff7ed",color:"#ea580c",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20}}>🏪 {order.tenantName}</span>
                         <span style={{background:"#f0f9ff",color:"#0284c7",fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>📋 {order.nota}</span>
                       </div>
@@ -2514,8 +2573,8 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
                   </div>
                   <div style={{display:"flex",gap:8}}>
                     <button onClick={()=>{setVerifyOrderId(order.id);setShowVerifyScanner(true);startScan((sc)=>setVerifyScan(sc));}}
-                      style={{flex:2,padding:"11px",background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",gap:6,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-                      📷 Scan QR — Selesaikan
+                      style={{flex:2,padding:"11px",background:order.paymentStatus==="unpaid"?"#dc2626":"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",gap:6,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                      {order.paymentStatus==="unpaid"?"📷 Scan QR — Bayar & Selesaikan":"📷 Scan QR — Selesaikan"}
                     </button>
                     <button onClick={()=>resendPO(order)}
                       style={{flex:1,padding:"11px",background:"#f0f9ff",color:"#0284c7",border:"1px solid #bae6fd",borderRadius:10,fontWeight:600,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
@@ -2645,7 +2704,7 @@ function POReport({orders,tenants,customers}){
 }
 
 // ─── PO Tenant ────────────────────────────────────────────────────────────────
-function POTenant({tenant,orders,customers,onSaveOrders}){
+function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers}){
   const [poSearch,setPOSearch]=useState("");
   const [showScanner,setShowScanner]=useState(false);
   const [verifyOrderId,setVerifyOrderId]=useState(null);
@@ -2686,9 +2745,21 @@ function POTenant({tenant,orders,customers,onSaveOrders}){
     const cust=customers.find(c=>c.id===sc)||customers.find(c=>c.phone===sc.replace(/\D/g,""));
     if(!cust||cust.id!==order.customerId){setVerifyError("❌ QR tidak cocok dengan pelanggan PO ini!");return;}
     if(cust.pin&&verifyPin!==cust.pin){setVerifyPinError("❌ PIN salah! Coba lagi.");setVerifyPin("");return;}
-    await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",verifiedAt:new Date().toISOString(),verifiedBy:tenant.name}:o));
+
+    // Jika Belum Lunas — potong saldo
+    if(order.paymentStatus==="unpaid"){
+      if(cust.balance<order.subtotal){setVerifyError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(order.subtotal)}`);return;}
+      const balBefore=cust.balance; const balAfter=balBefore-order.subtotal;
+      await (async()=>{
+        // Tenant tidak punya akses onSaveCustomers/walletLogs — kirim pesan error jika tidak ada
+        if(typeof onSaveCustomers==="function"){
+          await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
+        }
+      })();
+    }
+    await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",paymentStatus:"paid",verifiedAt:new Date().toISOString(),verifiedBy:tenant.name}:o));
     closeScanner();
-    setSuccessMsg(`✅ PO ${order.nota} — Selesai!`);
+    setSuccessMsg(`✅ PO ${order.nota} — ${order.paymentStatus==="unpaid"?"Dibayar & ":""}Selesai!`);
     setTimeout(()=>setSuccessMsg(""),4000);
   };
 
@@ -2775,7 +2846,8 @@ function POTenant({tenant,orders,customers,onSaveOrders}){
                 <div>
                   <div style={{display:"flex",gap:6,marginBottom:4}}>
                     <span style={{background:"#fef3c7",color:"#92400e",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #fbbf24"}}>⏳ Belum Diambil</span>
-                    <span style={{background:"#f0f9ff",color:"#0284c7",fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>{order.nota}</span>
+                    <span style={{background:"#fef3c7",color:"#92400e",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #fbbf24"}}>⏳ Belum Diambil</span>
+                    {order.paymentStatus==="unpaid"&&<span style={{background:"#fef2f2",color:"#dc2626",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #fca5a5"}}>💸 Belum Lunas</span>}
                   </div>
                   <p style={{margin:"0 0 2px",fontWeight:800,color:"#1c0a00",fontSize:15}}>{order.customerName}</p>
                   <p style={{margin:0,color:"#6b7280",fontSize:12}}>📱 {order.customerPhone} • {order.date}</p>
@@ -2791,9 +2863,10 @@ function POTenant({tenant,orders,customers,onSaveOrders}){
                 ))}
               </div>
               <button onClick={()=>startVerify(order.id)}
-                style={{width:"100%",padding:"12px",background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
-                onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
-                📷 Scan QR — Konfirmasi Pengambilan
+              <button onClick={()=>startVerify(order.id)}
+                style={{width:"100%",padding:"12px",background:order.paymentStatus==="unpaid"?"#dc2626":"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                onMouseOver={e=>e.currentTarget.style.background=order.paymentStatus==="unpaid"?"#b91c1c":"#15803d"} onMouseOut={e=>e.currentTarget.style.background=order.paymentStatus==="unpaid"?"#dc2626":"#16a34a"}>
+                {order.paymentStatus==="unpaid"?"📷 Scan QR — Bayar & Ambil":"📷 Scan QR — Konfirmasi Pengambilan"}
               </button>
             </div>
           ))}
@@ -3281,7 +3354,7 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
 
       <div style={{padding:16,maxWidth:520,margin:"0 auto"}} className="fade-in">
         {tab==="pos"&&<TenantPOS tenant={tenant} menus={menus} allTransactions={allTransactions} onSaveTx={onSaveTx} settings={settings} isOnline={isOnline} customers={customers} walletLogs={walletLogs} onSaveCustomers={onSaveCustomers} onSaveWalletLogs={onSaveWalletLogs}/>}
-        {tab==="po"&&<POTenant tenant={tenant} orders={orders} customers={customers} onSaveOrders={onSaveOrders}/>}
+        {tab==="po"&&<POTenant tenant={tenant} orders={orders} customers={customers} onSaveOrders={onSaveOrders} onSaveCustomers={onSaveCustomers}/>}
         {tab==="menu"&&<TenantMenuMgr tenant={tenant} menus={menus} allMenus={allMenus} allTransactions={allTransactions} onSaveMenus={onSaveMenus}/>}
         {tab==="history"&&<TenantHistory transactions={transactions} tenant={tenant} settings={settings}/>}
       </div>
