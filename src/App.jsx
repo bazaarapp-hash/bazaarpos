@@ -40,6 +40,7 @@ document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
 
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
 const todayStr = () => new Date().toISOString().split("T")[0];
@@ -2862,7 +2863,6 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers}){
                   </div>
                 ))}
               </div>
-              <button onClick={()=>startVerify(order.id)}
               <button onClick={()=>startVerify(order.id)}
                 style={{width:"100%",padding:"12px",background:order.paymentStatus==="unpaid"?"#dc2626":"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
                 onMouseOver={e=>e.currentTarget.style.background=order.paymentStatus==="unpaid"?"#b91c1c":"#15803d"} onMouseOut={e=>e.currentTarget.style.background=order.paymentStatus==="unpaid"?"#dc2626":"#16a34a"}>
