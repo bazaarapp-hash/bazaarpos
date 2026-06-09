@@ -1767,8 +1767,14 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     if(settings.fonnteToken){
       waSent=await sendWhatsApp({token:settings.fonnteToken,phone:updCust.phone,message:waMsg});
     }
+    // Fallback: buka WA langsung ke nomor pelanggan
+    if(!waSent){
+      const waPhone=updCust.phone.replace(/\D/g,"");
+      const target=waPhone.startsWith("0")?"62"+waPhone.slice(1):waPhone;
+      window.open(`https://wa.me/${target}?text=${encodeURIComponent(waMsg)}`,"_blank");
+    }
 
-    showMsg(`✅ Top up berhasil!${isNew?` PIN pelanggan: ${updCust.pin} (catat & sampaikan ke pelanggan)`:""}${waSent?" WA terkirim!":settings.fonnteToken?" (WA gagal)":""}`);
+    showMsg(`✅ Top up berhasil!${isNew?` PIN pelanggan: ${updCust.pin} (catat & sampaikan ke pelanggan)`:""}${waSent?" WA terkirim otomatis!":" WA dibuka — kirim manual."}`);
     setForm({phone:"",name:"",amount:""});
     setSending(false);
   };
@@ -2182,7 +2188,8 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
         return `🏪 *${t?.name||tid}*\n`+its.map(it=>`  🍽️ ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
       }).join("\n");
       const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n📦 *NOTA PRE-ORDER*\n📋 Nota: *${groupNota}*\n👤 Nama: ${cust.name}\n📅 ${todayStr()} ${timeStr()}\n━━━━━━━━━━━━━━━\n${lines}\n━━━━━━━━━━━━━━━\n💰 *TOTAL: ${idr(total)}*\n🪙 Sisa Saldo: ${idr(balAfter)}\n\nAmbil pesanan saat bazaar. Terima kasih! 🙏`;
-      sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg});
+      const _ok1=await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg});
+      if(!_ok1){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
     }
 
     closeScanner();setCart([]);setSelCust(null);setProcessing(false);
@@ -2210,7 +2217,9 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
         items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
       await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
       if(settings?.fonnteToken){
-        sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n✅ *Pembayaran & Pengambilan PO*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n💸 Dibayar: ${idr(order.subtotal)}\n🪙 Sisa Saldo: ${idr(balAfter)}\n\nTerima kasih! 🙏`});
+        const _msg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n✅ *Pembayaran & Pengambilan PO*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n💸 Dibayar: ${idr(order.subtotal)}\n🪙 Sisa Saldo: ${idr(balAfter)}\n\nTerima kasih! 🙏`;
+        const _ok=await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:_msg});
+        if(!_ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_msg)}`,"_blank");}
       }
     }
     await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",paymentStatus:"paid",verifiedAt:new Date().toISOString(),verifiedBy:adminData?.name||"Admin"}:o));
@@ -2221,13 +2230,21 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
 
   // Kirim ulang nota PO
   const resendPO=async(order)=>{
-    if(!settings?.fonnteToken){alert("Fonnte token belum diisi di Pengaturan.");return;}
     const cust=customers.find(c=>c.id===order.customerId);
     if(!cust){alert("Pelanggan tidak ditemukan.");return;}
-    const items=order.items.map(it=>`  🍽️ ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
-    const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n📦 *Nota Pre-Order (${order.status==="pending"?"Belum Diambil":"Sudah Selesai"})*\n📋 Nota: *${order.nota}*\n🏪 Tenant: ${order.tenantName}\n👤 Nama: ${cust.name}\n📅 ${order.date}\n━━━━━━━━━━━━━━━\n${items}\n━━━━━━━━━━━━━━━\n💰 *SUBTOTAL: ${idr(order.subtotal)}*\n\n${order.status==="completed"?"✅ Pesanan ini sudah diambil.":"⏳ Pesanan belum diambil."}\n\nTerima kasih! 🙏`;
-    const ok=await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg});
-    alert(ok?"✅ Nota PO berhasil dikirim!":"❌ Gagal kirim WA.");
+    const items=order.items.map(it=>`[${it.menuCode||""}] ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
+    const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\nNota Pre-Order (${order.status==="pending"?"Belum Diambil":"Sudah Selesai"})\nNota: ${order.nota}\nTenant: ${order.tenantName}\nNama: ${cust.name}\nTgl: ${order.date}\n---------------------------\n${items}\n---------------------------\n*SUBTOTAL: ${idr(order.subtotal)}*\n\n${order.status==="completed"?"Pesanan sudah diambil.":"Pesanan belum diambil."}\n\nTerima kasih!`;
+    let sent=false;
+    if(settings?.fonnteToken){
+      sent=await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg});
+    }
+    if(!sent){
+      const waPhone=cust.phone.replace(/\D/g,"");
+      const target=waPhone.startsWith("0")?"62"+waPhone.slice(1):waPhone;
+      window.open(`https://wa.me/${target}?text=${encodeURIComponent(waMsg)}`,"_blank");
+    } else {
+      alert("✅ Nota PO berhasil dikirim!");
+    }
   };
 
   // Data PO Tercatat — filtered per tenant
@@ -2513,7 +2530,9 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
                   await onSaveOrders([...(orders||[]),...newOrders]);
                   if(settings?.fonnteToken){
                     const lines=tenantIds.map(tid=>{const t=tenants.find(x=>x.id===tid);const its=cart.filter(it=>it.tenantId===tid);return`🏪 *${t?.name||tid}*\n`+its.map(it=>`  🍽️ ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");}).join("\n");
-                    sendWhatsApp({token:settings.fonnteToken,phone:selCust.phone,message:`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n📦 *PRE-ORDER — BAYAR NANTI*\n📋 Nota: *${groupNota}*\n👤 Nama: ${selCust.name}\n━━━━━━━━━━━━━━━\n${lines}\n━━━━━━━━━━━━━━━\n💰 *TOTAL: ${idr(total)}*\n⚠️ Pembayaran dilakukan saat pengambilan.\n\nTerima kasih! 🙏`});
+                    const _bnMsg=`*${settings.bazaarName||"BazaarPOS"}*\n\nPRE-ORDER — BAYAR NANTI\nNota: ${groupNota}\nNama: ${selCust.name}\n---------------------------\n${lines}\n---------------------------\n*TOTAL: ${idr(total)}*\nPembayaran saat pengambilan.\n\nTerima kasih!`;
+                    const _bnOk=settings.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:selCust.phone,message:_bnMsg}):false;
+                    if(!_bnOk){const _p=selCust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_bnMsg)}`,"_blank");}
                   }
                   setCart([]);setSelCust(null);
                   setSuccessMsg(`✅ PO Bayar Nanti (${groupNota}) dicatat! Bayar saat pengambilan.`);
@@ -2940,7 +2959,9 @@ function AdminTransactions({tenants,transactions,settings,customers,walletLogs,o
             timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
           await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
           if(settings?.fonnteToken){
-            sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:`🏪 *${bname}*\n\n↩️ *Refund/Pembatalan*\n📋 Nota: ${tx.nota}\n💰 Refund: +${idr(tx.total)}\n🪙 Saldo: ${idr(balAfter)}\n🕐 ${new Date().toLocaleString("id-ID")}\n\nTerima kasih! 🙏`});
+            const _rfMsg=`*${bname}*\n\nRefund/Pembatalan\nNota: ${tx.nota}\nRefund: +${idr(tx.total)}\nSaldo: ${idr(balAfter)}\nWaktu: ${new Date().toLocaleString("id-ID")}\n\nTerima kasih!`;
+            const _rfOk=await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:_rfMsg});
+            if(!_rfOk){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_rfMsg)}`,"_blank");}
           }
           setRefundMsg(`✅ Refund berhasil! Saldo ${cust.name} +${idr(tx.total)} → ${idr(balAfter)}`);
         } else { setRefundMsg("✅ Transaksi dibatalkan. Pelanggan tidak ditemukan."); }
@@ -3485,7 +3506,8 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
       // Kirim WA notifikasi saldo
       if(settings.fonnteToken){
         const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n🛒 *Transaksi Belanja*\n📋 Nota: ${nota}\n🏪 Tenant: ${tenant.name}\n💸 Bayar: ${idr(total)}\n📊 Saldo Lama: ${idr(balBefore)}\n🪙 Sisa Saldo: ${idr(balAfter)}\n🕐 Waktu: ${new Date().toLocaleString("id-ID")}\n\nTerima kasih ${walletCust.name}! 🙏`;
-        sendWhatsApp({token:settings.fonnteToken,phone:walletCust.phone,message:waMsg});
+        const _txOk=await sendWhatsApp({token:settings.fonnteToken,phone:walletCust.phone,message:waMsg});
+        if(!_txOk){const _p=walletCust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
       }
       // Simpan info customer ke tx untuk ditampilkan di struk
       tx.walletBalanceAfter=balAfter;
