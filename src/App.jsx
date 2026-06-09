@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────49
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -39,6 +39,14 @@ _gs.textContent = `
 document.head.appendChild(_gs);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
+const db = {
+  async get(k) {
+    try { const r = await window.storage.get(k); return r ? JSON.parse(r.value) : null; } catch { return null; }
+  },
+  async set(k, v) {
+    try { await window.storage.set(k, JSON.stringify(v)); } catch(e) { console.error(e); }
+  },
+};
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
@@ -1606,17 +1614,31 @@ function ResetPanel({transactions,tenants,menus,customers,walletLogs,orders,sett
 
 // ─── WhatsApp Sender via Fonnte ───────────────────────────────────────────────
 async function sendWhatsApp({token, phone, message}){
-  if(!token||!phone) return false;
+  if(!token||!phone||!message) return false;
   try{
-    const target = phone.startsWith("0") ? "62"+phone.slice(1) : phone.replace(/\D/g,"");
-    const res = await fetch("https://api.fonnte.com/send",{
+    // Format nomor: 08xxx → 628xxx, hilangkan karakter non-digit
+    let target=phone.replace(/\D/g,"");
+    if(target.startsWith("0")) target="62"+target.slice(1);
+    if(!target.startsWith("62")) target="62"+target;
+
+    // Fonnte butuh form-data, bukan JSON
+    const form=new FormData();
+    form.append("target", target);
+    form.append("message", message);
+    form.append("countryCode", "62");
+
+    const res=await fetch("https://api.fonnte.com/send",{
       method:"POST",
-      headers:{"Authorization":token,"Content-Type":"application/json"},
-      body:JSON.stringify({target, message, countryCode:"62"}),
+      headers:{"Authorization":token},
+      body:form,
     });
-    const d = await res.json();
-    return d.status===true||d.status==="true";
-  }catch(e){ console.error("WA error:",e); return false; }
+    const d=await res.json();
+    console.log("Fonnte response:", d);
+    return d.status===true||d.status==="true"||d.status==="200"||d.detail?.includes("success")||false;
+  }catch(e){
+    console.error("WA error:",e);
+    return false;
+  }
 }
 
 // ─── Generate Customer Card (Canvas → JPEG dataURL) ──────────────────────────
