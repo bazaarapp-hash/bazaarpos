@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────52
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -1921,8 +1921,8 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
               ))}
             </div>
 
-            {/* Preview saldo — tampil saat phone DAN amount sudah diisi */}
-            {form.phone&&form.amount&&(()=>{
+            {/* Preview saldo — tampil saat phone DAN amount sudah diisi, sembunyikan saat proses */}
+            {form.phone&&form.amount&&!sending&&(()=>{
               const cleanPhone=form.phone.trim().replace(/\D/g,"");
               const found=customers.find(c=>c.phone===cleanPhone);
               // Saldo saat ini: 0 jika pelanggan baru, atau saldo tersimpan jika sudah ada
