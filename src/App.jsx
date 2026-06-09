@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────49
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -37,8 +37,6 @@ _gs.textContent = `
   }
 `;
 document.head.appendChild(_gs);
-
-// ─── Storage ──────────────────────────────────────────────────────────────────
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
@@ -3501,35 +3499,50 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
   const doPrint=async()=>{
     setSendStatus("⏳ Mengirim struk...");
     const lines=lastNota.items.map(it=>
-      `  🍽️ ${it.menuName}\n     ${it.qty} x ${idr(it.price)} = *${idr(it.qty*it.price)}*`
+      `[${it.menuCode}] ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`
     ).join("\n");
     const receiptText=
-`━━━━━━━━━━━━━━━━━━━━━━━
-🏪 *${settings?.bazaarName||"BazaarPOS"}*
-📍 ${tenant.code} — ${tenant.name}
-━━━━━━━━━━━━━━━━━━━━━━━
-🧾 Nota  : *${lastNota.nota}*
-📅 Tgl   : ${lastNota.date} ${lastNota.time}
-💳 Bayar : Saldo${lastNota.walletCustomerName?`\n👤 Plgn  : ${lastNota.walletCustomerName}`:""}
-━━━━━━━━━━━━━━━━━━━━━━━
+`*${settings?.bazaarName||"BazaarPOS"}*
+${tenant.code} - ${tenant.name}
+---------------------------
+Nota : ${lastNota.nota}
+Tgl  : ${lastNota.date} ${lastNota.time}
+Bayar: Saldo${lastNota.walletCustomerName?"\nPlgn : "+lastNota.walletCustomerName:""}
+---------------------------
 ${lines}
-━━━━━━━━━━━━━━━━━━━━━━━
-💰 *TOTAL : ${idr(lastNota.total)}*${lastNota.walletBalanceAfter!=null?`\n🪙 Sisa Saldo : ${idr(lastNota.walletBalanceAfter)}`:""}
-━━━━━━━━━━━━━━━━━━━━━━━
-${settings?.receiptFooter1||"Terima kasih!"}
-${settings?.receiptFooter2||"Selamat menikmati :)"}`;
+---------------------------
+*TOTAL: ${idr(lastNota.total)}*${lastNota.walletBalanceAfter!=null?"\nSisa : "+idr(lastNota.walletBalanceAfter):""}
+---------------------------
+${settings?.receiptFooter1||"Terima kasih!"}`;
 
     try{
+      let sent=false;
       if(settings?.fonnteToken&&lastNota.walletCustomerPhone){
-        const ok=await sendWhatsApp({token:settings.fonnteToken,phone:lastNota.walletCustomerPhone,message:receiptText});
-        setSendStatus(ok?"✅ Struk terkirim ke WhatsApp pelanggan!":"⚠️ Gagal kirim WA, coba lagi.");
+        sent=await sendWhatsApp({
+          token:settings.fonnteToken,
+          phone:lastNota.walletCustomerPhone,
+          message:receiptText
+        });
+        if(sent){
+          setSendStatus("✅ Struk terkirim ke WhatsApp pelanggan!");
+          setPrinted(true);
+          return;
+        }
+      }
+      // Fallback: buka WA langsung jika Fonnte gagal atau tidak dikonfigurasi
+      if(lastNota.walletCustomerPhone){
+        const waPhone=lastNota.walletCustomerPhone.replace(/\D/g,"");
+        const target=waPhone.startsWith("0")?"62"+waPhone.slice(1):waPhone;
+        window.open(`https://wa.me/${target}?text=${encodeURIComponent(receiptText)}`,"_blank");
+        setSendStatus("✅ WhatsApp pelanggan dibuka — kirim struk manual.");
       } else {
         window.open(`https://wa.me/?text=${encodeURIComponent(receiptText)}`,"_blank");
         setSendStatus("✅ WhatsApp dibuka dengan struk.");
       }
       setPrinted(true);
     }catch(e){
-      setSendStatus("⚠️ Gagal, coba lagi.");
+      console.error("doPrint error:",e);
+      setSendStatus("⚠️ Error: "+e.message);
       setPrinted(true);
     }
   };
@@ -3798,28 +3811,35 @@ function TenantHistory({transactions,tenant,settings}){
   const sendReceiptWA=async(tx)=>{
     setSending(tx.id);
     const lines=tx.items.map(it=>
-      `  🍽️ ${it.menuName}\n     ${it.qty} x ${idr(it.price)} = *${idr(it.qty*it.price)}*`
+      `[${it.menuCode}] ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`
     ).join("\n");
     const receiptText=
-`━━━━━━━━━━━━━━━━━━━━━━━
-🏪 *${settings?.bazaarName||"BazaarPOS"}*
-📍 ${tenant.code} — ${tenant.name}
-━━━━━━━━━━━━━━━━━━━━━━━
-🧾 Nota  : *${tx.nota}*
-📅 Tgl   : ${tx.date} ${tx.time}
-💳 Bayar : Saldo${tx.walletCustomerName?`\n👤 Plgn  : ${tx.walletCustomerName}`:""}
-━━━━━━━━━━━━━━━━━━━━━━━
+`*${settings?.bazaarName||"BazaarPOS"}*
+${tenant.code} - ${tenant.name}
+---------------------------
+Nota : ${tx.nota}
+Tgl  : ${tx.date} ${tx.time}
+Bayar: Saldo${tx.walletCustomerName?"\nPlgn : "+tx.walletCustomerName:""}
+---------------------------
 ${lines}
-━━━━━━━━━━━━━━━━━━━━━━━
-💰 *TOTAL : ${idr(tx.total)}*${tx.walletBalanceAfter!=null?`\n🪙 Sisa Saldo : ${idr(tx.walletBalanceAfter)}`:""}
-━━━━━━━━━━━━━━━━━━━━━━━
-${settings?.receiptFooter1||"Terima kasih!"}
-${settings?.receiptFooter2||"Selamat menikmati :)"}`;
+---------------------------
+*TOTAL: ${idr(tx.total)}*${tx.walletBalanceAfter!=null?"\nSisa : "+idr(tx.walletBalanceAfter):""}
+---------------------------
+${settings?.receiptFooter1||"Terima kasih!"}`;
 
+    let sent=false;
     if(settings?.fonnteToken&&tx.walletCustomerPhone){
-      await sendWhatsApp({token:settings.fonnteToken,phone:tx.walletCustomerPhone,message:receiptText});
-    } else {
-      window.open(`https://wa.me/?text=${encodeURIComponent(receiptText)}`,"_blank");
+      sent=await sendWhatsApp({token:settings.fonnteToken,phone:tx.walletCustomerPhone,message:receiptText});
+    }
+    // Fallback: buka WA langsung ke nomor pelanggan
+    if(!sent){
+      if(tx.walletCustomerPhone){
+        const waPhone=tx.walletCustomerPhone.replace(/\D/g,"");
+        const target=waPhone.startsWith("0")?"62"+waPhone.slice(1):waPhone;
+        window.open(`https://wa.me/${target}?text=${encodeURIComponent(receiptText)}`,"_blank");
+      } else {
+        window.open(`https://wa.me/?text=${encodeURIComponent(receiptText)}`,"_blank");
+      }
     }
     setSending(null);
   };
