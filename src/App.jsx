@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────52
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -2187,7 +2187,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
         const its=cart.filter(it=>it.tenantId===tid);
         return `🏪 *${t?.name||tid}*\n`+its.map(it=>`  🍽️ ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
       }).join("\n");
-      const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n📦 *NOTA PRE-ORDER*\n📋 Nota: *${groupNota}*\n👤 Nama: ${cust.name}\n📅 ${todayStr()} ${timeStr()}\n━━━━━━━━━━━━━━━\n${lines}\n━━━━━━━━━━━━━━━\n💰 *TOTAL: ${idr(total)}*\n🪙 Sisa Saldo: ${idr(balAfter)}\n\nAmbil pesanan saat bazaar. Terima kasih! 🙏`;
+      const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n📦 *NOTA PRE-ORDER* ✅ *LUNAS*\n📋 Nota: *${groupNota}*\n👤 Nama: ${cust.name}\n📅 ${todayStr()} ${timeStr()}\n---------------------------\n${lines}\n---------------------------\n💰 *TOTAL: ${idr(total)}*\n🪙 Sisa Saldo: ${idr(balAfter)}\n\n✅ *Pembayaran LUNAS*\nAmbil pesanan saat bazaar. Terima kasih! 🙏`;
       const _ok1=await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg});
       if(!_ok1){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
     }
@@ -2735,7 +2735,7 @@ function POReport({orders,tenants,customers}){
 }
 
 // ─── PO Tenant ────────────────────────────────────────────────────────────────
-function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers}){
+function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,settings}){
   const [poSearch,setPOSearch]=useState("");
   const [showScanner,setShowScanner]=useState(false);
   const [verifyOrderId,setVerifyOrderId]=useState(null);
@@ -2781,12 +2781,18 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers}){
     if(order.paymentStatus==="unpaid"){
       if(cust.balance<order.subtotal){setVerifyError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(order.subtotal)}`);return;}
       const balBefore=cust.balance; const balAfter=balBefore-order.subtotal;
-      await (async()=>{
-        // Tenant tidak punya akses onSaveCustomers/walletLogs — kirim pesan error jika tidak ada
-        if(typeof onSaveCustomers==="function"){
-          await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
-        }
-      })();
+      if(typeof onSaveCustomers==="function"){
+        await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
+      }
+      // Kirim WA notif bayar + ambil
+      const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n✅ Pembayaran & Pengambilan PO\nNota: ${order.nota}\nTenant: ${order.tenantName}\nDibayar: ${idr(order.subtotal)}\nSisa Saldo: ${idr(balAfter)}\n\nTerima kasih!`;
+      const _ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg}):false;
+      if(!_ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
+    } else {
+      // PO sudah lunas — kirim WA konfirmasi pengambilan saja
+      const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n✅ Pengambilan PO Dikonfirmasi\nNota: ${order.nota}\nTenant: ${order.tenantName}\nWaktu: ${new Date().toLocaleString("id-ID")}\n\nTerima kasih!`;
+      const _ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg}):false;
+      if(!_ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
     }
     await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",paymentStatus:"paid",verifiedAt:new Date().toISOString(),verifiedBy:tenant.name}:o));
     closeScanner();
@@ -3386,7 +3392,7 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
 
       <div style={{padding:16,maxWidth:520,margin:"0 auto"}} className="fade-in">
         {tab==="pos"&&<TenantPOS tenant={tenant} menus={menus} allTransactions={allTransactions} onSaveTx={onSaveTx} settings={settings} isOnline={isOnline} customers={customers} walletLogs={walletLogs} onSaveCustomers={onSaveCustomers} onSaveWalletLogs={onSaveWalletLogs}/>}
-        {tab==="po"&&<POTenant tenant={tenant} orders={orders} customers={customers} onSaveOrders={onSaveOrders} onSaveCustomers={onSaveCustomers}/>}
+        {tab==="po"&&<POTenant tenant={tenant} orders={orders} customers={customers} onSaveOrders={onSaveOrders} onSaveCustomers={onSaveCustomers} settings={settings}/>}
         {tab==="menu"&&<TenantMenuMgr tenant={tenant} menus={menus} allMenus={allMenus} allTransactions={allTransactions} onSaveMenus={onSaveMenus}/>}
         {tab==="history"&&<TenantHistory transactions={transactions} tenant={tenant} settings={settings}/>}
       </div>
