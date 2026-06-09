@@ -1602,6 +1602,11 @@ function ResetPanel({transactions,tenants,menus,customers,walletLogs,orders,sett
   );
 }
 
+// ─── WA Signature helper ──────────────────────────────────────────────────────
+function waSignature(issuedBy){
+  return `---------------------------\n📝 Diterbitkan: ${issuedBy||"Sistem"}\n🕐 Waktu: ${new Date().toLocaleString("id-ID")}`;
+}
+
 // ─── WhatsApp Sender via Fonnte ───────────────────────────────────────────────
 async function sendWhatsApp({token, phone, message}){
   if(!token||!phone||!message) return false;
@@ -1761,7 +1766,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     const cardLink=`${window.location.origin}${window.location.pathname}?card=${updCust.id}`;
 
     // Pesan WA dengan link kartu
-    const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\nHalo *${updCust.name}*! 👋\n\n✅ *Top Up Berhasil*\n💰 Nominal   : ${idr(amount)}\n📊 Saldo Lama: ${idr(balBefore)}\n🪙 Saldo Baru: ${idr(balAfter)}\n🕐 Waktu: ${now.toLocaleString("id-ID")}\n\n🔗 *Kartu Saldo Kamu:*\n${cardLink}\n\n_(Simpan link ini untuk cek saldo & QR Code)_\n\nTerima kasih! 🙏`;
+    const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\nHalo *${updCust.name}*! 👋\n\n✅ *Top Up Berhasil*\n💰 Nominal   : ${idr(amount)}\n📊 Saldo Lama: ${idr(balBefore)}\n🪙 Saldo Baru: ${idr(balAfter)}\n\n🔗 *Kartu Saldo Kamu:*\n${cardLink}\n\n_(Simpan link ini untuk cek saldo & QR Code)_\n\nTerima kasih! 🙏\n${waSignature(adminData?.name||"Admin")}`;
 
     let waSent=false;
     if(settings.fonnteToken){
@@ -2187,7 +2192,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
         const its=cart.filter(it=>it.tenantId===tid);
         return `🏪 *${t?.name||tid}*\n`+its.map(it=>`  🍽️ ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
       }).join("\n");
-      const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n📦 *NOTA PRE-ORDER* ✅ *LUNAS*\n📋 Nota: *${groupNota}*\n👤 Nama: ${cust.name}\n📅 ${todayStr()} ${timeStr()}\n---------------------------\n${lines}\n---------------------------\n💰 *TOTAL: ${idr(total)}*\n🪙 Sisa Saldo: ${idr(balAfter)}\n\n✅ *Pembayaran LUNAS*\nAmbil pesanan saat bazaar. Terima kasih! 🙏`;
+      const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n📦 *NOTA PRE-ORDER* ✅ *LUNAS*\n📋 Nota: *${groupNota}*\n👤 Nama: ${cust.name}\n📅 ${todayStr()} ${timeStr()}\n---------------------------\n${lines}\n---------------------------\n💰 *TOTAL: ${idr(total)}*\n🪙 Sisa Saldo: ${idr(balAfter)}\n\n✅ *Pembayaran LUNAS*\nAmbil pesanan saat bazaar. Terima kasih! 🙏\n${waSignature(adminData?.name||"Admin")}`;
       const _ok1=await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg});
       if(!_ok1){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
     }
@@ -2217,7 +2222,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
         items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
       await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
       if(settings?.fonnteToken){
-        const _msg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n✅ *Pembayaran & Pengambilan PO*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n💸 Dibayar: ${idr(order.subtotal)}\n🪙 Sisa Saldo: ${idr(balAfter)}\n\nTerima kasih! 🙏`;
+        const _msg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n✅ *Pembayaran & Pengambilan PO*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n💸 Dibayar: ${idr(order.subtotal)}\n🪙 Sisa Saldo: ${idr(balAfter)}\n\nTerima kasih! 🙏\n${waSignature(adminData?.name||"Admin")}`;
         const _ok=await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:_msg});
         if(!_ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_msg)}`,"_blank");}
       }
@@ -2233,7 +2238,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
     const cust=customers.find(c=>c.id===order.customerId);
     if(!cust){alert("Pelanggan tidak ditemukan.");return;}
     const items=order.items.map(it=>`[${it.menuCode||""}] ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
-    const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\nNota Pre-Order (${order.status==="pending"?"Belum Diambil":"Sudah Selesai"})\nNota: ${order.nota}\nTenant: ${order.tenantName}\nNama: ${cust.name}\nTgl: ${order.date}\n---------------------------\n${items}\n---------------------------\n*SUBTOTAL: ${idr(order.subtotal)}*\n\n${order.status==="completed"?"Pesanan sudah diambil.":"Pesanan belum diambil."}\n\nTerima kasih!`;
+    const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\nNota Pre-Order (${order.status==="pending"?"Belum Diambil":"Sudah Selesai"})\nNota: ${order.nota}\nTenant: ${order.tenantName}\nNama: ${cust.name}\nTgl: ${order.date}\n---------------------------\n${items}\n---------------------------\n*SUBTOTAL: ${idr(order.subtotal)}*\n\n${order.status==="completed"?"Pesanan sudah diambil.":"Pesanan belum diambil."}\n\nTerima kasih!\n${waSignature(adminData?.name||"Admin")}`;
     let sent=false;
     if(settings?.fonnteToken){
       sent=await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg});
@@ -2530,7 +2535,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
                   await onSaveOrders([...(orders||[]),...newOrders]);
                   if(settings?.fonnteToken){
                     const lines=tenantIds.map(tid=>{const t=tenants.find(x=>x.id===tid);const its=cart.filter(it=>it.tenantId===tid);return`🏪 *${t?.name||tid}*\n`+its.map(it=>`  🍽️ ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");}).join("\n");
-                    const _bnMsg=`*${settings.bazaarName||"BazaarPOS"}*\n\nPRE-ORDER — BAYAR NANTI\nNota: ${groupNota}\nNama: ${selCust.name}\n---------------------------\n${lines}\n---------------------------\n*TOTAL: ${idr(total)}*\nPembayaran saat pengambilan.\n\nTerima kasih!`;
+                    const _bnMsg=`*${settings.bazaarName||"BazaarPOS"}*\n\nPRE-ORDER — BAYAR NANTI\nNota: ${groupNota}\nNama: ${selCust.name}\n---------------------------\n${lines}\n---------------------------\n*TOTAL: ${idr(total)}*\nPembayaran saat pengambilan.\n\nTerima kasih!\n${waSignature(adminData?.name||"Admin")}`;
                     const _bnOk=settings.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:selCust.phone,message:_bnMsg}):false;
                     if(!_bnOk){const _p=selCust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_bnMsg)}`,"_blank");}
                   }
@@ -2785,12 +2790,12 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,settings
         await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
       }
       // Kirim WA notif bayar + ambil
-      const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n✅ Pembayaran & Pengambilan PO\nNota: ${order.nota}\nTenant: ${order.tenantName}\nDibayar: ${idr(order.subtotal)}\nSisa Saldo: ${idr(balAfter)}\n\nTerima kasih!`;
+      const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n✅ Pembayaran & Pengambilan PO\nNota: ${order.nota}\nTenant: ${order.tenantName}\nDibayar: ${idr(order.subtotal)}\nSisa Saldo: ${idr(balAfter)}\n\nTerima kasih!\n${waSignature(tenant.name)}`;
       const _ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg}):false;
       if(!_ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
     } else {
       // PO sudah lunas — kirim WA konfirmasi pengambilan saja
-      const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n✅ Pengambilan PO Dikonfirmasi\nNota: ${order.nota}\nTenant: ${order.tenantName}\nWaktu: ${new Date().toLocaleString("id-ID")}\n\nTerima kasih!`;
+      const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n✅ Pengambilan PO Dikonfirmasi\nNota: ${order.nota}\nTenant: ${order.tenantName}\n\nTerima kasih!\n${waSignature(tenant.name)}`;
       const _ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg}):false;
       if(!_ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
     }
@@ -2965,7 +2970,7 @@ function AdminTransactions({tenants,transactions,settings,customers,walletLogs,o
             timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
           await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
           if(settings?.fonnteToken){
-            const _rfMsg=`*${bname}*\n\nRefund/Pembatalan\nNota: ${tx.nota}\nRefund: +${idr(tx.total)}\nSaldo: ${idr(balAfter)}\nWaktu: ${new Date().toLocaleString("id-ID")}\n\nTerima kasih!`;
+            const _rfMsg=`*${bname}*\n\nRefund/Pembatalan\nNota: ${tx.nota}\nRefund: +${idr(tx.total)}\nSaldo: ${idr(balAfter)}\n\nTerima kasih!\n${waSignature(adminData?.name||"Admin")}`;
             const _rfOk=await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:_rfMsg});
             if(!_rfOk){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_rfMsg)}`,"_blank");}
           }
@@ -3541,7 +3546,8 @@ ${lines}
 ---------------------------
 *TOTAL: ${idr(lastNota.total)}*${lastNota.walletBalanceAfter!=null?"\nSisa : "+idr(lastNota.walletBalanceAfter):""}
 ---------------------------
-${settings?.receiptFooter1||"Terima kasih!"}`;
+${settings?.receiptFooter1||"Terima kasih!"}
+${waSignature(tenant.name)}`;
 
     try{
       let sent=false;
@@ -3853,7 +3859,8 @@ ${lines}
 ---------------------------
 *TOTAL: ${idr(tx.total)}*${tx.walletBalanceAfter!=null?"\nSisa : "+idr(tx.walletBalanceAfter):""}
 ---------------------------
-${settings?.receiptFooter1||"Terima kasih!"}`;
+${settings?.receiptFooter1||"Terima kasih!"}
+${waSignature(tenant.name)}`;
 
     let sent=false;
     if(settings?.fonnteToken&&tx.walletCustomerPhone){
