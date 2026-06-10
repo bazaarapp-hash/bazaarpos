@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────55
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────56
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -2195,7 +2195,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
         const its=cart.filter(it=>it.tenantId===tid);
         return `🏪 *${t?.name||tid}*\n`+its.map(it=>`  🍽️ ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
       }).join("\n");
-      const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n📦 *NOTA PRE-ORDER* ✅ *LUNAS*\n📋 Nota: *${groupNota}*\n👤 Nama: ${cust.name}\n📅 ${todayStr()} ${timeStr()}\n---------------------------\n${lines}\n---------------------------\n💰 *TOTAL: ${idr(total)}*\n🪙 Sisa : ${idr(balAfter)}\n\n✅ *Pembayaran LUNAS*\nAmbil pesanan saat bazaar. Terima kasih! 🙏\n${waSignature(adminData?.name||"Admin")}`;
+      const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n📦 *NOTA PRE-ORDER* ✅ *LUNAS*\n📋 Nota: *${groupNota}*\n👤 Nama: ${cust.name}\n📅 ${todayStr()} ${timeStr()}\n---------------------------\n${lines}\n---------------------------\n💰 *TOTAL: ${idr(total)}*\n🪙 Sisa Saldo: ${idr(balAfter)}\n\n✅ *Pembayaran LUNAS*\nAmbil pesanan saat bazaar. Terima kasih! 🙏\n${waSignature(adminData?.name||"Admin")}`;
       const _ok1=await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg});
       if(!_ok1){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
     }
@@ -2224,12 +2224,14 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
         nota:order.nota,tenantId:order.tenantId,tenantName:order.tenantName,
         items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
       await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
-      const _msg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n✅ *Pembayaran & Pengambilan PO*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n💸 Dibayar: ${idr(order.subtotal)}\n🪙 Sisa : ${idr(balAfter)}\n\nTerima kasih! 🙏\n${waSignature(adminData?.name||"Admin")}`;
+      const _itemsUnpaid=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
+      const _msg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n✅ *Pembayaran & Pengambilan PO*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n---------------------------\n${_itemsUnpaid}\n---------------------------\n💸 Dibayar: ${idr(order.subtotal)}\n🪙 Sisa Saldo: ${idr(balAfter)}\n\nTerima kasih! 🙏\n${waSignature(adminData?.name||"Admin")}`;
       const _ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:_msg}):false;
       if(!_ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_msg)}`,"_blank");}
     } else {
       // PO sudah lunas — kirim WA konfirmasi pengambilan
-      const _msg2=`🏪 *${settings?.bazaarName||"BazaarPOS"}*\n\n✅ *Pengambilan PO Dikonfirmasi*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n👤 Pelanggan: ${cust.name}\n\nTerima kasih! 🙏\n${waSignature(adminData?.name||"Admin")}`;
+      const _items2=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
+      const _msg2=`🏪 *${settings?.bazaarName||"BazaarPOS"}*\n\n✅ *Pengambilan PO Dikonfirmasi*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n👤 Pelanggan: ${cust.name}\n---------------------------\n${_items2}\n---------------------------\n💰 *TOTAL: ${idr(order.subtotal)}*\n\nTerima kasih! 🙏\n${waSignature(adminData?.name||"Admin")}`;
       const _ok2=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:_msg2}):false;
       if(!_ok2){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_msg2)}`,"_blank");}
     }
@@ -2797,12 +2799,14 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,settings
         await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
       }
       // Kirim WA notif bayar + ambil
-      const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n✅ Pembayaran & Pengambilan PO\nNota: ${order.nota}\nTenant: ${order.tenantName}\nDibayar: ${idr(order.subtotal)}\nSisa : ${idr(balAfter)}\n\nTerima kasih!\n${waSignature(tenant.name)}`;
+      const _itemsTxt=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
+      const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n✅ Pembayaran & Pengambilan PO\nNota: ${order.nota}\nTenant: ${order.tenantName}\n---------------------------\n${_itemsTxt}\n---------------------------\nDibayar: ${idr(order.subtotal)}\nSisa Saldo: ${idr(balAfter)}\n\nTerima kasih!\n${waSignature(tenant.name)}`;
       const _ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg}):false;
       if(!_ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
     } else {
       // PO sudah lunas — kirim WA konfirmasi pengambilan saja
-      const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n✅ Pengambilan PO Dikonfirmasi\nNota: ${order.nota}\nTenant: ${order.tenantName}\n\nTerima kasih!\n${waSignature(tenant.name)}`;
+      const _itemsTxt2=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
+      const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n✅ Pengambilan PO Dikonfirmasi\nNota: ${order.nota}\nTenant: ${order.tenantName}\n---------------------------\n${_itemsTxt2}\n---------------------------\nTotal: ${idr(order.subtotal)}\n\nTerima kasih!\n${waSignature(tenant.name)}`;
       const _ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg}):false;
       if(!_ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
     }
@@ -4188,17 +4192,21 @@ function useBackConfirm(active=true){
 // SHARED COMPONENTS
 // ═════════════════════════════════════════════════════════════════════════════
 function Modal({title,onClose,children,accent="#ea580c"}){
+  useEffect(()=>{
+    // Cegah body scroll saat modal terbuka
+    document.body.style.overflow="hidden";
+    return()=>{document.body.style.overflow="";};
+  },[]);
   return(
     <div
       onClick={e=>{if(e.target===e.currentTarget&&onClose)onClose();}}
       style={{
-        position:"fixed",inset:0,
-        background:"rgba(0,0,0,.6)",
-        zIndex:999,
-        display:"flex",
-        alignItems:"center",
-        justifyContent:"center",
-        padding:16,
+        position:"fixed",top:0,left:0,right:0,bottom:0,
+        background:"rgba(0,0,0,.65)",
+        zIndex:9999,
+        overflowY:"auto",
+        WebkitOverflowScrolling:"touch",
+        padding:"16px 16px 32px",
       }}>
       <div
         className="pop-in"
@@ -4207,11 +4215,8 @@ function Modal({title,onClose,children,accent="#ea580c"}){
           borderRadius:20,
           boxShadow:"0 20px 60px rgba(0,0,0,.3)",
           width:"100%",
-          maxWidth:420,
-          // Kunci: maxHeight + overflowY scroll di CARD, bukan backdrop
-          maxHeight:"calc(100vh - 32px)",
-          overflowY:"auto",
-          WebkitOverflowScrolling:"touch",
+          maxWidth:460,
+          margin:"0 auto",
           padding:20,
         }}>
         {title&&<h3 style={{margin:"0 0 14px",fontSize:17,fontWeight:800,color:"#1c0a00"}}>{title}</h3>}
