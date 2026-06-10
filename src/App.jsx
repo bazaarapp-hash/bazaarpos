@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────57
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────58
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -849,8 +849,8 @@ function SuperAdminDashboard(props){
         {tab==="tenants"&&<AdminTenants {...props}/>}
         {tab==="admins"&&<AdminUsers {...props}/>}
         {tab==="wallet"&&<KasirTopUp {...props} adminData={{name:"Super Admin",username:"superadmin"}}/>}
-        {tab==="po"&&<POManager {...props} adminData={{name:"Super Admin"}}/>}
-        {tab==="transactions"&&<AdminTransactions {...props} filterDate={filterDate} setFilterDate={setFilterDate} isSuperAdmin={true}/>}
+        {tab==="po"&&<POManager {...props} adminData={{name:"Super Admin"}} isSuperAdmin={true}/>}
+        {tab==="transactions"&&<AdminTransactions {...props} filterDate={filterDate} setFilterDate={setFilterDate} isSuperAdmin={true} adminData={{name:"Super Admin"}}/>}
         {tab==="report"&&<AdminTenantReport {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
         {tab==="summary"&&<AdminSummary {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
         {tab==="settings"&&<SettingsPanel {...props}/>}
@@ -910,7 +910,7 @@ function AdminDashboard(props){
       <div style={{padding:20,maxWidth:1100,margin:"0 auto"}} className="fade-in">
         {tab==="tenants"&&<AdminTenants {...props}/>}
         {tab==="wallet"&&<KasirTopUp {...props}/>}
-        {tab==="transactions"&&<AdminTransactions {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
+        {tab==="transactions"&&<AdminTransactions {...props} filterDate={filterDate} setFilterDate={setFilterDate} adminData={adminData}/>}
         {tab==="po"&&<POManager {...props} adminData={adminData}/>}
         {tab==="report"&&<AdminTenantReport {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
         {tab==="summary"&&<AdminSummary {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
@@ -2080,7 +2080,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
 // ─── Pre-Order Manager (Admin & SuperAdmin) ───────────────────────────────────
 // Setiap order disimpan TERPISAH per tenant (1 sesi checkout → N order records)
 // groupNota menghubungkan semua order dari sesi yang sama
-function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCustomers,onSaveWalletLogs,onSaveOrders,adminData}){
+function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCustomers,onSaveWalletLogs,onSaveOrders,adminData,isSuperAdmin}){
   const [subTab,setSubTab]=useState("new");
   // PO Baru
   const [custSearch,setCustSearch]=useState("");
@@ -2104,6 +2104,9 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
   const [verifyError,setVerifyError]=useState("");
   const [verifyPin,setVerifyPin]=useState("");
   const [verifyPinError,setVerifyPinError]=useState("");
+  // Refund / Cancel PO
+  const [confirmPOAction,setConfirmPOAction]=useState(null);
+  const [poActionLoading,setPOActionLoading]=useState(false);
   const videoRef=useRef(null);
   const scanRef=useRef(null);
 
@@ -2268,6 +2271,51 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
     return tenantOk&&searchOk;
   });
 
+  // ── Refund PO (sudah bayar) ──────────────────────────────────────────────
+  const doRefundPO=async(order)=>{
+    setPOActionLoading(true);
+    try{
+      const cust=customers.find(c=>c.id===order.customerId);
+      if(cust){
+        const balBefore=cust.balance; const balAfter=balBefore+order.subtotal;
+        await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
+        const logEntry={id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
+          type:"refund",amount:order.subtotal,balanceBefore:balBefore,balanceAfter:balAfter,
+          nota:order.nota,tenantId:order.tenantId,tenantName:order.tenantName,
+          items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
+        await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+        const itemsTxt=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
+        const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n↩️ *Refund Pre-Order*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n---------------------------\n${itemsTxt}\n---------------------------\n💰 Refund: +${idr(order.subtotal)}\n🪙 Saldo Baru: ${idr(balAfter)}\n\nMaaf atas ketidaknyamanan ini.\n${waSignature(adminData?.name||"Super Admin")}`;
+        const ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg}):false;
+        if(!ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
+      }
+      await onSaveOrders((orders||[]).map(o=>o.id===order.id?{...o,status:"cancelled",cancelledAt:new Date().toISOString(),cancelledBy:adminData?.name||"Super Admin",cancelReason:"refund"}:o));
+      setConfirmPOAction(null);
+      setSuccessMsg(`✅ PO ${order.nota} direfund! Saldo +${idr(order.subtotal)} dikembalikan.`);
+      setTimeout(()=>setSuccessMsg(""),5000);
+    }catch(e){setSuccessMsg("❌ Gagal refund: "+e.message);}
+    setPOActionLoading(false);
+  };
+
+  // ── Cancel PO (belum bayar) ───────────────────────────────────────────────
+  const doCancelPO=async(order)=>{
+    setPOActionLoading(true);
+    try{
+      const cust=customers.find(c=>c.id===order.customerId);
+      const itemsTxt=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
+      const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n❌ *Pembatalan Pre-Order*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n---------------------------\n${itemsTxt}\n---------------------------\n💰 Total: ${idr(order.subtotal)} (tidak dipotong)\n\nPesanan dibatalkan oleh admin.\nMaaf atas ketidaknyamanan ini.\n${waSignature(adminData?.name||"Super Admin")}`;
+      if(cust){
+        const ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg}):false;
+        if(!ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
+      }
+      await onSaveOrders((orders||[]).map(o=>o.id===order.id?{...o,status:"cancelled",cancelledAt:new Date().toISOString(),cancelledBy:adminData?.name||"Super Admin",cancelReason:"cancel"}:o));
+      setConfirmPOAction(null);
+      setSuccessMsg(`✅ PO ${order.nota} dibatalkan.`);
+      setTimeout(()=>setSuccessMsg(""),5000);
+    }catch(e){setSuccessMsg("❌ Gagal cancel: "+e.message);}
+    setPOActionLoading(false);
+  };
+
   return(
     <div>
       {/* ── Modal Checkout Scan QR ── */}
@@ -2393,6 +2441,35 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
               return qrOk&&pinOk;
             })()?
               <button onClick={doVerify} style={{flex:2,padding:"13px",background:"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>✅ Selesaikan PO</button>:null}
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Modal Konfirmasi Refund / Cancel PO ── */}
+      {confirmPOAction&&(
+        <Modal title={confirmPOAction.type==="refund"?"↩️ Konfirmasi Refund PO":"❌ Konfirmasi Batalkan PO"} onClose={()=>setConfirmPOAction(null)}>
+          <div style={{background:confirmPOAction.type==="refund"?"#fef3c7":"#fef2f2",borderRadius:12,padding:"14px 16px",marginBottom:14}}>
+            <p style={{margin:"0 0 6px",fontWeight:700,color:confirmPOAction.type==="refund"?"#92400e":"#dc2626",fontSize:14}}>
+              {confirmPOAction.type==="refund"?"💰 Saldo akan dikembalikan ke pelanggan":"⚠️ PO akan dibatalkan, saldo tidak dipotong"}
+            </p>
+            <p style={{margin:"0 0 4px",color:"#374151",fontSize:13}}>📋 {confirmPOAction.order.nota} — {confirmPOAction.order.tenantName}</p>
+            <p style={{margin:"0 0 4px",color:"#374151",fontSize:13}}>👤 {confirmPOAction.order.customerName}</p>
+            <div style={{marginTop:8,background:"rgba(0,0,0,.05)",borderRadius:8,padding:"8px 10px"}}>
+              {confirmPOAction.order.items.map((it,i)=>(
+                <p key={i} style={{margin:"2px 0",fontSize:12,color:"#374151"}}>{it.menuName} ×{it.qty} = {idr(it.qty*it.price)}</p>
+              ))}
+              <p style={{margin:"6px 0 0",fontWeight:700,color:"#1c0a00",fontSize:13}}>Total: {idr(confirmPOAction.order.subtotal)}</p>
+            </div>
+            {confirmPOAction.type==="refund"&&<p style={{margin:"8px 0 0",color:"#16a34a",fontWeight:600,fontSize:13}}>✅ Refund: +{idr(confirmPOAction.order.subtotal)}</p>}
+          </div>
+          <p style={{color:"#9ca3af",fontSize:12,margin:"0 0 16px"}}>Nota WA akan dikirim ke pelanggan setelah proses ini.</p>
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={()=>setConfirmPOAction(null)} style={{...btnSec,flex:1}}>Batal</button>
+            <button onClick={()=>confirmPOAction.type==="refund"?doRefundPO(confirmPOAction.order):doCancelPO(confirmPOAction.order)}
+              disabled={poActionLoading}
+              style={{flex:2,padding:"13px",background:poActionLoading?"#9ca3af":confirmPOAction.type==="refund"?"#ea580c":"#dc2626",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:poActionLoading?"not-allowed":"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+              {poActionLoading?"⏳ Memproses...":(confirmPOAction.type==="refund"?"↩️ Ya, Refund":"❌ Ya, Batalkan")}
+            </button>
           </div>
         </Modal>
       )}
@@ -2625,6 +2702,24 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
                       💬 Kirim Ulang
                     </button>
                   </div>
+                  {/* Tombol Refund/Cancel — hanya Super Admin */}
+                  {isSuperAdmin&&(
+                    <div style={{marginTop:8}}>
+                      {order.paymentStatus==="unpaid"?(
+                        <button onClick={()=>setConfirmPOAction({type:"cancel",order})}
+                          style={{width:"100%",padding:"9px",background:"#fef2f2",color:"#dc2626",border:"1px solid #fca5a5",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                          onMouseOver={e=>e.currentTarget.style.background="#fee2e2"} onMouseOut={e=>e.currentTarget.style.background="#fef2f2"}>
+                          ❌ Batalkan PO (Belum Bayar)
+                        </button>
+                      ):(
+                        <button onClick={()=>setConfirmPOAction({type:"refund",order})}
+                          style={{width:"100%",padding:"9px",background:"#fff7ed",color:"#ea580c",border:"1px solid #fed7aa",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                          onMouseOver={e=>e.currentTarget.style.background="#fef3c7"} onMouseOut={e=>e.currentTarget.style.background="#fff7ed"}>
+                          ↩️ Refund PO (Kembalikan Saldo)
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>}
@@ -2949,7 +3044,7 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,settings
 }
 
 // ─── Admin Transactions ───────────────────────────────────────────────────────
-function AdminTransactions({tenants,transactions,settings,customers,walletLogs,onSaveTx,onSaveCustomers,onSaveWalletLogs,filterDate,setFilterDate,isSuperAdmin}){
+function AdminTransactions({tenants,transactions,settings,customers,walletLogs,onSaveTx,onSaveCustomers,onSaveWalletLogs,filterDate,setFilterDate,isSuperAdmin,adminData}){
   const getTn=id=>tenants.find(t=>t.id===id)||{};
   const [searchNota,setSearchNota]=useState("");
   const [refunding,setRefunding]=useState(null);
@@ -2980,7 +3075,7 @@ function AdminTransactions({tenants,transactions,settings,customers,walletLogs,o
             nota:tx.nota,tenantId:tx.tenantId,tenantName:tenants.find(t=>t.id===tx.tenantId)?.name||"",
             timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
           await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
-          const _rfMsg=`*${bname}*\n\nRefund/Pembatalan\nNota: ${tx.nota}\nRefund: +${idr(tx.total)}\nSaldo: ${idr(balAfter)}\n\nTerima kasih!\n${waSignature(adminData?.name||"Admin")}`;
+          const _rfMsg=`*${bname}*\n\nRefund/Pembatalan\nNota: ${tx.nota}\nRefund: +${idr(tx.total)}\nSaldo: ${idr(balAfter)}\n\nTerima kasih!\n${waSignature((adminData?.name)||"Admin")}`;
           const _rfOk=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:_rfMsg}):false;
           if(!_rfOk){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_rfMsg)}`,"_blank");}
           setRefundMsg(`✅ Refund berhasil! Saldo ${cust.name} +${idr(tx.total)} → ${idr(balAfter)}`);
