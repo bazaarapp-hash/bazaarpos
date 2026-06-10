@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────56
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────57
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -4192,11 +4192,6 @@ function useBackConfirm(active=true){
 // SHARED COMPONENTS
 // ═════════════════════════════════════════════════════════════════════════════
 function Modal({title,onClose,children,accent="#ea580c"}){
-  useEffect(()=>{
-    // Cegah body scroll saat modal terbuka
-    document.body.style.overflow="hidden";
-    return()=>{document.body.style.overflow="";};
-  },[]);
   return(
     <div
       onClick={e=>{if(e.target===e.currentTarget&&onClose)onClose();}}
@@ -4204,9 +4199,10 @@ function Modal({title,onClose,children,accent="#ea580c"}){
         position:"fixed",top:0,left:0,right:0,bottom:0,
         background:"rgba(0,0,0,.65)",
         zIndex:9999,
-        overflowY:"auto",
+        overflowY:"scroll",
         WebkitOverflowScrolling:"touch",
-        padding:"16px 16px 32px",
+        padding:"16px 16px 48px",
+        boxSizing:"border-box",
       }}>
       <div
         className="pop-in"
@@ -4218,6 +4214,7 @@ function Modal({title,onClose,children,accent="#ea580c"}){
           maxWidth:460,
           margin:"0 auto",
           padding:20,
+          position:"relative",
         }}>
         {title&&<h3 style={{margin:"0 0 14px",fontSize:17,fontWeight:800,color:"#1c0a00"}}>{title}</h3>}
         {children}
