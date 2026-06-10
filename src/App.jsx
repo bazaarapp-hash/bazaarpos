@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────58
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────59
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -3075,7 +3075,8 @@ function AdminTransactions({tenants,transactions,settings,customers,walletLogs,o
             nota:tx.nota,tenantId:tx.tenantId,tenantName:tenants.find(t=>t.id===tx.tenantId)?.name||"",
             timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
           await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
-          const _rfMsg=`*${bname}*\n\nRefund/Pembatalan\nNota: ${tx.nota}\nRefund: +${idr(tx.total)}\nSaldo: ${idr(balAfter)}\n\nTerima kasih!\n${waSignature((adminData?.name)||"Admin")}`;
+          const _rfItems=tx.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
+          const _rfMsg=`*${bname}*\n\n↩️ *Refund/Pembatalan Transaksi*\n📋 Nota: ${tx.nota}\n🏪 Tenant: ${tenants.find(t=>t.id===tx.tenantId)?.name||""}\n---------------------------\n${_rfItems}\n---------------------------\n💰 Refund: +${idr(tx.total)}\n🪙 Saldo Baru: ${idr(balAfter)}\n\nTerima kasih!\n${waSignature((adminData?.name)||"Admin")}`;
           const _rfOk=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:_rfMsg}):false;
           if(!_rfOk){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_rfMsg)}`,"_blank");}
           setRefundMsg(`✅ Refund berhasil! Saldo ${cust.name} +${idr(tx.total)} → ${idr(balAfter)}`);
