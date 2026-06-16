@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────66
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────67
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -2237,6 +2237,11 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
   const [subTab,setSubTab]=useState("new");
   // PO Baru
   const [custSearch,setCustSearch]=useState("");
+  // Scan QR cari pelanggan
+  const [showCustScan,setShowCustScan]=useState(false);
+  const [custScanErr,setCustScanErr]=useState("");
+  const videoCSRef=useRef(null);
+  const scanCSRef=useRef(null);
   const [selCust,setSelCust]=useState(null);
   const [activeTenant,setActiveTenant]=useState(null);
   const [cart,setCart]=useState([]); // [{tenantId,tenantName,tenantCode,menuId,menuCode,menuName,price,qty}]
@@ -2477,6 +2482,35 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
     setPOActionLoading(false);
   };
 
+  // ── Scan QR cari pelanggan (PO Baru) ──────────────────────────────────────
+  const startCustScan=async()=>{
+    window.scrollTo({top:0,behavior:"instant"});
+    setCustScanErr("");setShowCustScan(true);
+    if(!window.jsQR){await new Promise((res,rej)=>{const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"},audio:false});
+      if(videoCSRef.current){videoCSRef.current.srcObject=stream;videoCSRef.current.play();
+        scanCSRef.current=setInterval(()=>{
+          if(!videoCSRef.current||!window.jsQR)return;
+          const cv=document.createElement("canvas");cv.width=videoCSRef.current.videoWidth;cv.height=videoCSRef.current.videoHeight;
+          const ctx=cv.getContext("2d");ctx.drawImage(videoCSRef.current,0,0);
+          const code=window.jsQR(ctx.getImageData(0,0,cv.width,cv.height).data,cv.width,cv.height);
+          if(code&&code.data){
+            const sc=code.data.trim();
+            const found=customers.find(c=>c.id===sc)||customers.find(c=>c.phone===sc.replace(/\D/g,""));
+            if(found){setSelCust(found);setCustSearch("");closeCustScan();}
+            else{setCustScanErr("QR tidak dikenali / pelanggan tidak ditemukan");closeCustScan();}
+          }
+        },500);
+      }
+    }catch(e){setCustScanErr("Gagal akses kamera: "+e.message);}
+  };
+  const closeCustScan=()=>{
+    clearInterval(scanCSRef.current);
+    if(videoCSRef.current?.srcObject){videoCSRef.current.srcObject.getTracks().forEach(t=>t.stop());videoCSRef.current.srcObject=null;}
+    setShowCustScan(false);
+  };
+
   return(
     <div>
       {/* ── Modal Checkout Scan QR ── */}
@@ -2660,9 +2694,30 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
           {/* Pilih Pelanggan */}
           <div style={{background:"#fff",borderRadius:16,padding:18,boxShadow:"0 2px 8px rgba(0,0,0,.05)",marginBottom:14}}>
             <p style={{fontWeight:800,color:"#ea580c",fontSize:14,margin:"0 0 10px",borderLeft:"4px solid #ea580c",paddingLeft:10}}>👤 Pilih Pelanggan</p>
-            <input placeholder="🔍 Cari nama atau nomor WA..." value={custSearch} onChange={e=>setCustSearch(e.target.value)}
-              style={{width:"100%",border:"2px solid #e5e7eb",borderRadius:10,padding:"10px 14px",fontSize:14,outline:"none",color:"#111",boxSizing:"border-box",fontFamily:"'Plus Jakarta Sans',sans-serif",marginBottom:8}}
-              onFocus={e=>e.target.style.borderColor="#ea580c"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
+            {/* Modal scan QR cari pelanggan */}
+            {showCustScan&&(
+              <Modal title="📷 Scan QR Cari Pelanggan" onClose={closeCustScan}>
+                <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>Scan QR Code kartu pelanggan untuk mencarinya.</p>
+                <div style={{position:"relative",borderRadius:14,overflow:"hidden",background:"#000",marginBottom:12,height:220}}>
+                  <video ref={videoCSRef} style={{width:"100%",height:"100%",objectFit:"cover"}} playsInline muted/>
+                  <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none"}}>
+                    <div style={{width:160,height:160,border:"3px solid #ea580c",borderRadius:12,boxShadow:"0 0 0 2000px rgba(0,0,0,.4)"}}/>
+                  </div>
+                </div>
+                {custScanErr&&<p style={{color:"#dc2626",fontWeight:600,fontSize:13,textAlign:"center"}}>{custScanErr}</p>}
+                <button onClick={closeCustScan} style={{...btnSec,width:"100%"}}>Tutup</button>
+              </Modal>
+            )}
+            <div style={{display:"flex",gap:8}}>
+              <input placeholder="🔍 Cari nama atau nomor WA..." value={custSearch} onChange={e=>setCustSearch(e.target.value)}
+                style={{flex:1,border:"2px solid #e5e7eb",borderRadius:10,padding:"10px 14px",fontSize:14,outline:"none",color:"#111",boxSizing:"border-box",fontFamily:"'Plus Jakarta Sans',sans-serif",marginBottom:8}}
+                onFocus={e=>e.target.style.borderColor="#ea580c"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
+              <button onClick={startCustScan} title="Scan QR pelanggan"
+                style={{padding:"10px 14px",background:"#fff7ed",color:"#ea580c",border:"2px solid #fed7aa",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:16,flexShrink:0,height:44}}
+                onMouseOver={e=>e.currentTarget.style.background="#fef3c7"} onMouseOut={e=>e.currentTarget.style.background="#fff7ed"}>
+                📷
+              </button>
+            </div>
             {custSearch&&(()=>{
               const res=customers.filter(c=>c.name.toLowerCase().includes(custSearch.toLowerCase())||c.phone.replace(/\D/g,"").includes(custSearch.replace(/\D/g,"")));
               return res.length===0?<p style={{color:"#9ca3af",fontSize:13,textAlign:"center",margin:"6px 0"}}>Tidak ditemukan</p>:
