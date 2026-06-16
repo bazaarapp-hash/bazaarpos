@@ -849,7 +849,7 @@ function SuperAdminDashboard(props){
         {tab==="tenants"&&<AdminTenants {...props}/>}
         {tab==="admins"&&<AdminUsers {...props}/>}
         {tab==="wallet"&&<KasirTopUp {...props} adminData={{name:"Super Admin",username:"superadmin"}}/>}
-        {tab==="po"&&<POManager {...props} adminData={{name:"Super Admin"}} isSuperAdmin={true}/>}
+        {tab==="po"&&<POManager {...props} adminData={{name:"Super Admin"}} isSuperAdmin={true} onSaveMenus={props.onSaveMenus}/>}
         {tab==="transactions"&&<AdminTransactions {...props} filterDate={filterDate} setFilterDate={setFilterDate} isSuperAdmin={true} adminData={{name:"Super Admin"}}/>}
         {tab==="report"&&<AdminTenantReport {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
         {tab==="summary"&&<AdminSummary {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
@@ -2101,7 +2101,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
 // ─── Pre-Order Manager (Admin & SuperAdmin) ───────────────────────────────────
 // Setiap order disimpan TERPISAH per tenant (1 sesi checkout → N order records)
 // groupNota menghubungkan semua order dari sesi yang sama
-function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCustomers,onSaveWalletLogs,onSaveOrders,adminData,isSuperAdmin}){
+function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCustomers,onSaveWalletLogs,onSaveOrders,onSaveMenus,adminData,isSuperAdmin}){
   const [subTab,setSubTab]=useState("new");
   // PO Baru
   const [custSearch,setCustSearch]=useState("");
@@ -2578,15 +2578,34 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
                     const cartQty=cartItem?.qty||0;
                     const isHabis=remaining!==null&&remaining<=cartQty;
                     return(
-                    <button key={m.id} onClick={()=>{if(isHabis)return;addToCart(m,activeTenant);}} className="btn-press"
-                      style={{background:isHabis?"#f9fafb":"#f9fafb",border:`1px solid ${isHabis?"#fca5a5":"#e5e7eb"}`,borderRadius:12,padding:"12px",cursor:isHabis?"not-allowed":"pointer",textAlign:"left",fontFamily:"'Plus Jakarta Sans',sans-serif",opacity:isHabis?0.6:1}}>
-                      <p style={{margin:"0 0 2px",fontSize:10,color:"#9ca3af"}}>[{m.code}]</p>
-                      <p style={{margin:"0 0 4px",fontWeight:700,color:"#1c0a00",fontSize:13,lineHeight:1.3}}>{m.name}</p>
-                      <p style={{margin:"0 0 4px",color:"#16a34a",fontWeight:800,fontSize:13}}>{idr(m.price)}</p>
-                      <POQuotaBadge menu={m} orders={orders} size={11}/>
-                      {cartQty>0&&<p style={{margin:"3px 0 0",fontSize:11,color:"#ea580c",fontWeight:600}}>× {cartQty} di keranjang</p>}
-                      {isHabis&&<p style={{margin:"2px 0 0",fontSize:11,color:"#dc2626",fontWeight:700}}>❌ Kuota habis</p>}
-                    </button>
+                    <div key={m.id} style={{background:isHabis?"#fef2f2":"#f9fafb",border:`1px solid ${isHabis?"#fca5a5":"#e5e7eb"}`,borderRadius:12,padding:"12px",opacity:isHabis?0.75:1}}>
+                      <button onClick={()=>{if(isHabis)return;addToCart(m,activeTenant);}} className="btn-press"
+                        style={{width:"100%",background:"none",border:"none",padding:0,cursor:isHabis?"not-allowed":"pointer",textAlign:"left",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                        <p style={{margin:"0 0 2px",fontSize:10,color:"#9ca3af"}}>[{m.code}]</p>
+                        <p style={{margin:"0 0 3px",fontWeight:700,color:"#1c0a00",fontSize:13,lineHeight:1.3}}>{m.name}</p>
+                        <p style={{margin:"0 0 4px",color:"#16a34a",fontWeight:800,fontSize:13}}>{idr(m.price)}</p>
+                        <POQuotaBadge menu={m} orders={orders} size={11}/>
+                        {cartQty>0&&<p style={{margin:"3px 0 0",fontSize:11,color:"#ea580c",fontWeight:600}}>× {cartQty} di keranjang</p>}
+                        {isHabis&&<p style={{margin:"2px 0 0",fontSize:11,color:"#dc2626",fontWeight:700}}>❌ Kuota habis</p>}
+                      </button>
+                      {/* Kontrol kuota — hanya Admin/SuperAdmin */}
+                      <div style={{borderTop:"1px dashed #e5e7eb",marginTop:8,paddingTop:6}}>
+                        <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",userSelect:"none"}}>
+                          <input type="checkbox" checked={!!m.poLimit}
+                            onChange={()=>onSaveMenus(menus.map(x=>x.id===m.id?{...x,poLimit:x.poLimit?null:100}:x))}
+                            style={{width:14,height:14,cursor:"pointer",accentColor:"#ea580c"}}/>
+                          <span style={{fontSize:11,color:"#6b7280",fontWeight:600}}>Batas Kuota</span>
+                        </label>
+                        {m.poLimit&&(
+                          <div style={{display:"flex",alignItems:"center",gap:6,marginTop:5}}>
+                            <input type="number" defaultValue={m.poLimit} min="1"
+                              onBlur={e=>{const n=parseInt(e.target.value)||1;onSaveMenus(menus.map(x=>x.id===m.id?{...x,poLimit:n}:x));}}
+                              style={{width:55,border:"2px solid #fed7aa",borderRadius:7,padding:"3px 6px",fontSize:13,fontWeight:700,color:"#ea580c",outline:"none",textAlign:"center"}}/>
+                            <span style={{fontSize:11,color:"#9ca3af"}}>maks</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   );})}
                 </div>;
               })()}
@@ -3942,7 +3961,7 @@ ${waSignature(tenant.name)}`;
 function TenantMenuMgr({tenant,menus,allMenus,allTransactions,orders,onSaveMenus}){
   const [showForm,setShowForm]=useState(false);
   const [editing,setEditing]=useState(null);
-  const [form,setForm]=useState({code:"",name:"",price:"",poLimit:"",poLimitEnabled:false});
+  const [form,setForm]=useState({code:"",name:"",price:""});
   const usedIds=new Set(allTransactions.flatMap(tx=>tx.items.map(it=>it.menuId)));
   const genCode=()=>{
     const initials=tenant.name.trim().split(/\s+/).map(w=>w[0]?.toUpperCase()||"").join("");
@@ -3950,18 +3969,16 @@ function TenantMenuMgr({tenant,menus,allMenus,allTransactions,orders,onSaveMenus
     const next=(nums.length>0?Math.max(...nums):0)+1;
     return initials+String(next).padStart(3,"0");
   };
-  const openAdd=()=>{setForm({code:genCode(),name:"",price:"",poLimit:"",poLimitEnabled:false});setEditing(null);setShowForm(true);};
+  const openAdd=()=>{setForm({code:genCode(),name:"",price:""});setEditing(null);setShowForm(true);};
   const openEdit=m=>{
     if(usedIds.has(m.id)){alert("❌ Menu yang sudah dipakai dalam transaksi tidak bisa diedit!");return;}
-    setForm({code:m.code,name:m.name,price:m.price.toString(),poLimit:m.poLimit||"",poLimitEnabled:!!m.poLimit});setEditing(m.id);setShowForm(true);
+    setForm({code:m.code,name:m.name,price:m.price.toString()});setEditing(m.id);setShowForm(true);
   };
   const save=()=>{
     if(!form.code||!form.name||!form.price){alert("Semua field harus diisi!");return;}
     const price=parseInt(form.price);if(isNaN(price)||price<=0){alert("Harga tidak valid!");return;}
-    const poLimit=form.poLimitEnabled?(parseInt(form.poLimit)||0):null;
-    if(form.poLimitEnabled&&(!poLimit||poLimit<=0)){alert("Batas PO harus lebih dari 0!");return;}
     if(!editing&&menus.find(m=>m.code===form.code)){alert("Kode menu sudah ada!");return;}
-    const p={code:form.code,name:form.name,price,poLimit};
+    const p={code:form.code,name:form.name,price};
     onSaveMenus(editing?allMenus.map(m=>m.id===editing?{...m,...p}:m):[...allMenus,{id:uid(),tenantId:tenant.id,...p}]);
     setShowForm(false);
   };
@@ -3969,16 +3986,6 @@ function TenantMenuMgr({tenant,menus,allMenus,allTransactions,orders,onSaveMenus
     if(usedIds.has(m.id)){alert("❌ Menu tidak bisa dihapus karena sudah digunakan dalam transaksi!");return;}
     if(window.confirm("Hapus menu ini?")) onSaveMenus(allMenus.filter(x=>x.id!==m.id));
   };
-  // Update poLimit langsung dari card (tanpa buka form)
-  const toggleLimit=async(m)=>{
-    const newLimit=m.poLimit?null:100;
-    onSaveMenus(allMenus.map(x=>x.id===m.id?{...x,poLimit:newLimit}:x));
-  };
-  const updateLimit=async(m,val)=>{
-    const n=parseInt(val)||0;
-    if(n>0) onSaveMenus(allMenus.map(x=>x.id===m.id?{...x,poLimit:n}:x));
-  };
-
   return(
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
@@ -3989,20 +3996,6 @@ function TenantMenuMgr({tenant,menus,allMenus,allTransactions,orders,onSaveMenus
         <FI label="Kode Menu" placeholder="M001" value={form.code} onChange={v=>setForm({...form,code:v.toUpperCase()})} accent="#16a34a"/>
         <FI label="Nama Menu" placeholder="Nasi Goreng Spesial" value={form.name} onChange={v=>setForm({...form,name:v})} accent="#16a34a"/>
         <FI label="Harga (Rp)" placeholder="15000" value={form.price} onChange={v=>setForm({...form,price:v})} type="number" accent="#16a34a"/>
-        {/* Batas PO */}
-        <div style={{marginBottom:14}}>
-          <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",userSelect:"none"}}>
-            <input type="checkbox" checked={form.poLimitEnabled} onChange={e=>setForm({...form,poLimitEnabled:e.target.checked,poLimit:e.target.checked?"100":""})}
-              style={{width:18,height:18,cursor:"pointer",accentColor:"#16a34a"}}/>
-            <span style={{fontWeight:600,color:"#374151",fontSize:14}}>Aktifkan Batas Kuota PO</span>
-          </label>
-          {form.poLimitEnabled&&(
-            <div style={{marginTop:10}}>
-              <FI label="Jumlah Maks PO" placeholder="100" value={form.poLimit} onChange={v=>setForm({...form,poLimit:v})} type="number" accent="#16a34a"/>
-              <p style={{color:"#6b7280",fontSize:12,margin:"-8px 0 0"}}>Contoh: 100 berarti max 100 porsi bisa di-PO</p>
-            </div>
-          )}
-        </div>
         <div style={{display:"flex",gap:10,marginTop:8}}>
           <button onClick={()=>setShowForm(false)} style={btnSec}>Batal</button>
           <button onClick={save} style={{flex:1,padding:"12px",background:"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}} onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>Simpan</button>
@@ -4010,47 +4003,21 @@ function TenantMenuMgr({tenant,menus,allMenus,allTransactions,orders,onSaveMenus
       </Modal>}
       {menus.length===0?<EmptyState icon="🍽️" text="Belum ada menu."/>:
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          {menus.map(m=>{
-            const used=usedIds.has(m.id);
-            const remaining=getPORemaining(m,orders);
-            const usedQty=m.poLimit?getPOUsed(m.id,orders):0;
-            return(
-            <div key={m.id} style={{background:"#fff",border:"1px solid #dcfce7",borderRadius:14,padding:"13px 16px"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
-                <div style={{flex:1}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
-                    <span style={{background:"#f0fdf4",color:"#16a34a",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:18,border:"1px solid #dcfce7"}}>{m.code}</span>
-                    {used&&<span style={{background:"#f0f9ff",color:"#0284c7",fontSize:10,fontWeight:600,padding:"2px 7px",borderRadius:10}}>🔒 Ada di transaksi</span>}
-                    {m.poLimit&&<POQuotaBadge menu={m} orders={orders}/>}
-                  </div>
-                  <p style={{fontWeight:700,color:"#1c0a00",margin:0,fontSize:14}}>{m.name}</p>
-                  <p style={{color:"#16a34a",fontWeight:800,margin:"4px 0 0",fontSize:14}}>{idr(m.price)}</p>
+          {menus.map(m=>{const used=usedIds.has(m.id);return(
+            <div key={m.id} style={{background:"#fff",border:"1px solid #dcfce7",borderRadius:14,padding:"13px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+                  <span style={{background:"#f0fdf4",color:"#16a34a",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:18,border:"1px solid #dcfce7"}}>{m.code}</span>
+                  {used&&<span style={{background:"#f0f9ff",color:"#0284c7",fontSize:10,fontWeight:600,padding:"2px 7px",borderRadius:10}}>🔒 Ada di transaksi</span>}
+                  {/* Tampilkan badge kuota jika ada (diatur oleh admin) */}
+                  {m.poLimit&&<POQuotaBadge menu={m} orders={orders}/>}
                 </div>
-                <div style={{display:"flex",gap:7}}>
-                  <button onClick={()=>openEdit(m)} title={used?"Tidak bisa diedit":""} style={{padding:"7px 11px",background:used?"#f9fafb":"#eff6ff",color:used?"#9ca3af":"#2563eb",border:"none",borderRadius:9,cursor:used?"not-allowed":"pointer",fontWeight:600,fontSize:12}}>✏️</button>
-                  <button onClick={()=>del(m)} title={used?"Tidak bisa dihapus":""} style={{padding:"7px 11px",background:used?"#f9fafb":"#fef2f2",color:used?"#9ca3af":"#dc2626",border:"none",borderRadius:9,cursor:used?"not-allowed":"pointer",fontWeight:600,fontSize:12}}>🗑️</button>
-                </div>
+                <p style={{fontWeight:700,color:"#1c0a00",margin:0,fontSize:14}}>{m.name}</p>
+                <p style={{color:"#16a34a",fontWeight:800,margin:"4px 0 0",fontSize:14}}>{idr(m.price)}</p>
               </div>
-              {/* Kontrol Batas PO langsung di card */}
-              <div style={{marginTop:10,paddingTop:10,borderTop:"1px dashed #dcfce7"}}>
-                <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",userSelect:"none"}}>
-                  <input type="checkbox" checked={!!m.poLimit} onChange={()=>toggleLimit(m)}
-                    style={{width:16,height:16,cursor:"pointer",accentColor:"#16a34a"}}/>
-                  <span style={{fontSize:13,color:"#374151",fontWeight:600}}>Aktifkan Batas Kuota PO</span>
-                </label>
-                {m.poLimit&&(
-                  <div style={{marginTop:8,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:6}}>
-                      <span style={{fontSize:12,color:"#6b7280"}}>Batas:</span>
-                      <input type="number" defaultValue={m.poLimit} min="1"
-                        onBlur={e=>updateLimit(m,e.target.value)}
-                        style={{width:70,border:"2px solid #dcfce7",borderRadius:8,padding:"4px 8px",fontSize:14,fontWeight:700,color:"#16a34a",outline:"none",textAlign:"center"}}/>
-                    </div>
-                    <div style={{fontSize:12,color:"#6b7280"}}>
-                      Terpakai: <strong style={{color:"#ea580c"}}>{usedQty}</strong> | Sisa: <strong style={{color:remaining===0?"#dc2626":"#16a34a"}}>{remaining}</strong>
-                    </div>
-                  </div>
-                )}
+              <div style={{display:"flex",gap:7}}>
+                <button onClick={()=>openEdit(m)} title={used?"Tidak bisa diedit":""} style={{padding:"7px 11px",background:used?"#f9fafb":"#eff6ff",color:used?"#9ca3af":"#2563eb",border:"none",borderRadius:9,cursor:used?"not-allowed":"pointer",fontWeight:600,fontSize:12}}>✏️</button>
+                <button onClick={()=>del(m)} title={used?"Tidak bisa dihapus":""} style={{padding:"7px 11px",background:used?"#f9fafb":"#fef2f2",color:used?"#9ca3af":"#dc2626",border:"none",borderRadius:9,cursor:used?"not-allowed":"pointer",fontWeight:600,fontSize:12}}>🗑️</button>
               </div>
             </div>
           );})}
