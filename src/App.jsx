@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────63
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────64
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -4085,10 +4085,16 @@ function TenantMenuMgr({tenant,menus,allMenus,allTransactions,orders,onSaveMenus
   const [form,setForm]=useState({code:"",name:"",price:""});
   const usedIds=new Set(allTransactions.flatMap(tx=>tx.items.map(it=>it.menuId)));
   const genCode=()=>{
-    const initials=tenant.name.trim().split(/\s+/).map(w=>w[0]?.toUpperCase()||"").join("");
-    const nums=menus.filter(m=>m.code.startsWith(initials)).map(m=>parseInt(m.code.replace(initials,""))||0);
+    // Pakai kode tenant (sudah unik) sebagai prefix menu
+    // Format: {TENANT_CODE}-{nomor urut 3 digit}
+    // Contoh: DG-001, T001-002, WM-003
+    const prefix=tenant.code.trim().toUpperCase();
+    const pattern=new RegExp(`^${prefix}-(\\d+)$`);
+    const nums=menus
+      .map(m=>{ const match=m.code.match(pattern); return match?parseInt(match[1]):0; })
+      .filter(n=>n>0);
     const next=(nums.length>0?Math.max(...nums):0)+1;
-    return initials+String(next).padStart(3,"0");
+    return `${prefix}-${String(next).padStart(3,"0")}`;
   };
   const openAdd=()=>{setForm({code:genCode(),name:"",price:""});setEditing(null);setShowForm(true);};
   const openEdit=m=>{
