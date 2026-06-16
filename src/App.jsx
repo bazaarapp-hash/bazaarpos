@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────64
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────65
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -37,6 +37,11 @@ _gs.textContent = `
   }
 `;
 document.head.appendChild(_gs);
+
+// Placeholder lebih samar agar tidak membingungkan dengan teks yang sudah diinput
+const _ph=document.createElement("style");
+_ph.textContent="input::placeholder,textarea::placeholder{color:#c0c0c0 !important;font-style:italic;font-weight:400;}";
+document.head.appendChild(_ph);
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n);
@@ -2235,6 +2240,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
   const [scannedCust,setScannedCust]=useState(null);
   const [processing,setProcessing]=useState(false);
   const [successMsg,setSuccessMsg]=useState("");
+  const [cartMinimized,setCartMinimized]=useState(false);
   // PO Tercatat
   const [poSearch,setPOSearch]=useState("");
   const [poTenantFilter,setPOTenantFilter]=useState("all");
@@ -2532,7 +2538,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
       {/* ── Modal Verify Scan ── */}
       {showVerifyScanner&&(
         <Modal title="📷 Scan QR — Konfirmasi Pengambilan" onClose={closeVerify}>
-          <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>Scan QR pelanggan untuk konfirmasi pengambilan. Tidak memotong saldo.</p>
+          {(()=>{const ord=(orders||[]).find(o=>o.id===verifyOrderId);return ord&&<p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>{ord.paymentStatus==="unpaid"?"Saldo akan dipotong saat pelanggan mengambil pesanan.":"Scan QR pelanggan untuk konfirmasi pengambilan."}</p>;})()} 
           {(()=>{const ord=(orders||[]).find(o=>o.id===verifyOrderId);return ord&&<div style={{background:ord.paymentStatus==="unpaid"?"#fef2f2":"#f0f9ff",borderRadius:10,padding:"8px 14px",marginBottom:10}}>
             <p style={{margin:0,fontSize:13,color:ord.paymentStatus==="unpaid"?"#dc2626":"#0284c7",fontWeight:600}}>
               {ord.paymentStatus==="unpaid"?"💸 BAYAR NANTI — Saldo akan dipotong saat ini":"📋 Sudah Lunas"} | {ord.nota} — {ord.tenantName} — {ord.customerName}
@@ -2735,79 +2741,90 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
           {/* Keranjang */}
           {cart.length>0&&(
             <div style={{background:"#fff",borderRadius:16,padding:18,boxShadow:"0 4px 16px rgba(234,88,12,.1)",border:"1px solid #fed7aa",position:"sticky",bottom:10}}>
-              <p style={{fontWeight:800,color:"#ea580c",fontSize:14,margin:"0 0 10px"}}>🛒 Keranjang PO — {tenantIds.length} Tenant</p>
-              {/* Group per tenant */}
-              {tenantIds.map(tid=>{
-                const tItems=cart.filter(it=>it.tenantId===tid);
-                const tTotal=tItems.reduce((s,it)=>s+it.price*it.qty,0);
-                const tName=tItems[0]?.tenantName||"";
-                return(
-                  <div key={tid} style={{marginBottom:10,background:"#f9fafb",borderRadius:10,padding:"10px 12px"}}>
-                    <p style={{margin:"0 0 6px",fontWeight:700,color:"#374151",fontSize:13}}>🏪 {tName} — {idr(tTotal)}</p>
-                    {tItems.map(it=>(
-                      <div key={it.menuId} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",borderBottom:"1px dashed #e5e7eb"}}>
-                        <span style={{flex:1,fontSize:13,color:"#1c0a00",fontWeight:600}}>{it.menuName}</span>
-                        <div style={{display:"flex",alignItems:"center",gap:6}}>
-                          <button onClick={()=>updQty(it.menuId,it.qty-1)} style={{width:24,height:24,borderRadius:"50%",background:"#fef2f2",color:"#dc2626",border:"none",cursor:"pointer",fontWeight:800,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center"}}>−</button>
-                          <span style={{width:22,textAlign:"center",fontWeight:700,fontSize:13}}>{it.qty}</span>
-                          <button onClick={()=>updQty(it.menuId,it.qty+1)} style={{width:24,height:24,borderRadius:"50%",background:"#dcfce7",color:"#16a34a",border:"none",cursor:"pointer",fontWeight:800,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
-                        </div>
-                        <span style={{fontWeight:700,color:"#1c0a00",fontSize:13,width:66,textAlign:"right"}}>{idr(it.qty*it.price)}</span>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })}
-              <div style={{display:"flex",justifyContent:"space-between",borderTop:"2px solid #fed7aa",paddingTop:10,marginBottom:12}}>
-                <p style={{margin:0,fontWeight:700,color:"#374151"}}>TOTAL PO</p>
-                <p style={{margin:0,fontWeight:900,color:"#ea580c",fontSize:18}}>{idr(total)}</p>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:cartMinimized?0:10}}>
+                <p style={{fontWeight:800,color:"#ea580c",fontSize:14,margin:0}}>🛒 Keranjang PO — {tenantIds.length} Tenant ({cart.reduce((s,it)=>s+it.qty,0)} item)</p>
+                <button onClick={()=>setCartMinimized(p=>!p)}
+                  style={{padding:"4px 10px",background:"#fff7ed",color:"#ea580c",border:"1px solid #fed7aa",borderRadius:8,cursor:"pointer",fontWeight:700,fontSize:12,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                  {cartMinimized?"▲ Buka":"▼ Minimize"}
+                </button>
               </div>
-              <button onClick={()=>{
-                  if(!selCust){alert("Pilih pelanggan terlebih dahulu!");return;}
-                  setShowScanner(true);
-                  startScan((sc,found)=>{setScanPhone(found?found.id:sc);setScannedCust(found||null);});
-                }}
-                style={{width:"100%",padding:"14px",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",color:"#fff",border:"none",borderRadius:12,fontWeight:800,fontSize:15,cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-                📷 Scan QR & Bayar Sekarang
-              </button>
-              <button onClick={async()=>{
-                  if(!selCust){alert("Pilih pelanggan terlebih dahulu!");return;}
-                  if(!window.confirm(`Buat PO "Bayar Nanti" untuk ${selCust.name}?\nSaldo TIDAK dipotong sekarang, pelanggan bayar saat pengambilan.`))return;
-                  const todayOrders=(orders||[]).filter(o=>o.date===todayStr());
-                  const groupSeq=String(todayOrders.reduce((max,o)=>Math.max(max,parseInt((o.groupNota||"PO-0-0").split("-").pop())||0),0)+1).padStart(3,"0");
-                  const groupNota=`PO-${todayStr().replace(/-/g,"")}-${groupSeq}`;
-                  const groupId=uid();
-                  const newOrders=[];
-                  for(const tenantId of tenantIds){
-                    const tenant=tenants.find(t=>t.id===tenantId);
-                    const items=cart.filter(it=>it.tenantId===tenantId);
-                    const subtotal=items.reduce((s,it)=>s+it.price*it.qty,0);
-                    newOrders.push({
-                      id:uid(),groupId,groupNota,nota:`${groupNota}/${tenant?.code||tenantId}`,
-                      customerId:selCust.id,customerName:selCust.name,customerPhone:selCust.phone,
-                      tenantId,tenantCode:tenant?.code||"",tenantName:tenant?.name||"",
-                      items:items.map(it=>({menuId:it.menuId,menuCode:it.menuCode,menuName:it.menuName,price:it.price,qty:it.qty})),
-                      subtotal,groupTotal:total,paymentStatus:"unpaid",status:"pending",
-                      date:todayStr(),time:timeStr(),timestamp:new Date().toISOString(),
-                      createdBy:adminData?.name||"Admin",
-                    });
-                  }
-                  await onSaveOrders([...(orders||[]),...newOrders]);
-                  if(settings?.fonnteToken){
-                    const lines=tenantIds.map(tid=>{const t=tenants.find(x=>x.id===tid);const its=cart.filter(it=>it.tenantId===tid);return`🏪 *${t?.name||tid}*\n`+its.map(it=>`  🍽️ ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");}).join("\n");
-                    const _bnMsg=`*${settings.bazaarName||"BazaarPOS"}*\n\nPRE-ORDER — BAYAR NANTI\nNota: ${groupNota}\nNama: ${selCust.name}\n---------------------------\n${lines}\n---------------------------\n*TOTAL: ${idr(total)}*\nPembayaran saat pengambilan.\n\nTerima kasih!\n${waSignature(adminData?.name||"Admin")}`;
-                    const _bnOk=settings.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:selCust.phone,message:_bnMsg}):false;
-                    if(!_bnOk){const _p=selCust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_bnMsg)}`,"_blank");}
-                  }
-                  setCart([]);setSelCust(null);
-                  setSuccessMsg(`✅ PO Bayar Nanti (${groupNota}) dicatat! Bayar saat pengambilan.`);
-                  setTimeout(()=>setSuccessMsg(""),5000);
-                }}
-                style={{width:"100%",padding:"12px",background:"#fff7ed",color:"#ea580c",border:"2px solid #fed7aa",borderRadius:12,fontWeight:800,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
-                onMouseOver={e=>e.currentTarget.style.background="#fef3c7"} onMouseOut={e=>e.currentTarget.style.background="#fff7ed"}>
-                🕐 Bayar Nanti (Catat Dulu)
-              </button>
-              {!selCust&&<p style={{textAlign:"center",color:"#f97316",fontSize:12,margin:"6px 0 0"}}>⚠️ Pilih pelanggan dulu</p>}
+              {!cartMinimized&&(
+                <div>
+                  <div style={{maxHeight:180,overflowY:"auto",marginBottom:10}}>
+                    {tenantIds.map(tid=>{
+                      const tItems=cart.filter(it=>it.tenantId===tid);
+                      const tTotal=tItems.reduce((s,it)=>s+it.price*it.qty,0);
+                      const tName=tItems[0]?.tenantName||"";
+                      return(
+                        <div key={tid} style={{marginBottom:10,background:"#f9fafb",borderRadius:10,padding:"10px 12px"}}>
+                          <p style={{margin:"0 0 6px",fontWeight:700,color:"#374151",fontSize:13}}>🏪 {tName} — {idr(tTotal)}</p>
+                          {tItems.map(it=>(
+                            <div key={it.menuId} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",borderBottom:"1px dashed #e5e7eb"}}>
+                              <span style={{flex:1,fontSize:13,color:"#1c0a00",fontWeight:600}}>{it.menuName}</span>
+                              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                                <button onClick={()=>updQty(it.menuId,it.qty-1)} style={{width:24,height:24,borderRadius:"50%",background:"#fef2f2",color:"#dc2626",border:"none",cursor:"pointer",fontWeight:800,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center"}}>−</button>
+                                <span style={{width:22,textAlign:"center",fontWeight:700,fontSize:13}}>{it.qty}</span>
+                                <button onClick={()=>updQty(it.menuId,it.qty+1)} style={{width:24,height:24,borderRadius:"50%",background:"#dcfce7",color:"#16a34a",border:"none",cursor:"pointer",fontWeight:800,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
+                              </div>
+                              <span style={{fontWeight:700,color:"#1c0a00",fontSize:13,width:66,textAlign:"right"}}>{idr(it.qty*it.price)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",borderTop:"2px solid #fed7aa",paddingTop:10,marginBottom:12}}>
+                    <p style={{margin:0,fontWeight:700,color:"#374151"}}>TOTAL PO</p>
+                    <p style={{margin:0,fontWeight:900,color:"#ea580c",fontSize:18}}>{idr(total)}</p>
+                  </div>
+                  <button onClick={()=>{
+                      if(!selCust){alert("Pilih pelanggan terlebih dahulu!");return;}
+                      setShowScanner(true);
+                      startScan((sc,found)=>{setScanPhone(found?found.id:sc);setScannedCust(found||null);});
+                    }}
+                    style={{width:"100%",padding:"14px",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",color:"#fff",border:"none",borderRadius:12,fontWeight:800,fontSize:15,cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                    📷 Scan QR & Bayar Sekarang
+                  </button>
+                  <button onClick={async()=>{
+                      if(!selCust){alert("Pilih pelanggan terlebih dahulu!");return;}
+                      if(!window.confirm(`Buat PO "Bayar Nanti" untuk ${selCust.name}?\nSaldo TIDAK dipotong sekarang, pelanggan bayar saat pengambilan.`))return;
+                      const todayOrders=(orders||[]).filter(o=>o.date===todayStr());
+                      const groupSeq=String(todayOrders.reduce((max,o)=>Math.max(max,parseInt((o.groupNota||"PO-0-0").split("-").pop())||0),0)+1).padStart(3,"0");
+                      const groupNota=`PO-${todayStr().replace(/-/g,"")}-${groupSeq}`;
+                      const groupId=uid();
+                      const newOrders=[];
+                      for(const tenantId of tenantIds){
+                        const tenant=tenants.find(t=>t.id===tenantId);
+                        const items=cart.filter(it=>it.tenantId===tenantId);
+                        const subtotal=items.reduce((s,it)=>s+it.price*it.qty,0);
+                        newOrders.push({
+                          id:uid(),groupId,groupNota,nota:`${groupNota}/${tenant?.code||tenantId}`,
+                          customerId:selCust.id,customerName:selCust.name,customerPhone:selCust.phone,
+                          tenantId,tenantCode:tenant?.code||"",tenantName:tenant?.name||"",
+                          items:items.map(it=>({menuId:it.menuId,menuCode:it.menuCode,menuName:it.menuName,price:it.price,qty:it.qty})),
+                          subtotal,groupTotal:total,paymentStatus:"unpaid",status:"pending",
+                          date:todayStr(),time:timeStr(),timestamp:new Date().toISOString(),
+                          createdBy:adminData?.name||"Admin",
+                        });
+                      }
+                      await onSaveOrders([...(orders||[]),...newOrders]);
+                      if(settings?.fonnteToken){
+                        const lines=tenantIds.map(tid=>{const t=tenants.find(x=>x.id===tid);const its=cart.filter(it=>it.tenantId===tid);return`🏪 *${t?.name||tid}*\n`+its.map(it=>`  🍽️ ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");}).join("\n");
+                        const _bnMsg=`*${settings.bazaarName||"BazaarPOS"}*\n\nPRE-ORDER — BAYAR NANTI\nNota: ${groupNota}\nNama: ${selCust.name}\n---------------------------\n${lines}\n---------------------------\n*TOTAL: ${idr(total)}*\nPembayaran saat pengambilan.\n\nTerima kasih!\n${waSignature(adminData?.name||"Admin")}`;
+                        const _bnOk=settings.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:selCust.phone,message:_bnMsg}):false;
+                        if(!_bnOk){const _p=selCust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_bnMsg)}`,"_blank");}
+                      }
+                      setCart([]);setSelCust(null);
+                      setSuccessMsg(`✅ PO Bayar Nanti (${groupNota}) dicatat! Bayar saat pengambilan.`);
+                      setTimeout(()=>setSuccessMsg(""),5000);
+                    }}
+                    style={{width:"100%",padding:"12px",background:"#fff7ed",color:"#ea580c",border:"2px solid #fed7aa",borderRadius:12,fontWeight:800,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                    onMouseOver={e=>e.currentTarget.style.background="#fef3c7"} onMouseOut={e=>e.currentTarget.style.background="#fff7ed"}>
+                    🕐 Bayar Nanti (Catat Dulu)
+                  </button>
+                  {!selCust&&<p style={{textAlign:"center",color:"#f97316",fontSize:12,margin:"6px 0 0"}}>⚠️ Pilih pelanggan dulu</p>}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -2848,8 +2865,6 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8,marginBottom:10}}>
                     <div>
                       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:4}}>
-                        <span style={{background:"#fef3c7",color:"#92400e",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #fbbf24"}}>⏳ Belum Selesai</span>
-                        {order.paymentStatus==="unpaid"&&<span style={{background:"#fef2f2",color:"#dc2626",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #fca5a5"}}>💸 Belum Lunas</span>}
                         <span style={{background:"#fff7ed",color:"#ea580c",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20}}>🏪 {order.tenantName}</span>
                         <span style={{background:"#f0f9ff",color:"#0284c7",fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>📋 {order.nota}</span>
                       </div>
@@ -3090,7 +3105,7 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,settings
     <div>
       {showScanner&&(
         <Modal title="📷 Scan QR Verifikasi Pengambilan" onClose={closeScanner}>
-          <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>Scan QR pelanggan. Tidak memotong saldo.</p>
+          <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>Scan QR pelanggan untuk konfirmasi pengambilan.</p>
           {(()=>{const o=(orders||[]).find(x=>x.id===verifyOrderId);return o&&<div style={{background:"#f0f9ff",borderRadius:10,padding:"8px 12px",marginBottom:10}}><p style={{margin:0,fontSize:13,color:"#0284c7",fontWeight:600}}>📋 {o.nota} — {o.customerName}</p></div>;})()} 
           {!verifyScan&&(
             <div style={{position:"relative",borderRadius:14,overflow:"hidden",background:"#000",marginBottom:12,height:220}}>
@@ -3200,9 +3215,6 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,settings
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8,marginBottom:10}}>
                 <div>
                   <div style={{display:"flex",gap:6,marginBottom:4}}>
-                    <span style={{background:"#fef3c7",color:"#92400e",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #fbbf24"}}>⏳ Belum Diambil</span>
-                    <span style={{background:"#fef3c7",color:"#92400e",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #fbbf24"}}>⏳ Belum Diambil</span>
-                    {order.paymentStatus==="unpaid"&&<span style={{background:"#fef2f2",color:"#dc2626",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:"1px solid #fca5a5"}}>💸 Belum Lunas</span>}
                   </div>
                   <p style={{margin:"0 0 2px",fontWeight:800,color:"#1c0a00",fontSize:15}}>{order.customerName}</p>
                   <p style={{margin:0,color:"#6b7280",fontSize:12}}>📱 {order.customerPhone} • {order.date}</p>
@@ -3686,6 +3698,19 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
             </div>
             <h1 style={{color:"#fff",fontSize:18,fontWeight:800,margin:0}}>{tenant.name}</h1>
             <p style={{color:"#bbf7d0",fontSize:11,margin:"2px 0 0"}}>Tenant App • {todayStr()}</p>
+            {/* Omset hari ini — real time */}
+            {(()=>{
+              const todayTx=transactions.filter(t=>t.date===todayStr());
+              const omset=todayTx.reduce((s,t)=>s+t.total,0);
+              const txCount=todayTx.length;
+              return(
+                <div style={{marginTop:6,background:"rgba(0,0,0,.2)",borderRadius:10,padding:"5px 12px",display:"inline-flex",alignItems:"center",gap:10}}>
+                  <span style={{color:"#bbf7d0",fontSize:11,fontWeight:600}}>💰 Omset Hari Ini</span>
+                  <span style={{color:"#fff",fontSize:15,fontWeight:900}}>{idr(omset)}</span>
+                  <span style={{color:"#86efac",fontSize:11}}>({txCount} tx)</span>
+                </div>
+              );
+            })()}
           </div>
           <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
             <span style={{color:"#fff",fontSize:15,fontWeight:800}}>{settings?.bazaarName}</span>
@@ -4499,6 +4524,10 @@ function useBackConfirm(active=true){
 // SHARED COMPONENTS
 // ═════════════════════════════════════════════════════════════════════════════
 function Modal({title,onClose,children,accent="#ea580c"}){
+  useEffect(()=>{
+    // Scroll ke atas otomatis saat modal muncul
+    window.scrollTo({top:0,behavior:"instant"});
+  },[]);
   return(
     <div
       onClick={e=>{if(e.target===e.currentTarget&&onClose)onClose();}}
