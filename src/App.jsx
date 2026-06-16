@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────65
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────66
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -40,7 +40,15 @@ document.head.appendChild(_gs);
 
 // Placeholder lebih samar agar tidak membingungkan dengan teks yang sudah diinput
 const _ph=document.createElement("style");
-_ph.textContent="input::placeholder,textarea::placeholder{color:#c0c0c0 !important;font-style:italic;font-weight:400;}";
+_ph.textContent=`
+  input::placeholder,textarea::placeholder{
+    color:#b0b0b0 !important;
+    -webkit-text-fill-color:#b0b0b0 !important;
+    opacity:1 !important;
+    font-style:italic;
+    font-weight:400;
+  }
+`;
 document.head.appendChild(_ph);
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -2538,7 +2546,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
       {/* ── Modal Verify Scan ── */}
       {showVerifyScanner&&(
         <Modal title="📷 Scan QR — Konfirmasi Pengambilan" onClose={closeVerify}>
-          {(()=>{const ord=(orders||[]).find(o=>o.id===verifyOrderId);return ord&&<p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>{ord.paymentStatus==="unpaid"?"Saldo akan dipotong saat pelanggan mengambil pesanan.":"Scan QR pelanggan untuk konfirmasi pengambilan."}</p>;})()} 
+          {(()=>{const ord=(orders||[]).find(o=>o.id===verifyOrderId);return ord&&<p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>{ord.paymentStatus==="unpaid"?"Scan QR Pelanggan untuk Pemotongan Saldo sesuai PO & konfirmasi pengambilan PO.":"Scan QR Pelanggan untuk konfirmasi pengambilan PO."}</p>;})()} 
           {(()=>{const ord=(orders||[]).find(o=>o.id===verifyOrderId);return ord&&<div style={{background:ord.paymentStatus==="unpaid"?"#fef2f2":"#f0f9ff",borderRadius:10,padding:"8px 14px",marginBottom:10}}>
             <p style={{margin:0,fontSize:13,color:ord.paymentStatus==="unpaid"?"#dc2626":"#0284c7",fontWeight:600}}>
               {ord.paymentStatus==="unpaid"?"💸 BAYAR NANTI — Saldo akan dipotong saat ini":"📋 Sudah Lunas"} | {ord.nota} — {ord.tenantName} — {ord.customerName}
@@ -2743,10 +2751,17 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
             <div style={{background:"#fff",borderRadius:16,padding:18,boxShadow:"0 4px 16px rgba(234,88,12,.1)",border:"1px solid #fed7aa",position:"sticky",bottom:10}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:cartMinimized?0:10}}>
                 <p style={{fontWeight:800,color:"#ea580c",fontSize:14,margin:0}}>🛒 Keranjang PO — {tenantIds.length} Tenant ({cart.reduce((s,it)=>s+it.qty,0)} item)</p>
-                <button onClick={()=>setCartMinimized(p=>!p)}
-                  style={{padding:"4px 10px",background:"#fff7ed",color:"#ea580c",border:"1px solid #fed7aa",borderRadius:8,cursor:"pointer",fontWeight:700,fontSize:12,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-                  {cartMinimized?"▲ Buka":"▼ Minimize"}
-                </button>
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={()=>{if(window.confirm("Batalkan semua isi keranjang PO?"))setCart([]);}}
+                    title="Batalkan keranjang"
+                    style={{padding:"4px 10px",background:"#fef2f2",color:"#dc2626",border:"1px solid #fca5a5",borderRadius:8,cursor:"pointer",fontWeight:700,fontSize:12,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                    ✕ Batal
+                  </button>
+                  <button onClick={()=>setCartMinimized(p=>!p)}
+                    style={{padding:"4px 10px",background:"#fff7ed",color:"#ea580c",border:"1px solid #fed7aa",borderRadius:8,cursor:"pointer",fontWeight:700,fontSize:12,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                    {cartMinimized?"▲ Buka":"▼ Minimize"}
+                  </button>
+                </div>
               </div>
               {!cartMinimized&&(
                 <div>
@@ -3105,7 +3120,13 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,settings
     <div>
       {showScanner&&(
         <Modal title="📷 Scan QR Verifikasi Pengambilan" onClose={closeScanner}>
-          <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>Scan QR pelanggan untuk konfirmasi pengambilan.</p>
+          {(()=>{const o=(orders||[]).find(x=>x.id===verifyOrderId);return(
+            <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>
+              {o&&o.paymentStatus==="unpaid"
+                ?"Scan QR Pelanggan untuk Pemotongan Saldo sesuai PO & konfirmasi pengambilan PO."
+                :"Scan QR Pelanggan untuk konfirmasi pengambilan PO."}
+            </p>
+          );})()}
           {(()=>{const o=(orders||[]).find(x=>x.id===verifyOrderId);return o&&<div style={{background:"#f0f9ff",borderRadius:10,padding:"8px 12px",marginBottom:10}}><p style={{margin:0,fontSize:13,color:"#0284c7",fontWeight:600}}>📋 {o.nota} — {o.customerName}</p></div>;})()} 
           {!verifyScan&&(
             <div style={{position:"relative",borderRadius:14,overflow:"hidden",background:"#000",marginBottom:12,height:220}}>
