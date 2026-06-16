@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────62
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -924,9 +924,9 @@ function AdminDashboard(props){
 function AdminUsers({admins,onSaveAdmins}){
   const [showForm,setShowForm]=useState(false);
   const [editing,setEditing]=useState(null);
-  const [form,setForm]=useState({username:"",password:"",name:""});
-  const openAdd=()=>{setForm({username:"",password:"",name:""});setEditing(null);setShowForm(true);};
-  const openEdit=a=>{setForm({username:a.username,password:a.password,name:a.name});setEditing(a.id);setShowForm(true);};
+  const [form,setForm]=useState({username:"",password:"",name:"",isPOManager:false});
+  const openAdd=()=>{setForm({username:"",password:"",name:"",isPOManager:false});setEditing(null);setShowForm(true);};
+  const openEdit=a=>{setForm({username:a.username,password:a.password,name:a.name,isPOManager:!!a.isPOManager});setEditing(a.id);setShowForm(true);};
   const save=()=>{
     if(!form.username||!form.password||!form.name){alert("Semua field harus diisi!");return;}
     if(!editing&&admins.find(a=>a.username===form.username)){alert("Username sudah ada!");return;}
@@ -944,6 +944,17 @@ function AdminUsers({admins,onSaveAdmins}){
         <FI label="Nama Lengkap" placeholder="Nama Admin" value={form.name} onChange={v=>setForm({...form,name:v})} accent="#7c3aed"/>
         <FI label="Username" placeholder="admin01" value={form.username} onChange={v=>setForm({...form,username:v})} disabled={!!editing} accent="#7c3aed"/>
         <FI label="Password" placeholder="Password" value={form.password} onChange={v=>setForm({...form,password:v})} accent="#7c3aed"/>
+        {/* Hak akses Manager PO */}
+        <div style={{background:"#f5f0ff",borderRadius:12,padding:"12px 16px",marginBottom:14}}>
+          <label style={{display:"flex",alignItems:"flex-start",gap:12,cursor:"pointer",userSelect:"none"}}>
+            <input type="checkbox" checked={form.isPOManager} onChange={e=>setForm({...form,isPOManager:e.target.checked})}
+              style={{width:18,height:18,marginTop:2,cursor:"pointer",accentColor:"#7c3aed"}}/>
+            <div>
+              <p style={{margin:0,fontWeight:700,color:"#4c1d95",fontSize:14}}>📦 Manager PO</p>
+              <p style={{margin:"3px 0 0",color:"#7c3aed",fontSize:12}}>Admin ini bisa mengatur batas kuota PO di setiap menu tenant.</p>
+            </div>
+          </label>
+        </div>
         <div style={{display:"flex",gap:12,marginTop:8}}>
           <button onClick={()=>setShowForm(false)} style={btnSec}>Batal</button>
           <button onClick={save} style={{...btnSec,background:"#7c3aed",color:"#fff",border:"none"}}>Simpan</button>
@@ -953,11 +964,19 @@ function AdminUsers({admins,onSaveAdmins}){
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:14}}>
           {admins.map(a=>(
             <div key={a.id} className="card-hover" style={{background:"#fff",border:"1px solid #f3f4f6",borderRadius:16,padding:20,boxShadow:"0 2px 8px rgba(0,0,0,.06)"}}>
-              <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14}}>
+              <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
                 <div style={{width:44,height:44,borderRadius:12,background:"#f5f3ff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>🔑</div>
-                <div><p style={{fontWeight:800,fontSize:16,color:"#1c0a00",margin:0}}>{a.name}</p>
-                  <p style={{color:"#7c3aed",fontSize:12,margin:"2px 0 0",fontWeight:600}}>@{a.username}</p></div>
+                <div>
+                  <p style={{fontWeight:800,fontSize:16,color:"#1c0a00",margin:0}}>{a.name}</p>
+                  <p style={{color:"#7c3aed",fontSize:12,margin:"2px 0 0",fontWeight:600}}>@{a.username}</p>
+                </div>
               </div>
+              {/* Badge Manager PO */}
+              {a.isPOManager&&(
+                <div style={{background:"#f5f0ff",border:"1px solid #c4b5fd",borderRadius:8,padding:"5px 10px",marginBottom:10,display:"inline-block"}}>
+                  <span style={{fontSize:12,color:"#4c1d95",fontWeight:700}}>📦 Manager PO</span>
+                </div>
+              )}
               <div style={{display:"flex",gap:8}}>
                 <button onClick={()=>openEdit(a)} style={{flex:1,padding:"8px",background:"#eff6ff",color:"#2563eb",border:"none",borderRadius:10,cursor:"pointer",fontWeight:600,fontSize:13}}>✏️ Edit</button>
                 <button onClick={()=>{if(window.confirm("Hapus admin ini?"))onSaveAdmins(admins.filter(x=>x.id!==a.id));}} style={{flex:1,padding:"8px",background:"#fef2f2",color:"#dc2626",border:"none",borderRadius:10,cursor:"pointer",fontWeight:600,fontSize:13}}>🗑️ Hapus</button>
@@ -2101,7 +2120,9 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
 // ─── Pre-Order Manager (Admin & SuperAdmin) ───────────────────────────────────
 // Setiap order disimpan TERPISAH per tenant (1 sesi checkout → N order records)
 // groupNota menghubungkan semua order dari sesi yang sama
-function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCustomers,onSaveWalletLogs,onSaveOrders,onSaveMenus,adminData,isSuperAdmin}){
+function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,onSaveCustomers,onSaveWalletLogs,onSaveOrders,onSaveMenus,adminData,isSuperAdmin}){
+  // Bisa edit kuota: SuperAdmin atau admin dengan flag isPOManager
+  const canEditQuota=isSuperAdmin||(adminData?.isPOManager===true);
   const [subTab,setSubTab]=useState("new");
   // PO Baru
   const [custSearch,setCustSearch]=useState("");
@@ -2588,7 +2609,8 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
                         {cartQty>0&&<p style={{margin:"3px 0 0",fontSize:11,color:"#ea580c",fontWeight:600}}>× {cartQty} di keranjang</p>}
                         {isHabis&&<p style={{margin:"2px 0 0",fontSize:11,color:"#dc2626",fontWeight:700}}>❌ Kuota habis</p>}
                       </button>
-                      {/* Kontrol kuota — hanya Admin/SuperAdmin */}
+                      {/* Kontrol kuota — hanya Manager PO & SuperAdmin */}
+                      {canEditQuota&&(
                       <div style={{borderTop:"1px dashed #e5e7eb",marginTop:8,paddingTop:6}}>
                         <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",userSelect:"none"}}>
                           <input type="checkbox" checked={!!m.poLimit}
@@ -2605,6 +2627,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,onSaveCus
                           </div>
                         )}
                       </div>
+                      )}
                     </div>
                   );})}
                 </div>;
@@ -4009,8 +4032,6 @@ function TenantMenuMgr({tenant,menus,allMenus,allTransactions,orders,onSaveMenus
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
                   <span style={{background:"#f0fdf4",color:"#16a34a",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:18,border:"1px solid #dcfce7"}}>{m.code}</span>
                   {used&&<span style={{background:"#f0f9ff",color:"#0284c7",fontSize:10,fontWeight:600,padding:"2px 7px",borderRadius:10}}>🔒 Ada di transaksi</span>}
-                  {/* Tampilkan badge kuota jika ada (diatur oleh admin) */}
-                  {m.poLimit&&<POQuotaBadge menu={m} orders={orders}/>}
                 </div>
                 <p style={{fontWeight:700,color:"#1c0a00",margin:0,fontSize:14}}>{m.name}</p>
                 <p style={{color:"#16a34a",fontWeight:800,margin:"4px 0 0",fontSize:14}}>{idr(m.price)}</p>
