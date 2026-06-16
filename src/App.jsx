@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────62
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────63
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -848,7 +848,7 @@ function SuperAdminDashboard(props){
       <div style={{padding:20,maxWidth:1100,margin:"0 auto"}} className="fade-in">
         {tab==="tenants"&&<AdminTenants {...props}/>}
         {tab==="admins"&&<AdminUsers {...props}/>}
-        {tab==="wallet"&&<KasirTopUp {...props} adminData={{name:"Super Admin",username:"superadmin"}}/>}
+        {tab==="wallet"&&<KasirTopUp {...props} adminData={{name:"Super Admin",username:"superadmin"}} isSuperAdmin={true}/>}
         {tab==="po"&&<POManager {...props} adminData={{name:"Super Admin"}} isSuperAdmin={true} onSaveMenus={props.onSaveMenus}/>}
         {tab==="transactions"&&<AdminTransactions {...props} filterDate={filterDate} setFilterDate={setFilterDate} isSuperAdmin={true} adminData={{name:"Super Admin"}}/>}
         {tab==="report"&&<AdminTenantReport {...props} filterDate={filterDate} setFilterDate={setFilterDate}/>}
@@ -1754,17 +1754,73 @@ function generateCustomerCard({customer, bazaarName}){
 }
 
 // ─── Kasir Top Up ─────────────────────────────────────────────────────────────
-function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustomers,onSaveWalletLogs}){
+function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustomers,onSaveWalletLogs,isSuperAdmin}){
   const [tab,setTab]=useState("customers");
   const [form,setForm]=useState({phone:"",name:"",amount:""});
   const [search,setSearch]=useState("");
   const [sending,setSending]=useState(false);
   const [msg,setMsg]=useState("");
   const [filterDate,setFilterDate]=useState(todayStr());
-  const [showPinModal,setShowPinModal]=useState(null); // customer object
+  const [showPinModal,setShowPinModal]=useState(null);
   const [pinSearch,setPinSearch]=useState("");
+  // Scan QR untuk cari pelanggan
+  const [showScanSearch,setShowScanSearch]=useState(false);
+  const [scanSearchErr,setScanSearchErr]=useState("");
+  const videoSRef=useRef(null);
+  const scanSRef=useRef(null);
 
   const showMsg=(m,dur=4000)=>{setMsg(m);setTimeout(()=>setMsg(""),dur);};
+
+  // Hapus pelanggan (SuperAdmin only)
+  const deleteCustomer=(c)=>{
+    if(c.balance>0){showMsg(`❌ Saldo ${c.name} masih ${idr(c.balance)}. Kosongkan saldo dulu sebelum hapus.`);return;}
+    if(!window.confirm(`Hapus pelanggan "${c.name}" (${c.phone})?\nTindakan ini permanen.`))return;
+    onSaveCustomers(customers.filter(x=>x.id!==c.id));
+    showMsg(`✅ Pelanggan ${c.name} berhasil dihapus.`);
+  };
+
+  // Kosongkan saldo (SuperAdmin only)
+  const kosongkanSaldo=async(c)=>{
+    if(c.balance===0){showMsg(`ℹ️ Saldo ${c.name} sudah 0.`);return;}
+    if(!window.confirm(`Kosongkan saldo ${c.name}?\nSaldo ${idr(c.balance)} akan diset ke Rp 0.\nTindakan ini tidak bisa dibatalkan.`))return;
+    const balBefore=c.balance;
+    await onSaveCustomers(customers.map(x=>x.id===c.id?{...x,balance:0}:x));
+    const logEntry={id:uid(),customerId:c.id,customerPhone:c.phone,customerName:c.name,
+      type:"adjustment",amount:balBefore,balanceBefore:balBefore,balanceAfter:0,
+      nota:"ADJUST-"+todayStr(),tenantId:"",tenantName:"",
+      adminName:adminData?.name||"Super Admin",
+      timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
+    await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+    showMsg(`✅ Saldo ${c.name} berhasil dikosongkan (${idr(balBefore)} → Rp 0).`);
+  };
+
+  // Scanner QR untuk cari pelanggan
+  const startScanSearch=async()=>{
+    setScanSearchErr("");setShowScanSearch(true);
+    if(!window.jsQR){await new Promise((res,rej)=>{const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"},audio:false});
+      if(videoSRef.current){videoSRef.current.srcObject=stream;videoSRef.current.play();
+        scanSRef.current=setInterval(()=>{
+          if(!videoSRef.current||!window.jsQR)return;
+          const cv=document.createElement("canvas");cv.width=videoSRef.current.videoWidth;cv.height=videoSRef.current.videoHeight;
+          const ctx=cv.getContext("2d");ctx.drawImage(videoSRef.current,0,0);
+          const code=window.jsQR(ctx.getImageData(0,0,cv.width,cv.height).data,cv.width,cv.height);
+          if(code&&code.data){
+            const sc=code.data.trim();
+            const found=customers.find(c=>c.id===sc)||customers.find(c=>c.phone===sc.replace(/\D/g,""));
+            if(found){setSearch(found.name);closeScanSearch();}
+            else{setScanSearchErr("QR tidak dikenali");closeScanSearch();}
+          }
+        },500);
+      }
+    }catch(e){setScanSearchErr("Gagal akses kamera: "+e.message);}
+  };
+  const closeScanSearch=()=>{
+    clearInterval(scanSRef.current);
+    if(videoSRef.current?.srcObject){videoSRef.current.srcObject.getTracks().forEach(t=>t.stop());videoSRef.current.srcObject=null;}
+    setShowScanSearch(false);
+  };
 
   // Cari atau buat customer
   const findOrCreate=()=>{
@@ -1886,11 +1942,36 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
       {/* ── Tab Pelanggan ── */}
       {tab==="customers"&&(
         <div>
-          <div style={{position:"relative",marginBottom:16}}>
-            <input placeholder="🔍 Cari nama atau nomor WA..." value={search} onChange={e=>setSearch(e.target.value)}
-              style={{width:"100%",border:"2px solid #e5e7eb",borderRadius:12,padding:"11px 14px",fontSize:14,outline:"none",color:"#111",boxSizing:"border-box",fontFamily:"'Plus Jakarta Sans',sans-serif"}}
-              onFocus={e=>e.target.style.borderColor="#ea580c"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
+          {/* Modal scan QR cari pelanggan */}
+          {showScanSearch&&(
+            <Modal title="📷 Scan QR Cari Pelanggan" onClose={closeScanSearch}>
+              <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>Scan QR Code kartu pelanggan untuk mencarinya.</p>
+              <div style={{position:"relative",borderRadius:14,overflow:"hidden",background:"#000",marginBottom:12,height:220}}>
+                <video ref={videoSRef} style={{width:"100%",height:"100%",objectFit:"cover"}} playsInline muted/>
+                <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none"}}>
+                  <div style={{width:160,height:160,border:"3px solid #ea580c",borderRadius:12,boxShadow:"0 0 0 2000px rgba(0,0,0,.4)"}}/>
+                </div>
+              </div>
+              {scanSearchErr&&<p style={{color:"#dc2626",fontWeight:600,fontSize:13,textAlign:"center"}}>{scanSearchErr}</p>}
+              <button onClick={closeScanSearch} style={{...btnSec,width:"100%"}}>Tutup</button>
+            </Modal>
+          )}
+
+          {/* Search bar + tombol scan QR */}
+          <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"center"}}>
+            <div style={{flex:1,position:"relative"}}>
+              <input placeholder="🔍 Cari nama atau nomor WA..." value={search} onChange={e=>setSearch(e.target.value)}
+                style={{width:"100%",border:"2px solid #e5e7eb",borderRadius:12,padding:"11px 14px",fontSize:14,outline:"none",color:"#111",boxSizing:"border-box",fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                onFocus={e=>e.target.style.borderColor="#ea580c"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
+              {search&&<button onClick={()=>setSearch("")} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:"#9ca3af",fontSize:18}}>✕</button>}
+            </div>
+            <button onClick={startScanSearch} title="Scan QR pelanggan"
+              style={{padding:"11px 14px",background:"#fff7ed",color:"#ea580c",border:"2px solid #fed7aa",borderRadius:12,cursor:"pointer",fontWeight:700,fontSize:16,flexShrink:0,display:"flex",alignItems:"center",gap:6}}
+              onMouseOver={e=>e.currentTarget.style.background="#fef3c7"} onMouseOut={e=>e.currentTarget.style.background="#fff7ed"}>
+              📷
+            </button>
           </div>
+
           {filteredSearch.length===0?<EmptyState icon="👥" text="Belum ada pelanggan terdaftar."/>:
             <div style={{display:"flex",flexDirection:"column",gap:10}}>
               {filteredSearch.map(c=>(
@@ -1905,7 +1986,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
                         </span>
                       </div>
                     </div>
-                    <div style={{display:"flex",gap:8}}>
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                       <button onClick={()=>{setForm({phone:c.phone,name:c.name,amount:""});setTab("topup");}}
                         style={{padding:"8px 14px",background:"#fff7ed",color:"#ea580c",border:"1px solid #fed7aa",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
                         💰 Top Up
@@ -1937,6 +2018,23 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
                         style={{padding:"8px 14px",background:"#f0f9ff",color:"#0284c7",border:"1px solid #bae6fd",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
                         🪪 Lihat
                       </button>
+                      {/* Kosongkan Saldo & Hapus — hanya SuperAdmin */}
+                      {isSuperAdmin&&(
+                        <>
+                          <button onClick={()=>kosongkanSaldo(c)}
+                            disabled={c.balance===0}
+                            style={{padding:"8px 14px",background:c.balance>0?"#fef3c7":"#f9fafb",color:c.balance>0?"#92400e":"#9ca3af",border:`1px solid ${c.balance>0?"#fbbf24":"#e5e7eb"}`,borderRadius:10,cursor:c.balance>0?"pointer":"not-allowed",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                            title={c.balance===0?"Saldo sudah 0":"Kosongkan saldo pelanggan"}
+                            onMouseOver={e=>{if(c.balance>0)e.currentTarget.style.background="#fde68a";}} onMouseOut={e=>{if(c.balance>0)e.currentTarget.style.background="#fef3c7";}}>
+                            🪣 Kosongkan Saldo
+                          </button>
+                          <button onClick={()=>deleteCustomer(c)}
+                            style={{padding:"8px 14px",background:c.balance>0?"#f9fafb":"#fef2f2",color:c.balance>0?"#9ca3af":"#dc2626",border:`1px solid ${c.balance>0?"#e5e7eb":"#fca5a5"}`,borderRadius:10,cursor:c.balance>0?"not-allowed":"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                            title={c.balance>0?"Kosongkan saldo dulu sebelum hapus":"Hapus pelanggan"}>
+                            🗑️ Hapus
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
