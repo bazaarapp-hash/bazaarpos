@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────70
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────71
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -84,12 +84,15 @@ function getLocalBackups() {
   }).filter(Boolean);
 }
 
-// ─── Offline Queue ────────────────────────────────────────────────────────────
-const offQ = {
-  add(tx){ const q=JSON.parse(localStorage.getItem("bzr_offq")||"[]"); q.push(tx); localStorage.setItem("bzr_offq",JSON.stringify(q)); },
-  get(){ return JSON.parse(localStorage.getItem("bzr_offq")||"[]"); },
-  clear(){ localStorage.removeItem("bzr_offq"); },
-};
+// ─── CATATAN: Sistem antrian offline (offQ) DIHAPUS ───────────────────────────
+// Sebelumnya ada mekanisme "simpan transaksi di localStorage saat offline, sync
+// otomatis saat online". Ini TERBUKTI BERBAHAYA: hanya catatan transaksi yang
+// diantrekan, sementara potongan saldo TIDAK ikut diantrekan — kalau device gagal
+// sync, transaksi hilang permanen dan saldo tidak pernah ter-update.
+// Diganti dengan: cek koneksi ke server SEBELUM transaksi dimulai (db.ping()).
+// Kalau server tidak terjangkau, transaksi DITOLAK LANGSUNG dengan pesan jelas,
+// dan keranjang/data orderan TETAP UTUH supaya kasir tinggal coba lagi tanpa
+// input ulang.
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 const DEF = {
@@ -517,15 +520,24 @@ export default function App(){
   },[settings.autoBackup,settings.backupInterval,tenants,menus,transactions,admins]);
 
 
+  // ── Migrasi satu kali: pulihkan data offline LAMA (dari versi sebelum perbaikan ini) ──
+  // Sistem antrian offline lama sudah dihapus, tapi kalau ada device yang masih
+  // menyimpan data tertunda di localStorage dari versi lama, coba selamatkan sekali.
   useEffect(()=>{
-    const sync=async()=>{
-      const q=offQ.get(); if(!q.length)return;
-      const fresh=await db.get("bzr_transactions")||[];
-      const merged=[...fresh,...q.filter(qt=>!fresh.find(t=>t.id===qt.id))];
-      await db.set("bzr_transactions",merged); setTransactions(merged); offQ.clear();
-    };
-    window.addEventListener("online",sync);
-    return()=>window.removeEventListener("online",sync);
+    (async()=>{
+      try{
+        const raw=localStorage.getItem("bzr_offq");
+        if(!raw)return;
+        const q=JSON.parse(raw);
+        if(!Array.isArray(q)||!q.length){localStorage.removeItem("bzr_offq");return;}
+        const fresh=await db.get("bzr_transactions")||[];
+        const merged=[...fresh,...q.filter(qt=>!fresh.find(t=>t.id===qt.id))];
+        await db.set("bzr_transactions",merged);
+        setTransactions(merged);
+        localStorage.removeItem("bzr_offq");
+        alert(`⚠️ Ditemukan ${q.length} transaksi lama yang belum tersinkron (dari versi aplikasi sebelumnya) dan sudah berhasil dipulihkan ke database.\n\nPENTING: Cek manual apakah saldo pelanggan terkait transaksi ini sudah benar, karena potongan saldo untuk transaksi lama ini mungkin TIDAK ikut tersimpan saat itu.`);
+      }catch(e){ console.error("Gagal pulihkan data offline lama:",e); }
+    })();
   },[]);
 
   const saveTenants=async d=>{setTenants(d);await db.set("bzr_tenants",d);};
@@ -537,6 +549,26 @@ export default function App(){
   const saveCustomers=async d=>{await db.set("bzr_customers",d);setCustomers(d);};
   const saveWalletLogs=async d=>{await db.set("bzr_wallet_logs",d);setWalletLogs(d);};
   const saveOrders=async d=>{await db.set("bzr_orders",d);setOrders(d);};
+
+  // ── Update saldo pelanggan ATOMIK (anti race-condition) ──────────────────────
+  // Dipakai untuk: top up, bayar transaksi (potong saldo), refund, kosongkan saldo.
+  // Server Firestore yang menjamin baca-ubah-tulis terjadi tanpa celah antar device.
+  const updateCustomerBalance=async(customerId,deltaOrFn,buildLogEntry,extraCustFields={})=>{
+    const {customer:updatedCust,logEntry}=await db.updateCustomerBalance(customerId,deltaOrFn,buildLogEntry,extraCustFields);
+    // Sinkronkan state lokal supaya UI langsung update tanpa nunggu snapshot listener
+    setCustomers(prev=>prev.map(c=>c.id===customerId?updatedCust:c));
+    if(logEntry) setWalletLogs(prev=>[logEntry,...prev]);
+    return updatedCust;
+  };
+  // ── Tambah pelanggan baru ATOMIK (top up pelanggan baru) ─────────────────────
+  const addNewCustomerAtomic=async(newCustomer,buildLogEntry)=>{
+    await db.addNewCustomer(newCustomer,buildLogEntry);
+    setCustomers(prev=>[...prev,newCustomer]);
+  };
+  // ── Cek koneksi ke server SEBELUM transaksi apapun dimulai ──────────────────
+  // Kalau gagal terhubung, transaksi ditolak cepat (~4 detik) dengan pesan jelas,
+  // tanpa kehilangan data orderan/keranjang yang sudah diisi.
+  const checkConnection=async()=>db.ping();
   const [refreshing,setRefreshing]=useState(false);
   const doRefresh=async()=>{
     setRefreshing(true);
@@ -583,6 +615,8 @@ export default function App(){
     onSaveTenants:saveTenants, onSaveMenus:saveMenus, onSaveTx:saveTx,
     onSaveSettings:saveSettings, onSaveAdmins:saveAdmins, onSaveAlerts:saveAlerts,
     onSaveCustomers:saveCustomers, onSaveWalletLogs:saveWalletLogs, onSaveOrders:saveOrders,
+    onUpdateCustomerBalance:updateCustomerBalance, onAddNewCustomer:addNewCustomerAtomic,
+    onCheckConnection:checkConnection,
     onRestoreBackup:restoreBackup, onRefresh:doRefresh, refreshing,
     onLogout:logout,
   };
@@ -608,6 +642,8 @@ export default function App(){
       customers={customers} walletLogs={walletLogs} orders={orders}
       onSaveMenus={saveMenus} onSaveTx={saveTx}
       onSaveCustomers={saveCustomers} onSaveWalletLogs={saveWalletLogs} onSaveOrders={saveOrders}
+      onUpdateCustomerBalance={updateCustomerBalance}
+      onCheckConnection={checkConnection}
       onSaveAlerts={saveAlerts} alerts={alerts}
       onRefresh={doRefresh} refreshing={refreshing}
       onLogout={logout}/>);
@@ -1771,7 +1807,7 @@ function generateCustomerCard({customer, bazaarName}){
 }
 
 // ─── Kasir Top Up ─────────────────────────────────────────────────────────────
-function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustomers,onSaveWalletLogs,isSuperAdmin}){
+function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustomers,onSaveWalletLogs,onUpdateCustomerBalance,onAddNewCustomer,onCheckConnection,isSuperAdmin}){
   const [tab,setTab]=useState("customers");
   const [form,setForm]=useState({phone:"",name:"",amount:""});
   const [search,setSearch]=useState("");
@@ -1792,6 +1828,8 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
   const deleteCustomer=async(c)=>{
     if(c.balance>0){showMsg(`❌ Saldo ${c.name} masih ${idr(c.balance)}. Kosongkan saldo dulu sebelum hapus.`);return;}
     if(!window.confirm(`Hapus pelanggan "${c.name}" (${c.phone})?\nTindakan ini permanen.`))return;
+    const online=await onCheckConnection();
+    if(!online){showMsg("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. Dibatalkan — coba lagi.",8000);return;}
     try{
       await onSaveCustomers(customers.filter(x=>x.id!==c.id));
       showMsg(`✅ Pelanggan ${c.name} berhasil dihapus & TERSIMPAN.`);
@@ -1804,17 +1842,20 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
   // Kosongkan saldo (SuperAdmin only)
   const kosongkanSaldo=async(c)=>{
     if(c.balance===0){showMsg(`ℹ️ Saldo ${c.name} sudah 0.`);return;}
-    if(!window.confirm(`Kosongkan saldo ${c.name}?\nSaldo ${idr(c.balance)} akan diset ke Rp 0.\nTindakan ini tidak bisa dibatalkan.`))return;
-    const balBefore=c.balance;
+    if(!window.confirm(`Kosongkan saldo ${c.name}?\nSaldo saat ini ${idr(c.balance)} akan diset ke Rp 0.\nTindakan ini tidak bisa dibatalkan.`))return;
+    const online=await onCheckConnection();
+    if(!online){showMsg("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. Dibatalkan — coba lagi.",8000);return;}
     try{
-      await onSaveCustomers(customers.map(x=>x.id===c.id?{...x,balance:0}:x));
-      const logEntry={id:uid(),customerId:c.id,customerPhone:c.phone,customerName:c.name,
-        type:"adjustment",amount:balBefore,balanceBefore:balBefore,balanceAfter:0,
-        nota:"ADJUST-"+todayStr(),tenantId:"",tenantName:"",
-        adminName:adminData?.name||"Super Admin",
-        timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
-      await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
-      showMsg(`✅ Saldo ${c.name} berhasil dikosongkan & TERSIMPAN (${idr(balBefore)} → Rp 0).`);
+      const result=await onUpdateCustomerBalance(
+        c.id,
+        ()=>0, // set absolut ke 0 (bukan delta) — selalu pakai saldo TERBARU di server
+        (balBefore,balAfter)=>({id:uid(),customerId:c.id,customerPhone:c.phone,customerName:c.name,
+          type:"adjustment",amount:balBefore,balanceBefore:balBefore,balanceAfter:0,
+          nota:"ADJUST-"+todayStr(),tenantId:"",tenantName:"",
+          adminName:adminData?.name||"Super Admin",
+          timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()})
+      );
+      showMsg(`✅ Saldo ${c.name} berhasil dikosongkan & TERSIMPAN (Rp 0).`);
     }catch(e){
       console.error("Kosongkan saldo gagal:",e);
       showMsg(`❌ GAGAL MENYIMPAN! Saldo TIDAK dikosongkan. Cek koneksi, lalu coba lagi. (${e.message})`,8000);
@@ -1864,32 +1905,53 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
   };
 
   const handleTopUp=async()=>{
-    const result=findOrCreate(); if(!result)return;
+    if(!form.phone.trim()||!form.name.trim()){showMsg("❌ Nomor WA dan nama harus diisi!");return;}
     const amount=parseInt(form.amount);
     if(isNaN(amount)||amount<=0){showMsg("❌ Nominal top up tidak valid!");return;}
+    const phone=form.phone.trim().replace(/\D/g,"");
     setSending(true);
 
-    const {cust,isNew}=result;
-    const balBefore=cust.balance;
-    const balAfter=balBefore+amount;
-    const now=new Date();
-    const logEntry={
-      id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
-      type:"topup",amount,balanceBefore:balBefore,balanceAfter:balAfter,
-      adminName:adminData?.name||adminData?.username||"Super Admin",
-      timestamp:now.toISOString(),date:todayStr(),time:timeStr(),
-    };
+    // ── Cek koneksi server DULU. Kalau gagal, tolak cepat & form tetap terisi ──
+    const online=await onCheckConnection();
+    if(!online){
+      setSending(false);
+      showMsg("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. Top up DIBATALKAN — cek koneksi lalu coba lagi.",8000);
+      return;
+    }
 
-    const updCust={...cust,balance:balAfter,name:form.name.trim()};
-    const newCusts=isNew?[...customers,updCust]:customers.map(c=>c.id===cust.id?updCust:c);
+    const existingCust=customers.find(c=>c.phone===phone);
+    const adminName=adminData?.name||adminData?.username||"Super Admin";
+    let updCust, balBefore, balAfter, isNew;
 
-    // ── Simpan ke database DULU. Jika gagal, STOP — jangan kirim WA / tampilkan sukses ──
+    // ── Simpan ke database DULU secara ATOMIK. Jika gagal, STOP — jangan kirim WA ──
     try{
-      await onSaveCustomers(newCusts);
-      await onSaveWalletLogs([logEntry,...walletLogs]);
+      if(existingCust){
+        isNew=false;
+        const result=await onUpdateCustomerBalance(
+          existingCust.id,
+          amount, // delta: tambah
+          (bBefore,bAfter)=>({
+            id:uid(),customerId:existingCust.id,customerPhone:existingCust.phone,customerName:form.name.trim(),
+            type:"topup",amount,balanceBefore:bBefore,balanceAfter:bAfter,
+            adminName,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
+          }),
+          {name:form.name.trim()} // update nama sekalian kalau berubah
+        );
+        updCust=result; balBefore=result.balance-amount; balAfter=result.balance;
+      } else {
+        isNew=true;
+        const pin=String(Math.floor(1000+Math.random()*9000));
+        updCust={id:uid(),phone,name:form.name.trim(),balance:amount,pin,createdAt:new Date().toISOString()};
+        balBefore=0; balAfter=amount;
+        await onAddNewCustomer(updCust,()=>({
+          id:uid(),customerId:updCust.id,customerPhone:phone,customerName:updCust.name,
+          type:"topup",amount,balanceBefore:0,balanceAfter:amount,
+          adminName,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
+        }));
+      }
     }catch(e){
       console.error("Top up gagal simpan:",e);
-      showMsg(`❌ GAGAL MENYIMPAN! Top up TIDAK tercatat. Cek koneksi internet lalu coba lagi.\n(${e.message})`,8000);
+      showMsg(`❌ GAGAL MENYIMPAN! Top up TIDAK tercatat. (${e.message})`,8000);
       setSending(false);
       return; // STOP — tidak lanjut kirim WA
     }
@@ -2254,7 +2316,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
 // ─── Pre-Order Manager (Admin & SuperAdmin) ───────────────────────────────────
 // Setiap order disimpan TERPISAH per tenant (1 sesi checkout → N order records)
 // groupNota menghubungkan semua order dari sesi yang sama
-function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,onSaveCustomers,onSaveWalletLogs,onSaveOrders,onSaveMenus,adminData,isSuperAdmin}){
+function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,onSaveCustomers,onSaveWalletLogs,onSaveOrders,onSaveMenus,onUpdateCustomerBalance,onCheckConnection,adminData,isSuperAdmin}){
   // Bisa edit kuota: SuperAdmin atau admin dengan flag isPOManager
   const canEditQuota=isSuperAdmin||(adminData?.isPOManager===true);
   const [subTab,setSubTab]=useState("new");
@@ -2346,12 +2408,19 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
     if(cust.balance<total){setScanError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(total)}`);return;}
     setProcessing(true);
 
+    // ── Cek koneksi server DULU. Kalau gagal, tolak cepat & keranjang tetap utuh ──
+    const online=await onCheckConnection();
+    if(!online){
+      setProcessing(false);
+      setScanError("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. PO DIBATALKAN — cek koneksi lalu coba lagi. Keranjang tetap tersimpan.");
+      return;
+    }
+
     // Generate group nota
     const todayOrders=(orders||[]).filter(o=>o.date===todayStr());
     const groupSeq=String(todayOrders.reduce((max,o)=>Math.max(max,parseInt((o.groupNota||"PO-0-0").split("-").pop())||0),0)+1).padStart(3,"0");
     const groupNota=`PO-${todayStr().replace(/-/g,"")}-${groupSeq}`;
     const groupId=uid();
-    const balBefore=cust.balance; const balAfter=balBefore-total;
 
     // Buat 1 order record per tenant
     const newOrders=[];
@@ -2371,21 +2440,33 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
       });
     }
 
-    // ── Simpan ke database DULU. Jika gagal, STOP — jangan potong saldo / kirim WA ──
+    let balAfter;
+    // ── Potong saldo DULU secara ATOMIK (paling rawan gagal: validasi saldo & race-condition) ──
+    try{
+      const result=await onUpdateCustomerBalance(
+        cust.id,
+        -total,
+        (balBefore,bAfter)=>({id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
+          type:"payment",amount:total,balanceBefore:balBefore,balanceAfter:bAfter,
+          nota:groupNota,tenantId:"PO",tenantName:"Pre-Order",
+          items:cart,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()})
+      );
+      balAfter=result.balance;
+    }catch(e){
+      console.error("PO checkout gagal potong saldo:",e);
+      setProcessing(false);
+      setScanError(`❌ GAGAL! ${e.message}`);
+      return; // STOP — saldo belum terpotong, PO belum dibuat sama sekali
+    }
+
+    // ── Baru simpan record PO ──
     try{
       await onSaveOrders([...(orders||[]),...newOrders]);
-      // Potong saldo sekali untuk total group
-      await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
-      const logEntry={id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
-        type:"payment",amount:total,balanceBefore:balBefore,balanceAfter:balAfter,
-        nota:groupNota,tenantId:"PO",tenantName:"Pre-Order",
-        items:cart,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
-      await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
     }catch(e){
-      console.error("PO checkout gagal simpan:",e);
+      console.error("PO gagal simpan SETELAH saldo terpotong:",e);
       setProcessing(false);
-      alert(`❌ GAGAL MENYIMPAN PO!\n\nPO TIDAK tercatat dengan benar. JANGAN beri tahu pelanggan PO berhasil.\nCek koneksi internet, lalu coba lagi.\n\nDetail: ${e.message}`);
-      return; // STOP — tidak lanjut kirim WA, keranjang tetap utuh untuk retry
+      alert(`⚠️ PERHATIAN! Saldo pelanggan SUDAH terpotong (Rp ${idr(total)}), TAPI catatan PO GAGAL tersimpan.\n\nNota: ${groupNota}\nJANGAN potong saldo lagi. Screenshot pesan ini dan laporkan ke Super Admin.\n\nDetail: ${e.message}`);
+      return;
     }
 
     // Kirim WA nota PO
@@ -2414,29 +2495,42 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
     if(!cust||cust.id!==order.customerId){setVerifyError("❌ QR tidak cocok dengan pelanggan PO ini!");return;}
     if(cust.pin&&verifyPin!==cust.pin){setVerifyPinError("❌ PIN salah! Coba lagi.");setVerifyPin("");return;}
 
-    const isUnpaid=order.paymentStatus==="unpaid";
-    let balAfter=null;
-    if(isUnpaid){
-      if(cust.balance<order.subtotal){setVerifyError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(order.subtotal)}`);return;}
-      balAfter=cust.balance-order.subtotal;
+    // ── Cek koneksi server DULU. Kalau gagal, tolak cepat & data PO tetap utuh ──
+    const online=await onCheckConnection();
+    if(!online){
+      setVerifyError("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. Verifikasi DIBATALKAN — cek koneksi lalu coba lagi.");
+      return;
     }
 
-    // ── Simpan SEMUA perubahan ke database DULU. Jika gagal, STOP total ──
-    try{
-      if(isUnpaid){
-        const balBefore=cust.balance;
-        await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
-        const logEntry={id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
-          type:"payment",amount:order.subtotal,balanceBefore:balBefore,balanceAfter:balAfter,
-          nota:order.nota,tenantId:order.tenantId,tenantName:order.tenantName,
-          items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
-        await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+    const isUnpaid=order.paymentStatus==="unpaid";
+    let balAfter=null;
+
+    // ── Potong saldo DULU secara ATOMIK jika belum lunas ──
+    if(isUnpaid){
+      try{
+        const result=await onUpdateCustomerBalance(
+          cust.id,
+          -order.subtotal,
+          (balBefore,bAfter)=>({id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
+            type:"payment",amount:order.subtotal,balanceBefore:balBefore,balanceAfter:bAfter,
+            nota:order.nota,tenantId:order.tenantId,tenantName:order.tenantName,
+            items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()})
+        );
+        balAfter=result.balance;
+      }catch(e){
+        console.error("Verifikasi PO gagal potong saldo:",e);
+        setVerifyError(`❌ GAGAL! ${e.message}`);
+        return; // STOP — saldo belum terpotong, order belum ditandai selesai
       }
+    }
+
+    // ── Baru tandai order selesai ──
+    try{
       await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",paymentStatus:"paid",verifiedAt:new Date().toISOString(),verifiedBy:adminData?.name||"Admin"}:o));
     }catch(e){
-      console.error("Verifikasi PO gagal simpan:",e);
-      setVerifyError(`❌ GAGAL MENYIMPAN! Verifikasi PO TIDAK tercatat. Cek koneksi, lalu coba lagi. (${e.message})`);
-      return; // STOP — jangan kirim WA, jangan tutup modal
+      console.error("Order PO gagal disimpan SETELAH saldo terpotong:",e);
+      setVerifyError(`⚠️ Saldo SUDAH terpotong tapi status PO gagal diupdate! Laporkan ke Super Admin. (${e.message})`);
+      return;
     }
 
     // ── Database sudah confirmed tersimpan, baru kirim WA ──
@@ -2486,16 +2580,25 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
   // ── Refund PO (sudah bayar) ──────────────────────────────────────────────
   const doRefundPO=async(order)=>{
     setPOActionLoading(true);
+    // ── Cek koneksi server DULU ──
+    const online=await onCheckConnection();
+    if(!online){
+      setPOActionLoading(false);
+      setSuccessMsg("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. Refund DIBATALKAN — cek koneksi lalu coba lagi.");
+      return;
+    }
     try{
       const cust=customers.find(c=>c.id===order.customerId);
       if(cust){
-        const balBefore=cust.balance; const balAfter=balBefore+order.subtotal;
-        await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
-        const logEntry={id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
-          type:"refund",amount:order.subtotal,balanceBefore:balBefore,balanceAfter:balAfter,
-          nota:order.nota,tenantId:order.tenantId,tenantName:order.tenantName,
-          items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
-        await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+        const result=await onUpdateCustomerBalance(
+          cust.id,
+          order.subtotal, // delta: tambah (refund)
+          (balBefore,balAfter)=>({id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
+            type:"refund",amount:order.subtotal,balanceBefore:balBefore,balanceAfter:balAfter,
+            nota:order.nota,tenantId:order.tenantId,tenantName:order.tenantName,
+            items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()})
+        );
+        const balAfter=result.balance;
         const itemsTxt=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
         const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n↩️ *Refund Pre-Order*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n---------------------------\n${itemsTxt}\n---------------------------\n💰 Refund: +${idr(order.subtotal)}\n🪙 Saldo Baru: ${idr(balAfter)}\n\nMaaf atas ketidaknyamanan ini.\n${waSignature(adminData?.name||"Super Admin")}`;
         const ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg}):false;
@@ -2503,7 +2606,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
       }
       await onSaveOrders((orders||[]).map(o=>o.id===order.id?{...o,status:"cancelled",cancelledAt:new Date().toISOString(),cancelledBy:adminData?.name||"Super Admin",cancelReason:"refund"}:o));
       setConfirmPOAction(null);
-      setSuccessMsg(`✅ PO ${order.nota} direfund! Saldo +${idr(order.subtotal)} dikembalikan.`);
+      setSuccessMsg(`✅ PO ${order.nota} direfund & TERSIMPAN! Saldo +${idr(order.subtotal)} dikembalikan.`);
       setTimeout(()=>setSuccessMsg(""),5000);
     }catch(e){setSuccessMsg("❌ Gagal refund: "+e.message);}
     setPOActionLoading(false);
@@ -2512,6 +2615,13 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
   // ── Cancel PO (belum bayar) ───────────────────────────────────────────────
   const doCancelPO=async(order)=>{
     setPOActionLoading(true);
+    // ── Cek koneksi server DULU ──
+    const online=await onCheckConnection();
+    if(!online){
+      setPOActionLoading(false);
+      setSuccessMsg("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. Pembatalan DIBATALKAN — cek koneksi lalu coba lagi.");
+      return;
+    }
     try{
       const cust=customers.find(c=>c.id===order.customerId);
       const itemsTxt=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
@@ -2927,6 +3037,11 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                   <button onClick={async()=>{
                       if(!selCust){alert("Pilih pelanggan terlebih dahulu!");return;}
                       if(!window.confirm(`Buat PO "Bayar Nanti" untuk ${selCust.name}?\nSaldo TIDAK dipotong sekarang, pelanggan bayar saat pengambilan.`))return;
+                      const online=await onCheckConnection();
+                      if(!online){
+                        alert("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. PO DIBATALKAN — cek koneksi lalu coba lagi. Keranjang tetap tersimpan.");
+                        return;
+                      }
                       const todayOrders=(orders||[]).filter(o=>o.date===todayStr());
                       const groupSeq=String(todayOrders.reduce((max,o)=>Math.max(max,parseInt((o.groupNota||"PO-0-0").split("-").pop())||0),0)+1).padStart(3,"0");
                       const groupNota=`PO-${todayStr().replace(/-/g,"")}-${groupSeq}`;
@@ -2946,7 +3061,13 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                           createdBy:adminData?.name||"Admin",
                         });
                       }
-                      await onSaveOrders([...(orders||[]),...newOrders]);
+                      try{
+                        await onSaveOrders([...(orders||[]),...newOrders]);
+                      }catch(e){
+                        console.error("PO Bayar Nanti gagal simpan:",e);
+                        alert(`❌ GAGAL MENYIMPAN PO! Coba lagi.\n\nDetail: ${e.message}`);
+                        return; // STOP — keranjang tetap utuh
+                      }
                       if(settings?.fonnteToken){
                         const lines=tenantIds.map(tid=>{const t=tenants.find(x=>x.id===tid);const its=cart.filter(it=>it.tenantId===tid);return`🏪 *${t?.name||tid}*\n`+its.map(it=>`  🍽️ ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");}).join("\n");
                         const _bnMsg=`*${settings.bazaarName||"BazaarPOS"}*\n\nPRE-ORDER — BAYAR NANTI\nNota: ${groupNota}\nNama: ${selCust.name}\n---------------------------\n${lines}\n---------------------------\n*TOTAL: ${idr(total)}*\nPembayaran saat pengambilan.\n\nTerima kasih!\n${waSignature(adminData?.name||"Admin")}`;
@@ -2954,7 +3075,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                         if(!_bnOk){const _p=selCust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_bnMsg)}`,"_blank");}
                       }
                       setCart([]);setSelCust(null);
-                      setSuccessMsg(`✅ PO Bayar Nanti (${groupNota}) dicatat! Bayar saat pengambilan.`);
+                      setSuccessMsg(`✅ PO Bayar Nanti (${groupNota}) dicatat & TERSIMPAN! Bayar saat pengambilan.`);
                       setTimeout(()=>setSuccessMsg(""),5000);
                     }}
                     style={{width:"100%",padding:"12px",background:"#fff7ed",color:"#ea580c",border:"2px solid #fed7aa",borderRadius:12,fontWeight:800,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
@@ -3172,7 +3293,7 @@ function POReport({orders,tenants,customers}){
 }
 
 // ─── PO Tenant ────────────────────────────────────────────────────────────────
-function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,settings,menus}){
+function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,onUpdateCustomerBalance,onCheckConnection,settings,menus}){
   const [poSearch,setPOSearch]=useState("");
   const [showScanner,setShowScanner]=useState(false);
   const [verifyOrderId,setVerifyOrderId]=useState(null);
@@ -3215,23 +3336,42 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,settings
     if(!cust||cust.id!==order.customerId){setVerifyError("❌ QR tidak cocok dengan pelanggan PO ini!");return;}
     if(cust.pin&&verifyPin!==cust.pin){setVerifyPinError("❌ PIN salah! Coba lagi.");setVerifyPin("");return;}
 
-    const isUnpaid=order.paymentStatus==="unpaid";
-    let balAfter=null;
-    if(isUnpaid){
-      if(cust.balance<order.subtotal){setVerifyError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(order.subtotal)}`);return;}
-      balAfter=cust.balance-order.subtotal;
+    // ── Cek koneksi server DULU. Kalau gagal, tolak cepat & data PO tetap utuh ──
+    const online=onCheckConnection?await onCheckConnection():true;
+    if(!online){
+      setVerifyError("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. Verifikasi DIBATALKAN — cek koneksi lalu coba lagi.");
+      return;
     }
 
-    // ── Simpan SEMUA perubahan ke database DULU. Jika gagal, STOP total ──
-    try{
-      if(isUnpaid&&typeof onSaveCustomers==="function"){
-        await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
+    const isUnpaid=order.paymentStatus==="unpaid";
+    let balAfter=null;
+
+    // ── Potong saldo DULU secara ATOMIK jika belum lunas ──
+    if(isUnpaid&&typeof onUpdateCustomerBalance==="function"){
+      try{
+        const result=await onUpdateCustomerBalance(
+          cust.id,
+          -order.subtotal,
+          (balBefore,bAfter)=>({id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
+            type:"payment",amount:order.subtotal,balanceBefore:balBefore,balanceAfter:bAfter,
+            nota:order.nota,tenantId:order.tenantId,tenantName:order.tenantName,
+            items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()})
+        );
+        balAfter=result.balance;
+      }catch(e){
+        console.error("Verifikasi PO gagal potong saldo:",e);
+        setVerifyError(`❌ GAGAL! ${e.message}`);
+        return; // STOP — saldo belum terpotong
       }
+    }
+
+    // ── Baru tandai order selesai ──
+    try{
       await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",paymentStatus:"paid",verifiedAt:new Date().toISOString(),verifiedBy:tenant.name}:o));
     }catch(e){
-      console.error("Verifikasi PO gagal simpan:",e);
-      setVerifyError(`❌ GAGAL MENYIMPAN! Verifikasi PO TIDAK tercatat. Cek koneksi, lalu coba lagi. (${e.message})`);
-      return; // STOP — jangan kirim WA, jangan tutup modal
+      console.error("Order PO gagal disimpan SETELAH saldo terpotong:",e);
+      setVerifyError(`⚠️ Saldo SUDAH terpotong tapi status PO gagal diupdate! Laporkan ke Super Admin. (${e.message})`);
+      return;
     }
 
     // ── Database sudah confirmed tersimpan, baru kirim WA ──
@@ -3419,7 +3559,7 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,settings
 }
 
 // ─── Admin Transactions ───────────────────────────────────────────────────────
-function AdminTransactions({tenants,transactions,settings,customers,walletLogs,onSaveTx,onSaveCustomers,onSaveWalletLogs,filterDate,setFilterDate,isSuperAdmin,adminData}){
+function AdminTransactions({tenants,transactions,settings,customers,walletLogs,onSaveTx,onSaveCustomers,onSaveWalletLogs,onUpdateCustomerBalance,onCheckConnection,filterDate,setFilterDate,isSuperAdmin,adminData}){
   const getTn=id=>tenants.find(t=>t.id===id)||{};
   const [searchNota,setSearchNota]=useState("");
   const [refunding,setRefunding]=useState(null);
@@ -3437,24 +3577,34 @@ function AdminTransactions({tenants,transactions,settings,customers,walletLogs,o
 
   const doRefund=async(tx)=>{
     setRefunding(tx.id); setShowConfirmId(null);
+    // ── Cek koneksi server DULU ──
+    const online=await onCheckConnection();
+    if(!online){
+      setRefunding(null);
+      setRefundMsg("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. Refund DIBATALKAN — cek koneksi lalu coba lagi.");
+      setTimeout(()=>setRefundMsg(""),6000);
+      return;
+    }
     try{
       const updTx=transactions.map(t=>t.id===tx.id?{...t,refunded:true,refundedAt:new Date().toISOString()}:t);
       await onSaveTx(updTx);
       if(tx.walletCustomerPhone){
         const cust=(customers||[]).find(c=>c.phone===tx.walletCustomerPhone);
         if(cust){
-          const balBefore=cust.balance; const balAfter=balBefore+tx.total;
-          await onSaveCustomers(customers.map(c=>c.phone===tx.walletCustomerPhone?{...c,balance:balAfter}:c));
-          const logEntry={id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
-            type:"refund",amount:tx.total,balanceBefore:balBefore,balanceAfter:balAfter,
-            nota:tx.nota,tenantId:tx.tenantId,tenantName:tenants.find(t=>t.id===tx.tenantId)?.name||"",
-            timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
-          await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+          const result=await onUpdateCustomerBalance(
+            cust.id,
+            tx.total, // delta: tambah (refund)
+            (balBefore,balAfter)=>({id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
+              type:"refund",amount:tx.total,balanceBefore:balBefore,balanceAfter:balAfter,
+              nota:tx.nota,tenantId:tx.tenantId,tenantName:tenants.find(t=>t.id===tx.tenantId)?.name||"",
+              timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()})
+          );
+          const balAfter=result.balance;
           const _rfItems=tx.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
           const _rfMsg=`*${bname}*\n\n↩️ *Refund/Pembatalan Transaksi*\n📋 Nota: ${tx.nota}\n🏪 Tenant: ${tenants.find(t=>t.id===tx.tenantId)?.name||""}\n---------------------------\n${_rfItems}\n---------------------------\n💰 Refund: +${idr(tx.total)}\n🪙 Saldo Baru: ${idr(balAfter)}\n\nTerima kasih!\n${waSignature((adminData?.name)||"Admin")}`;
           const _rfOk=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:_rfMsg}):false;
           if(!_rfOk){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_rfMsg)}`,"_blank");}
-          setRefundMsg(`✅ Refund berhasil! Saldo ${cust.name} +${idr(tx.total)} → ${idr(balAfter)}`);
+          setRefundMsg(`✅ Refund berhasil & TERSIMPAN! Saldo ${cust.name} +${idr(tx.total)} → ${idr(balAfter)}`);
         } else { setRefundMsg("✅ Transaksi dibatalkan. Pelanggan tidak ditemukan."); }
       } else { setRefundMsg("✅ Transaksi dibatalkan."); }
     }catch(e){ setRefundMsg("❌ Gagal: "+e.message); }
@@ -3806,7 +3956,7 @@ function AdminSummary({tenants,transactions,settings,filterDate,setFilterDate}){
 // ═════════════════════════════════════════════════════════════════════════════
 // TENANT APP
 // ═════════════════════════════════════════════════════════════════════════════
-function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,customers,walletLogs,orders,onSaveMenus,onSaveTx,onSaveCustomers,onSaveWalletLogs,onSaveOrders,onSaveAlerts,alerts,onRefresh,refreshing,onLogout}){
+function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,customers,walletLogs,orders,onSaveMenus,onSaveTx,onSaveCustomers,onSaveWalletLogs,onSaveOrders,onUpdateCustomerBalance,onCheckConnection,onSaveAlerts,alerts,onRefresh,refreshing,onLogout}){
   const [tab,setTab]=useState("pos");
   const {BackConfirmModal}=useBackConfirm(true);
   const [btPrinter,setBtPrinter]=useState(null);
@@ -3833,7 +3983,7 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
   return(
     <div style={{minHeight:"100vh",background:"#f0fdf4"}}>
       <BackConfirmModal/>
-      {!isOnline&&<div style={{background:"#dc2626",color:"#fff",textAlign:"center",padding:"8px",fontSize:13,fontWeight:700}}>⚠️ Offline — Transaksi tersimpan lokal, sync otomatis saat online</div>}
+      {!isOnline&&<div style={{background:"#dc2626",color:"#fff",textAlign:"center",padding:"8px",fontSize:13,fontWeight:700}}>⚠️ Tidak ada koneksi internet — transaksi akan DITOLAK sampai jaringan kembali normal</div>}
 
       {showEmerg&&<Modal title="🆘 Kirim Pesan Darurat" onClose={()=>setShowEmerg(false)} accent="#dc2626">
         <p style={{color:"#6b7280",fontSize:13,margin:"0 0 12px"}}>Pesan ini akan langsung tampil di panel Admin. Gunakan hanya saat ada masalah mendesak.</p>
@@ -3889,8 +4039,8 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
       </div>
 
       <div style={{padding:16,maxWidth:520,margin:"0 auto"}} className="fade-in">
-        {tab==="pos"&&<TenantPOS tenant={tenant} menus={menus} allTransactions={allTransactions} onSaveTx={onSaveTx} settings={settings} isOnline={isOnline} customers={customers} walletLogs={walletLogs} onSaveCustomers={onSaveCustomers} onSaveWalletLogs={onSaveWalletLogs}/>}
-        {tab==="po"&&<POTenant tenant={tenant} orders={orders} customers={customers} onSaveOrders={onSaveOrders} onSaveCustomers={onSaveCustomers} settings={settings} menus={menus}/>}
+        {tab==="pos"&&<TenantPOS tenant={tenant} menus={menus} allTransactions={allTransactions} onSaveTx={onSaveTx} settings={settings} customers={customers} walletLogs={walletLogs} onSaveCustomers={onSaveCustomers} onSaveWalletLogs={onSaveWalletLogs} onUpdateCustomerBalance={onUpdateCustomerBalance} onCheckConnection={onCheckConnection}/>}
+        {tab==="po"&&<POTenant tenant={tenant} orders={orders} customers={customers} onSaveOrders={onSaveOrders} onSaveCustomers={onSaveCustomers} onUpdateCustomerBalance={onUpdateCustomerBalance} onCheckConnection={onCheckConnection} settings={settings} menus={menus}/>}
         {tab==="menu"&&<TenantMenuMgr tenant={tenant} menus={menus} allMenus={allMenus} allTransactions={allTransactions} orders={orders} onSaveMenus={onSaveMenus}/>}
         {tab==="history"&&<TenantHistory transactions={transactions} tenant={tenant} settings={settings}/>}
       </div>
@@ -3899,7 +4049,7 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
 }
 
 // ─── Tenant POS ───────────────────────────────────────────────────────────────
-function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,customers,walletLogs,onSaveCustomers,onSaveWalletLogs}){
+function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,customers,walletLogs,onSaveCustomers,onSaveWalletLogs,onUpdateCustomerBalance,onCheckConnection}){
   const [cart,setCart]=useState([]);
   const [lastNota,setLastNota]=useState(null);
   const [printed,setPrinted]=useState(false);
@@ -3985,43 +4135,56 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
   // ── Checkout utama ────────────────────────────────────────────────────────
   const handleCheckout=async(paymentMethod,walletCust=null)=>{
     if(!cart.length){alert("Keranjang kosong!");return;}
+    setCheckoutLoading(true);
+
+    // ── Cek koneksi server DULU sebelum apapun. Kalau gagal, tolak cepat & keranjang tetap utuh ──
+    const online=await onCheckConnection();
+    if(!online){
+      setCheckoutLoading(false);
+      alert("⚠️ JARINGAN TIDAK STABIL!\n\nTidak bisa terhubung ke server. Transaksi DIBATALKAN demi keamanan data.\n\nKeranjang belanja TETAP TERSIMPAN — cek koneksi internet, lalu tekan tombol bayar lagi.");
+      return; // STOP — cart tidak dikosongkan, kasir tinggal coba lagi
+    }
+
     const nota=genNota(tenant.code,allTransactions);
     const tx={id:uid(),tenantId:tenant.id,tenantCode:tenant.code,nota,items:cart,total,paymentMethod,
       walletCustomerId:walletCust?.id||null, walletCustomerPhone:walletCust?.phone||null,
       walletCustomerName:walletCust?.name||null, date:todayStr(),time:timeStr()};
 
-    setCheckoutLoading(true);
     try{
-      // ── Simpan transaksi DULU. Jika gagal, STOP total — jangan lanjut apapun ──
-      if(isOnline) await onSaveTx([...allTransactions,tx]);
-      else offQ.add(tx);
-
-      // Potong saldo jika bayar wallet
+      // ── Potong saldo DULU (paling rawan gagal: validasi saldo & race-condition) ──
+      // Supaya tidak ada transaksi "hantu" yang tercatat tanpa saldo benar-benar terpotong.
       if(paymentMethod==="wallet"&&walletCust){
-        const balBefore=walletCust.balance;
-        const balAfter=balBefore-total;
-        const updCust={...walletCust,balance:balAfter};
-        const newCusts=customers.map(c=>c.id===walletCust.id?updCust:c);
-        const logEntry={
-          id:uid(),customerId:walletCust.id,customerPhone:walletCust.phone,customerName:walletCust.name,
-          type:"payment",amount:total,balanceBefore:balBefore,balanceAfter:balAfter,
-          tenantId:tenant.id,tenantName:tenant.name,nota,
-          items:cart.map(it=>({menuCode:it.menuCode,menuName:it.menuName,qty:it.qty,price:it.price})),
-          timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
-        };
-        // Wajib berhasil — kalau gagal, saldo TIDAK terpotong tapi transaksi sudah tercatat.
-        // Ini kondisi kritis: beri tahu kasir untuk cek manual.
-        await onSaveCustomers(newCusts);
-        await onSaveWalletLogs([logEntry,...walletLogs]);
-        tx.walletBalanceAfter=balAfter;
+        const result=await onUpdateCustomerBalance(
+          walletCust.id,
+          -total, // delta: kurangi
+          (balBefore,balAfter)=>({
+            id:uid(),customerId:walletCust.id,customerPhone:walletCust.phone,customerName:walletCust.name,
+            type:"payment",amount:total,balanceBefore:balBefore,balanceAfter:balAfter,
+            tenantId:tenant.id,tenantName:tenant.name,nota,
+            items:cart.map(it=>({menuCode:it.menuCode,menuName:it.menuName,qty:it.qty,price:it.price})),
+            timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
+          })
+        );
+        tx.walletBalanceAfter=result.balance;
+      }
+
+      // ── Baru simpan record transaksi (selalu langsung ke server, TIDAK ada antrian offline) ──
+      try{
+        await onSaveTx([...allTransactions,tx]);
+      }catch(txErr){
+        // Saldo SUDAH terpotong tapi transaksi gagal tersimpan — kasus kritis, beri tahu jelas
+        console.error("Transaksi gagal simpan SETELAH saldo terpotong:",txErr);
+        setCheckoutLoading(false);
+        alert(`⚠️ PERHATIAN! Saldo pelanggan SUDAH terpotong (Rp ${idr(total)}), TAPI catatan transaksi GAGAL tersimpan.\n\nNota: ${nota}\nJANGAN potong saldo lagi. Screenshot pesan ini dan laporkan ke Super Admin untuk dicatat manual.\n\nDetail: ${txErr.message}`);
+        return;
       }
 
       setLastNota(tx);setPrinted(false);setCart([]);
       setCheckoutLoading(false);
     }catch(e){
-      console.error("Checkout gagal simpan:",e);
+      console.error("Checkout gagal:",e);
       setCheckoutLoading(false);
-      alert(`❌ GAGAL MENYIMPAN TRANSAKSI!\n\nTransaksi TIDAK tercatat dengan benar. JANGAN beri tahu pelanggan transaksi berhasil.\nCek koneksi internet, lalu coba lagi.\n\nDetail: ${e.message}`);
+      alert(`❌ GAGAL!\n\nTransaksi TIDAK tercatat dan saldo TIDAK terpotong. JANGAN beri tahu pelanggan transaksi berhasil.\nCek koneksi internet, lalu coba lagi.\n\nDetail: ${e.message}`);
       // Jangan kosongkan cart — biarkan kasir retry
     }
   };
@@ -4186,8 +4349,6 @@ ${waSignature(tenant.name)}`;
               <p style={{margin:"2px 0 0",fontSize:12,color:"#6b7280"}}>Sisa saldo: <strong style={{color:"#7c3aed"}}>{idr(lastNota.walletBalanceAfter??0)}</strong></p>
             </div>
           )}
-
-          {!isOnline&&<div style={{background:"#fef3c7",border:"1px solid #fbbf24",borderRadius:8,padding:"5px 10px",marginBottom:8,fontSize:11,color:"#92400e",fontWeight:600,textAlign:"center"}}>⚠️ Tersimpan offline</div>}
 
           <div style={{background:"#f9fafb",borderRadius:10,padding:"8px 12px",marginBottom:8,maxHeight:120,overflowY:"auto",WebkitOverflowScrolling:"touch"}}>
             {lastNota.items.map((it,i)=>(
