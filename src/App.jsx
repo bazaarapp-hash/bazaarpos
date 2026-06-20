@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────67
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────70
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -529,14 +529,14 @@ export default function App(){
   },[]);
 
   const saveTenants=async d=>{setTenants(d);await db.set("bzr_tenants",d);};
-  const saveMenus=async d=>{setMenus(d);await db.set("bzr_menus",d);};
-  const saveTx=async d=>{setTransactions(d);await db.set("bzr_transactions",d);};
-  const saveSettings=async d=>{setSettings(d);await db.set("bzr_settings",d);};
-  const saveAdmins=async d=>{setAdmins(d);await db.set("bzr_admins",d);};
-  const saveAlerts=async d=>{setAlerts(d);await db.set("bzr_alerts",d);};
-  const saveCustomers=async d=>{setCustomers(d);await db.set("bzr_customers",d);};
-  const saveWalletLogs=async d=>{setWalletLogs(d);await db.set("bzr_wallet_logs",d);};
-  const saveOrders=async d=>{setOrders(d);await db.set("bzr_orders",d);};
+  const saveMenus=async d=>{await db.set("bzr_menus",d);setMenus(d);};
+  const saveTx=async d=>{await db.set("bzr_transactions",d);setTransactions(d);};
+  const saveSettings=async d=>{await db.set("bzr_settings",d);setSettings(d);};
+  const saveAdmins=async d=>{await db.set("bzr_admins",d);setAdmins(d);};
+  const saveAlerts=async d=>{await db.set("bzr_alerts",d);setAlerts(d);};
+  const saveCustomers=async d=>{await db.set("bzr_customers",d);setCustomers(d);};
+  const saveWalletLogs=async d=>{await db.set("bzr_wallet_logs",d);setWalletLogs(d);};
+  const saveOrders=async d=>{await db.set("bzr_orders",d);setOrders(d);};
   const [refreshing,setRefreshing]=useState(false);
   const doRefresh=async()=>{
     setRefreshing(true);
@@ -940,11 +940,15 @@ function AdminUsers({admins,onSaveAdmins}){
   const [form,setForm]=useState({username:"",password:"",name:"",isPOManager:false});
   const openAdd=()=>{setForm({username:"",password:"",name:"",isPOManager:false});setEditing(null);setShowForm(true);};
   const openEdit=a=>{setForm({username:a.username,password:a.password,name:a.name,isPOManager:!!a.isPOManager});setEditing(a.id);setShowForm(true);};
-  const save=()=>{
+  const save=async()=>{
     if(!form.username||!form.password||!form.name){alert("Semua field harus diisi!");return;}
     if(!editing&&admins.find(a=>a.username===form.username)){alert("Username sudah ada!");return;}
-    onSaveAdmins(editing?admins.map(a=>a.id===editing?{...a,...form}:a):[...admins,{id:uid(),...form}]);
-    setShowForm(false);
+    try{
+      await onSaveAdmins(editing?admins.map(a=>a.id===editing?{...a,...form}:a):[...admins,{id:uid(),...form}]);
+      setShowForm(false);
+    }catch(e){
+      alert(`❌ GAGAL MENYIMPAN! Data admin tidak tersimpan. Cek koneksi, lalu coba lagi.\n(${e.message})`);
+    }
   };
   return(
     <div>
@@ -992,7 +996,7 @@ function AdminUsers({admins,onSaveAdmins}){
               )}
               <div style={{display:"flex",gap:8}}>
                 <button onClick={()=>openEdit(a)} style={{flex:1,padding:"8px",background:"#eff6ff",color:"#2563eb",border:"none",borderRadius:10,cursor:"pointer",fontWeight:600,fontSize:13}}>✏️ Edit</button>
-                <button onClick={()=>{if(window.confirm("Hapus admin ini?"))onSaveAdmins(admins.filter(x=>x.id!==a.id));}} style={{flex:1,padding:"8px",background:"#fef2f2",color:"#dc2626",border:"none",borderRadius:10,cursor:"pointer",fontWeight:600,fontSize:13}}>🗑️ Hapus</button>
+                <button onClick={async()=>{if(window.confirm("Hapus admin ini?")){try{await onSaveAdmins(admins.filter(x=>x.id!==a.id));}catch(e){alert("❌ GAGAL HAPUS! "+e.message);}}}} style={{flex:1,padding:"8px",background:"#fef2f2",color:"#dc2626",border:"none",borderRadius:10,cursor:"pointer",fontWeight:600,fontSize:13}}>🗑️ Hapus</button>
               </div>
             </div>
           ))}
@@ -1785,11 +1789,16 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
   const showMsg=(m,dur=4000)=>{setMsg(m);setTimeout(()=>setMsg(""),dur);};
 
   // Hapus pelanggan (SuperAdmin only)
-  const deleteCustomer=(c)=>{
+  const deleteCustomer=async(c)=>{
     if(c.balance>0){showMsg(`❌ Saldo ${c.name} masih ${idr(c.balance)}. Kosongkan saldo dulu sebelum hapus.`);return;}
     if(!window.confirm(`Hapus pelanggan "${c.name}" (${c.phone})?\nTindakan ini permanen.`))return;
-    onSaveCustomers(customers.filter(x=>x.id!==c.id));
-    showMsg(`✅ Pelanggan ${c.name} berhasil dihapus.`);
+    try{
+      await onSaveCustomers(customers.filter(x=>x.id!==c.id));
+      showMsg(`✅ Pelanggan ${c.name} berhasil dihapus & TERSIMPAN.`);
+    }catch(e){
+      console.error("Hapus pelanggan gagal:",e);
+      showMsg(`❌ GAGAL MENYIMPAN! Pelanggan TIDAK terhapus. Cek koneksi, lalu coba lagi. (${e.message})`,8000);
+    }
   };
 
   // Kosongkan saldo (SuperAdmin only)
@@ -1797,14 +1806,19 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     if(c.balance===0){showMsg(`ℹ️ Saldo ${c.name} sudah 0.`);return;}
     if(!window.confirm(`Kosongkan saldo ${c.name}?\nSaldo ${idr(c.balance)} akan diset ke Rp 0.\nTindakan ini tidak bisa dibatalkan.`))return;
     const balBefore=c.balance;
-    await onSaveCustomers(customers.map(x=>x.id===c.id?{...x,balance:0}:x));
-    const logEntry={id:uid(),customerId:c.id,customerPhone:c.phone,customerName:c.name,
-      type:"adjustment",amount:balBefore,balanceBefore:balBefore,balanceAfter:0,
-      nota:"ADJUST-"+todayStr(),tenantId:"",tenantName:"",
-      adminName:adminData?.name||"Super Admin",
-      timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
-    await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
-    showMsg(`✅ Saldo ${c.name} berhasil dikosongkan (${idr(balBefore)} → Rp 0).`);
+    try{
+      await onSaveCustomers(customers.map(x=>x.id===c.id?{...x,balance:0}:x));
+      const logEntry={id:uid(),customerId:c.id,customerPhone:c.phone,customerName:c.name,
+        type:"adjustment",amount:balBefore,balanceBefore:balBefore,balanceAfter:0,
+        nota:"ADJUST-"+todayStr(),tenantId:"",tenantName:"",
+        adminName:adminData?.name||"Super Admin",
+        timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
+      await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+      showMsg(`✅ Saldo ${c.name} berhasil dikosongkan & TERSIMPAN (${idr(balBefore)} → Rp 0).`);
+    }catch(e){
+      console.error("Kosongkan saldo gagal:",e);
+      showMsg(`❌ GAGAL MENYIMPAN! Saldo TIDAK dikosongkan. Cek koneksi, lalu coba lagi. (${e.message})`,8000);
+    }
   };
 
   // Scanner QR untuk cari pelanggan
@@ -1868,8 +1882,17 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
 
     const updCust={...cust,balance:balAfter,name:form.name.trim()};
     const newCusts=isNew?[...customers,updCust]:customers.map(c=>c.id===cust.id?updCust:c);
-    await onSaveCustomers(newCusts);
-    await onSaveWalletLogs([logEntry,...walletLogs]);
+
+    // ── Simpan ke database DULU. Jika gagal, STOP — jangan kirim WA / tampilkan sukses ──
+    try{
+      await onSaveCustomers(newCusts);
+      await onSaveWalletLogs([logEntry,...walletLogs]);
+    }catch(e){
+      console.error("Top up gagal simpan:",e);
+      showMsg(`❌ GAGAL MENYIMPAN! Top up TIDAK tercatat. Cek koneksi internet lalu coba lagi.\n(${e.message})`,8000);
+      setSending(false);
+      return; // STOP — tidak lanjut kirim WA
+    }
 
     // Link kartu pakai customer ID (aman, tidak expose nomor HP)
     const cardLink=`${window.location.origin}${window.location.pathname}?card=${updCust.id}`;
@@ -1888,7 +1911,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
       window.open(`https://wa.me/${target}?text=${encodeURIComponent(waMsg)}`,"_blank");
     }
 
-    showMsg(`✅ Top up berhasil!${isNew?` PIN pelanggan: ${updCust.pin} (catat & sampaikan ke pelanggan)`:""}${waSent?" WA terkirim otomatis!":" WA dibuka — kirim manual."}`);
+    showMsg(`✅ Top up berhasil & TERSIMPAN!${isNew?` PIN pelanggan: ${updCust.pin} (catat & sampaikan ke pelanggan)`:""}${waSent?" WA terkirim otomatis!":" WA dibuka — kirim manual."}`);
     setForm({phone:"",name:"",amount:""});
     setSending(false);
   };
@@ -2347,15 +2370,23 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
         createdBy:adminData?.name||"Admin",
       });
     }
-    await onSaveOrders([...(orders||[]),...newOrders]);
 
-    // Potong saldo sekali untuk total group
-    await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
-    const logEntry={id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
-      type:"payment",amount:total,balanceBefore:balBefore,balanceAfter:balAfter,
-      nota:groupNota,tenantId:"PO",tenantName:"Pre-Order",
-      items:cart,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
-    await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+    // ── Simpan ke database DULU. Jika gagal, STOP — jangan potong saldo / kirim WA ──
+    try{
+      await onSaveOrders([...(orders||[]),...newOrders]);
+      // Potong saldo sekali untuk total group
+      await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
+      const logEntry={id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
+        type:"payment",amount:total,balanceBefore:balBefore,balanceAfter:balAfter,
+        nota:groupNota,tenantId:"PO",tenantName:"Pre-Order",
+        items:cart,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
+      await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+    }catch(e){
+      console.error("PO checkout gagal simpan:",e);
+      setProcessing(false);
+      alert(`❌ GAGAL MENYIMPAN PO!\n\nPO TIDAK tercatat dengan benar. JANGAN beri tahu pelanggan PO berhasil.\nCek koneksi internet, lalu coba lagi.\n\nDetail: ${e.message}`);
+      return; // STOP — tidak lanjut kirim WA, keranjang tetap utuh untuk retry
+    }
 
     // Kirim WA nota PO
     if(settings?.fonnteToken){
@@ -2370,7 +2401,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
     }
 
     closeScanner();setCart([]);setSelCust(null);setProcessing(false);
-    setSuccessMsg(`✅ ${newOrders.length} PO (${groupNota}) berhasil! Saldo -${idr(total)}`);
+    setSuccessMsg(`✅ ${newOrders.length} PO (${groupNota}) berhasil & TERSIMPAN! Saldo -${idr(total)}`);
     setTimeout(()=>setSuccessMsg(""),5000);
   };
 
@@ -2383,30 +2414,45 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
     if(!cust||cust.id!==order.customerId){setVerifyError("❌ QR tidak cocok dengan pelanggan PO ini!");return;}
     if(cust.pin&&verifyPin!==cust.pin){setVerifyPinError("❌ PIN salah! Coba lagi.");setVerifyPin("");return;}
 
-    // Jika Belum Lunas — potong saldo dulu
-    if(order.paymentStatus==="unpaid"){
+    const isUnpaid=order.paymentStatus==="unpaid";
+    let balAfter=null;
+    if(isUnpaid){
       if(cust.balance<order.subtotal){setVerifyError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(order.subtotal)}`);return;}
-      const balBefore=cust.balance; const balAfter=balBefore-order.subtotal;
-      await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
-      const logEntry={id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
-        type:"payment",amount:order.subtotal,balanceBefore:balBefore,balanceAfter:balAfter,
-        nota:order.nota,tenantId:order.tenantId,tenantName:order.tenantName,
-        items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
-      await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+      balAfter=cust.balance-order.subtotal;
+    }
+
+    // ── Simpan SEMUA perubahan ke database DULU. Jika gagal, STOP total ──
+    try{
+      if(isUnpaid){
+        const balBefore=cust.balance;
+        await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
+        const logEntry={id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
+          type:"payment",amount:order.subtotal,balanceBefore:balBefore,balanceAfter:balAfter,
+          nota:order.nota,tenantId:order.tenantId,tenantName:order.tenantName,
+          items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
+        await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+      }
+      await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",paymentStatus:"paid",verifiedAt:new Date().toISOString(),verifiedBy:adminData?.name||"Admin"}:o));
+    }catch(e){
+      console.error("Verifikasi PO gagal simpan:",e);
+      setVerifyError(`❌ GAGAL MENYIMPAN! Verifikasi PO TIDAK tercatat. Cek koneksi, lalu coba lagi. (${e.message})`);
+      return; // STOP — jangan kirim WA, jangan tutup modal
+    }
+
+    // ── Database sudah confirmed tersimpan, baru kirim WA ──
+    if(isUnpaid){
       const _itemsUnpaid=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
       const _msg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n✅ *Pembayaran & Pengambilan PO*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n---------------------------\n${_itemsUnpaid}\n---------------------------\n💸 Dibayar: ${idr(order.subtotal)}\n🪙 Sisa Saldo: ${idr(balAfter)}\n\nTerima kasih! 🙏\n${waSignature(adminData?.name||"Admin")}`;
       const _ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:_msg}):false;
       if(!_ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_msg)}`,"_blank");}
     } else {
-      // PO sudah lunas — kirim WA konfirmasi pengambilan
       const _items2=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
       const _msg2=`🏪 *${settings?.bazaarName||"BazaarPOS"}*\n\n✅ *Pengambilan PO Dikonfirmasi*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n👤 Pelanggan: ${cust.name}\n---------------------------\n${_items2}\n---------------------------\n💰 *TOTAL: ${idr(order.subtotal)}*\n\nTerima kasih! 🙏\n${waSignature(adminData?.name||"Admin")}`;
       const _ok2=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:_msg2}):false;
       if(!_ok2){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_msg2)}`,"_blank");}
     }
-    await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",paymentStatus:"paid",verifiedAt:new Date().toISOString(),verifiedBy:adminData?.name||"Admin"}:o));
     closeVerify();
-    setSuccessMsg(`✅ PO ${order.nota} (${order.tenantName}) — ${order.paymentStatus==="unpaid"?"Dibayar & ":""}Selesai!`);
+    setSuccessMsg(`✅ PO ${order.nota} (${order.tenantName}) — ${isUnpaid?"Dibayar & ":""}Selesai & Tersimpan!`);
     setTimeout(()=>setSuccessMsg(""),4000);
   };
 
@@ -2777,24 +2823,47 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                         {isHabis&&<p style={{margin:"2px 0 0",fontSize:11,color:"#dc2626",fontWeight:700}}>❌ Kuota habis</p>}
                       </button>
                       {/* Kontrol kuota — hanya Manager PO & SuperAdmin */}
-                      {canEditQuota&&(
-                      <div style={{borderTop:"1px dashed #e5e7eb",marginTop:8,paddingTop:6}}>
-                        <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",userSelect:"none"}}>
-                          <input type="checkbox" checked={!!m.poLimit}
-                            onChange={()=>onSaveMenus(menus.map(x=>x.id===m.id?{...x,poLimit:x.poLimit?null:100}:x))}
-                            style={{width:14,height:14,cursor:"pointer",accentColor:"#ea580c"}}/>
-                          <span style={{fontSize:11,color:"#6b7280",fontWeight:600}}>Batas Kuota</span>
-                        </label>
-                        {m.poLimit&&(
-                          <div style={{display:"flex",alignItems:"center",gap:6,marginTop:5}}>
-                            <input type="number" defaultValue={m.poLimit} min="1"
-                              onBlur={e=>{const n=parseInt(e.target.value)||1;onSaveMenus(menus.map(x=>x.id===m.id?{...x,poLimit:n}:x));}}
-                              style={{width:55,border:"2px solid #fed7aa",borderRadius:7,padding:"3px 6px",fontSize:13,fontWeight:700,color:"#ea580c",outline:"none",textAlign:"center"}}/>
-                            <span style={{fontSize:11,color:"#9ca3af"}}>maks</span>
-                          </div>
-                        )}
-                      </div>
-                      )}
+                      {canEditQuota&&(()=>{
+                        const usedQty=getPOUsed(m.id,orders);
+                        const hasUsage=usedQty>0;
+                        return(
+                        <div style={{borderTop:"1px dashed #e5e7eb",marginTop:8,paddingTop:6}}>
+                          <label style={{display:"flex",alignItems:"center",gap:6,cursor:hasUsage?"not-allowed":"pointer",userSelect:"none"}}
+                            title={hasUsage?`Sudah ada ${usedQty} PO untuk menu ini — tidak bisa nonaktifkan kuota`:""}>
+                            <input type="checkbox" checked={!!m.poLimit} disabled={hasUsage}
+                              onChange={()=>{
+                                if(hasUsage)return;
+                                const newLimit=m.poLimit?null:Math.max(100,usedQty+10);
+                                onSaveMenus(menus.map(x=>x.id===m.id?{...x,poLimit:newLimit}:x));
+                              }}
+                              style={{width:14,height:14,cursor:hasUsage?"not-allowed":"pointer",accentColor:"#ea580c",opacity:hasUsage?0.5:1}}/>
+                            <span style={{fontSize:11,color:hasUsage?"#9ca3af":"#6b7280",fontWeight:600}}>Batas Kuota</span>
+                          </label>
+                          {hasUsage&&!m.poLimit&&<p style={{margin:"3px 0 0",fontSize:10,color:"#f97316"}}>🔒 Sudah ada {usedQty} PO</p>}
+                          {m.poLimit&&(
+                            <div style={{display:"flex",alignItems:"center",gap:6,marginTop:5}}>
+                              <input type="number" key={m.poLimit} defaultValue={m.poLimit} min="1"
+                                onBlur={e=>{
+                                  const n=parseInt(e.target.value)||0;
+                                  if(n===m.poLimit)return; // tidak berubah
+                                  if(n<=usedQty){
+                                    alert(`❌ Kuota yang diinput tidak bisa lebih sedikit dari batas sebelumnya!\nPO sudah terpesan: ${usedQty}\nMinimal kuota: ${usedQty+1}`);
+                                    e.target.value=m.poLimit;
+                                    return;
+                                  }
+                                  if(window.confirm(`Anda yakin mengubah jumlah kuota PO dari ${m.poLimit} menjadi ${n}?`)){
+                                    onSaveMenus(menus.map(x=>x.id===m.id?{...x,poLimit:n}:x));
+                                  } else {
+                                    e.target.value=m.poLimit;
+                                  }
+                                }}
+                                style={{width:55,border:"2px solid #fed7aa",borderRadius:7,padding:"3px 6px",fontSize:13,fontWeight:700,color:"#ea580c",outline:"none",textAlign:"center"}}/>
+                              <span style={{fontSize:11,color:"#9ca3af"}}>maks</span>
+                            </div>
+                          )}
+                        </div>
+                        );
+                      })()}
                     </div>
                   );})}
                 </div>;
@@ -3146,28 +3215,39 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,settings
     if(!cust||cust.id!==order.customerId){setVerifyError("❌ QR tidak cocok dengan pelanggan PO ini!");return;}
     if(cust.pin&&verifyPin!==cust.pin){setVerifyPinError("❌ PIN salah! Coba lagi.");setVerifyPin("");return;}
 
-    // Jika Belum Lunas — potong saldo
-    if(order.paymentStatus==="unpaid"){
+    const isUnpaid=order.paymentStatus==="unpaid";
+    let balAfter=null;
+    if(isUnpaid){
       if(cust.balance<order.subtotal){setVerifyError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(order.subtotal)}`);return;}
-      const balBefore=cust.balance; const balAfter=balBefore-order.subtotal;
-      if(typeof onSaveCustomers==="function"){
+      balAfter=cust.balance-order.subtotal;
+    }
+
+    // ── Simpan SEMUA perubahan ke database DULU. Jika gagal, STOP total ──
+    try{
+      if(isUnpaid&&typeof onSaveCustomers==="function"){
         await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
       }
-      // Kirim WA notif bayar + ambil
+      await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",paymentStatus:"paid",verifiedAt:new Date().toISOString(),verifiedBy:tenant.name}:o));
+    }catch(e){
+      console.error("Verifikasi PO gagal simpan:",e);
+      setVerifyError(`❌ GAGAL MENYIMPAN! Verifikasi PO TIDAK tercatat. Cek koneksi, lalu coba lagi. (${e.message})`);
+      return; // STOP — jangan kirim WA, jangan tutup modal
+    }
+
+    // ── Database sudah confirmed tersimpan, baru kirim WA ──
+    if(isUnpaid){
       const _itemsTxt=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
       const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n✅ Pembayaran & Pengambilan PO\nNota: ${order.nota}\nTenant: ${order.tenantName}\n---------------------------\n${_itemsTxt}\n---------------------------\nDibayar: ${idr(order.subtotal)}\nSisa Saldo: ${idr(balAfter)}\n\nTerima kasih!\n${waSignature(tenant.name)}`;
       const _ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg}):false;
       if(!_ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
     } else {
-      // PO sudah lunas — kirim WA konfirmasi pengambilan saja
       const _itemsTxt2=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
       const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n✅ Pengambilan PO Dikonfirmasi\nNota: ${order.nota}\nTenant: ${order.tenantName}\n---------------------------\n${_itemsTxt2}\n---------------------------\nTotal: ${idr(order.subtotal)}\n\nTerima kasih!\n${waSignature(tenant.name)}`;
       const _ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg}):false;
       if(!_ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
     }
-    await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",paymentStatus:"paid",verifiedAt:new Date().toISOString(),verifiedBy:tenant.name}:o));
     closeScanner();
-    setSuccessMsg(`✅ PO ${order.nota} — ${order.paymentStatus==="unpaid"?"Dibayar & ":""}Selesai!`);
+    setSuccessMsg(`✅ PO ${order.nota} — ${isUnpaid?"Dibayar & ":""}Selesai & Tersimpan!`);
     setTimeout(()=>setSuccessMsg(""),4000);
   };
 
@@ -3829,6 +3909,7 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
   const [pinInput,setPinInput]=useState(""); // PIN yang diinput pelanggan
   const [pinError,setPinError]=useState("");
   const [scannedCust,setScannedCust]=useState(null); // customer hasil scan, menunggu PIN
+  const [checkoutLoading,setCheckoutLoading]=useState(false);
   const videoRef=useRef(null);
   const scanIntervalRef=useRef(null);
 
@@ -3909,33 +3990,40 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
       walletCustomerId:walletCust?.id||null, walletCustomerPhone:walletCust?.phone||null,
       walletCustomerName:walletCust?.name||null, date:todayStr(),time:timeStr()};
 
-    if(isOnline) await onSaveTx([...allTransactions,tx]);
-    else offQ.add(tx);
+    setCheckoutLoading(true);
+    try{
+      // ── Simpan transaksi DULU. Jika gagal, STOP total — jangan lanjut apapun ──
+      if(isOnline) await onSaveTx([...allTransactions,tx]);
+      else offQ.add(tx);
 
-    // Potong saldo jika bayar wallet
-    if(paymentMethod==="wallet"&&walletCust){
-      const balBefore=walletCust.balance;
-      const balAfter=balBefore-total;
-      const updCust={...walletCust,balance:balAfter};
-      const newCusts=customers.map(c=>c.id===walletCust.id?updCust:c);
-      const logEntry={
-        id:uid(),customerId:walletCust.id,customerPhone:walletCust.phone,customerName:walletCust.name,
-        type:"payment",amount:total,balanceBefore:balBefore,balanceAfter:balAfter,
-        tenantId:tenant.id,tenantName:tenant.name,nota,
-        items:cart.map(it=>({menuCode:it.menuCode,menuName:it.menuName,qty:it.qty,price:it.price})),
-        timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
-      };
-      await onSaveCustomers(newCusts);
-      await onSaveWalletLogs([logEntry,...walletLogs]);
-
-      // Kirim WA notifikasi saldo
-      if(settings.fonnteToken){
+      // Potong saldo jika bayar wallet
+      if(paymentMethod==="wallet"&&walletCust){
+        const balBefore=walletCust.balance;
+        const balAfter=balBefore-total;
+        const updCust={...walletCust,balance:balAfter};
+        const newCusts=customers.map(c=>c.id===walletCust.id?updCust:c);
+        const logEntry={
+          id:uid(),customerId:walletCust.id,customerPhone:walletCust.phone,customerName:walletCust.name,
+          type:"payment",amount:total,balanceBefore:balBefore,balanceAfter:balAfter,
+          tenantId:tenant.id,tenantName:tenant.name,nota,
+          items:cart.map(it=>({menuCode:it.menuCode,menuName:it.menuName,qty:it.qty,price:it.price})),
+          timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
+        };
+        // Wajib berhasil — kalau gagal, saldo TIDAK terpotong tapi transaksi sudah tercatat.
+        // Ini kondisi kritis: beri tahu kasir untuk cek manual.
+        await onSaveCustomers(newCusts);
+        await onSaveWalletLogs([logEntry,...walletLogs]);
+        tx.walletBalanceAfter=balAfter;
       }
-      // Simpan info customer ke tx untuk ditampilkan di struk
-      tx.walletBalanceAfter=balAfter;
-    }
 
-    setLastNota(tx);setPrinted(false);setCart([]);
+      setLastNota(tx);setPrinted(false);setCart([]);
+      setCheckoutLoading(false);
+    }catch(e){
+      console.error("Checkout gagal simpan:",e);
+      setCheckoutLoading(false);
+      alert(`❌ GAGAL MENYIMPAN TRANSAKSI!\n\nTransaksi TIDAK tercatat dengan benar. JANGAN beri tahu pelanggan transaksi berhasil.\nCek koneksi internet, lalu coba lagi.\n\nDetail: ${e.message}`);
+      // Jangan kosongkan cart — biarkan kasir retry
+    }
   };
 
   const [sendStatus,setSendStatus]=useState("");
@@ -4202,17 +4290,23 @@ function TenantMenuMgr({tenant,menus,allMenus,allTransactions,orders,onSaveMenus
     if(usedIds.has(m.id)){alert("❌ Menu yang sudah dipakai dalam transaksi tidak bisa diedit!");return;}
     setForm({code:m.code,name:m.name,price:m.price.toString()});setEditing(m.id);setShowForm(true);
   };
-  const save=()=>{
+  const save=async()=>{
     if(!form.code||!form.name||!form.price){alert("Semua field harus diisi!");return;}
     const price=parseInt(form.price);if(isNaN(price)||price<=0){alert("Harga tidak valid!");return;}
     if(!editing&&menus.find(m=>m.code===form.code)){alert("Kode menu sudah ada!");return;}
     const p={code:form.code,name:form.name,price};
-    onSaveMenus(editing?allMenus.map(m=>m.id===editing?{...m,...p}:m):[...allMenus,{id:uid(),tenantId:tenant.id,...p}]);
-    setShowForm(false);
+    try{
+      await onSaveMenus(editing?allMenus.map(m=>m.id===editing?{...m,...p}:m):[...allMenus,{id:uid(),tenantId:tenant.id,...p}]);
+      setShowForm(false);
+    }catch(e){
+      alert(`❌ GAGAL MENYIMPAN! Menu tidak tersimpan. Cek koneksi, lalu coba lagi.\n(${e.message})`);
+    }
   };
-  const del=m=>{
+  const del=async m=>{
     if(usedIds.has(m.id)){alert("❌ Menu tidak bisa dihapus karena sudah digunakan dalam transaksi!");return;}
-    if(window.confirm("Hapus menu ini?")) onSaveMenus(allMenus.filter(x=>x.id!==m.id));
+    if(!window.confirm("Hapus menu ini?"))return;
+    try{ await onSaveMenus(allMenus.filter(x=>x.id!==m.id)); }
+    catch(e){ alert("❌ GAGAL HAPUS! "+e.message); }
   };
   return(
     <div>

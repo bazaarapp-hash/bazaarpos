@@ -11,7 +11,6 @@ const firebaseConfig = {
   appId: "1:253411988957:web:3cea911f6112df072cd234"
 };
 
-
 const app = initializeApp(firebaseConfig);
 const firestore = getFirestore(app);
 
@@ -28,14 +27,28 @@ export const db = {
   },
 
   async set(key, value) {
-    try {
-      await setDoc(doc(firestore, "bazaarpos", key), {
-        value: JSON.stringify(value),
-        updatedAt: new Date().toISOString(),
-      });
-    } catch (e) {
-      console.error("Firebase set error:", e);
+    const payload = JSON.stringify(value);
+    // Peringatan dini jika dokumen mendekati limit 1MB Firestore
+    if (payload.length > 900000) {
+      console.warn(`⚠️ Dokumen "${key}" sudah ${(payload.length/1024).toFixed(0)}KB — mendekati limit 1MB Firestore!`);
     }
+    // Retry sampai 3x jika gagal (mengatasi koneksi tidak stabil di lokasi event)
+    let lastErr = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await setDoc(doc(firestore, "bazaarpos", key), {
+          value: payload,
+          updatedAt: new Date().toISOString(),
+        });
+        return true; // sukses
+      } catch (e) {
+        lastErr = e;
+        console.error(`Firebase set error (percobaan ${attempt}/3):`, e);
+        if (attempt < 3) await new Promise(r => setTimeout(r, 800 * attempt));
+      }
+    }
+    // Gagal setelah 3x percobaan — lempar error agar caller TAHU dan TIDAK lanjut
+    throw new Error(`Gagal menyimpan data "${key}" ke database setelah 3x percobaan: ${lastErr?.message || lastErr}`);
   },
 
   subscribe(key, callback) {
