@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────67
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────76
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -84,12 +85,15 @@ function getLocalBackups() {
   }).filter(Boolean);
 }
 
-// ─── Offline Queue ────────────────────────────────────────────────────────────
-const offQ = {
-  add(tx){ const q=JSON.parse(localStorage.getItem("bzr_offq")||"[]"); q.push(tx); localStorage.setItem("bzr_offq",JSON.stringify(q)); },
-  get(){ return JSON.parse(localStorage.getItem("bzr_offq")||"[]"); },
-  clear(){ localStorage.removeItem("bzr_offq"); },
-};
+// ─── CATATAN: Sistem antrian offline (offQ) DIHAPUS ───────────────────────────
+// Sebelumnya ada mekanisme "simpan transaksi di localStorage saat offline, sync
+// otomatis saat online". Ini TERBUKTI BERBAHAYA: hanya catatan transaksi yang
+// diantrekan, sementara potongan saldo TIDAK ikut diantrekan — kalau device gagal
+// sync, transaksi hilang permanen dan saldo tidak pernah ter-update.
+// Diganti dengan: cek koneksi ke server SEBELUM transaksi dimulai (db.ping()).
+// Kalau server tidak terjangkau, transaksi DITOLAK LANGSUNG dengan pesan jelas,
+// dan keranjang/data orderan TETAP UTUH supaya kasir tinggal coba lagi tanpa
+// input ulang.
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 const DEF = {
@@ -105,9 +109,61 @@ const PAY = {
   cash:  {label:"🪙 Saldo",color:"#4c1d95",bg:"#f5f0ff",border:"#c4b5fd"},
   wallet:{label:"🪙 Saldo",color:"#4c1d95",bg:"#f5f0ff",border:"#c4b5fd"},
 };
+// ─── WA Fallback Card — tombol kirim manual saat auto-kirim WA gagal ──────────
+// PENTING: window.open() yang dipanggil OTOMATIS setelah `await` (jeda async)
+// sering DIBLOKIR popup-blocker browser mobile — perilakunya TIDAK konsisten
+// (kadang lolos, kadang diblokir), persis seperti laporan "WA kadang terkirim
+// kadang tidak". Solusinya: JANGAN window.open() otomatis, tampilkan tombol
+// yang harus diklik LANGSUNG oleh kasir (user-gesture asli) — ini SELALU lolos
+// popup-blocker karena trigger-nya klik langsung, bukan dari kode async.
+function WaFallbackCard({pending,onDismiss}){
+  if(!pending)return null;
+  return(
+    <div style={{marginTop:10,background:"#fef3c7",border:"2px solid #fbbf24",borderRadius:12,padding:14}}>
+      <p style={{margin:"0 0 8px",fontSize:13,fontWeight:700,color:"#92400e"}}>⚠️ {pending.name?`Data ${pending.name} `:""}Sudah tersimpan, tapi WA otomatis gagal terkirim (jaringan kurang baik).</p>
+      <button onClick={()=>{
+          const waPhone=(pending.phone||"").replace(/\D/g,"");
+          const target=waPhone.startsWith("0")?"62"+waPhone.slice(1):(waPhone.startsWith("62")?waPhone:"62"+waPhone);
+          window.open(`https://wa.me/${target}?text=${encodeURIComponent(pending.message)}`,"_blank");
+          onDismiss();
+        }}
+        style={{width:"100%",padding:"11px",background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+        💬 Kirim WA Manual Sekarang
+      </button>
+    </div>
+  );
+}
+
 function PayBadge({method}){
   const p=PAY[method]||PAY.cash;
   return <span style={{background:p.bg,color:p.color,border:`1px solid ${p.border}`,fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20}}>{p.label}</span>;
+}
+
+// ─── Network Badge — lampu status koneksi ke server di header ────────────────
+// Cek konektivitas berkala (bukan cuma navigator.onLine yang kadang tidak akurat —
+// device bisa "online" ke WiFi tapi WiFi-nya sendiri tidak benar-benar tersambung
+// internet/Firestore). Hijau = server terjangkau, Merah = bermasalah.
+function NetworkBadge({onCheckConnection}){
+  const [status,setStatus]=useState("checking"); // "good" | "bad" | "checking"
+  useEffect(()=>{
+    let cancelled=false;
+    const check=async()=>{
+      if(!onCheckConnection)return;
+      const ok=await onCheckConnection();
+      if(!cancelled) setStatus(ok?"good":"bad");
+    };
+    check();
+    const interval=setInterval(check,20000); // cek ulang tiap 20 detik
+    return()=>{cancelled=true;clearInterval(interval);};
+  },[onCheckConnection]);
+  const color=status==="good"?"#22c55e":status==="bad"?"#ef4444":"#9ca3af";
+  const label=status==="good"?"Jaringan Baik":status==="bad"?"Jaringan Buruk":"Mengecek...";
+  return(
+    <div title={label} style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",borderRadius:20,padding:"5px 10px"}}>
+      <span style={{width:9,height:9,borderRadius:"50%",background:color,boxShadow:status==="good"?"0 0 6px #22c55e":status==="bad"?"0 0 6px #ef4444":"none",flexShrink:0}}/>
+      <span style={{color:"#fff",fontSize:11,fontWeight:600,whiteSpace:"nowrap"}}>{label}</span>
+    </div>
+  );
 }
 
 // ─── Excel Export ─────────────────────────────────────────────────────────────
@@ -476,7 +532,8 @@ async function connectBTPrinter(){
 // ═════════════════════════════════════════════════════════════════════════════
 // MAIN APP
 // ═════════════════════════════════════════════════════════════════════════════
-export default function App(){
+// ─── MainApp: aplikasi utama (superadmin/admin/tenant) dengan realtime subscriptions ──
+function MainApp(){
   const [screen,setScreen]=useState("login");
   const [session,setSession]=useState(null);
   const [tenants,setTenants]=useState([]);
@@ -490,6 +547,43 @@ export default function App(){
   const [orders,setOrders]=useState([]);
   const [loaded,setLoaded]=useState(false);
   const bkRef=useRef(null);
+
+  // ── Session persistence: hindari ter-logout saat refresh tidak sengaja ──────
+  // Pakai sessionStorage (bukan localStorage) supaya tetap aman: sesi hilang
+  // otomatis kalau tab/browser benar-benar ditutup, tapi BERTAHAN saat refresh.
+  const SESSION_KEY="bzr_session";
+  const saveSessionToStorage=(type,data)=>{
+    try{
+      const ref=type==="superadmin"?{type,username:data.username}:{type,id:data.id};
+      sessionStorage.setItem(SESSION_KEY,JSON.stringify(ref));
+    }catch(e){ console.error("Gagal simpan sesi:",e); }
+  };
+  const clearSessionStorage=()=>{ try{ sessionStorage.removeItem(SESSION_KEY); }catch(e){} };
+
+  // Pulihkan sesi setelah data fresh dari server selesai dimuat (supaya validasi
+  // admin/tenant pakai data TERBARU, bukan data lama yang mungkin sudah berubah/dihapus)
+  const sessionRestoredRef=useRef(false);
+  useLayoutEffect(()=>{
+    if(!loaded||sessionRestoredRef.current)return;
+    sessionRestoredRef.current=true;
+    try{
+      const raw=sessionStorage.getItem(SESSION_KEY);
+      if(!raw)return;
+      const ref=JSON.parse(raw);
+      if(ref.type==="superadmin"){
+        if(ref.username===settings.saUser){ setSession({type:"superadmin",data:{username:ref.username}}); setScreen("superadmin"); }
+        else clearSessionStorage(); // username SuperAdmin sudah diubah — minta login ulang
+      } else if(ref.type==="admin"){
+        const a=admins.find(x=>x.id===ref.id);
+        if(a){ setSession({type:"admin",data:a}); setScreen("admin"); }
+        else clearSessionStorage(); // admin sudah dihapus
+      } else if(ref.type==="tenant"){
+        const t=tenants.find(x=>x.id===ref.id);
+        if(t){ setSession({type:"tenant",data:t}); setScreen("tenant"); }
+        else clearSessionStorage(); // tenant sudah dihapus
+      }
+    }catch(e){ console.error("Gagal pulihkan sesi:",e); clearSessionStorage(); }
+  },[loaded]);
 
   useEffect(()=>{
     // Real-time subscriptions — semua panel update otomatis saat ada perubahan
@@ -517,26 +611,55 @@ export default function App(){
   },[settings.autoBackup,settings.backupInterval,tenants,menus,transactions,admins]);
 
 
+  // ── Migrasi satu kali: pulihkan data offline LAMA (dari versi sebelum perbaikan ini) ──
+  // Sistem antrian offline lama sudah dihapus, tapi kalau ada device yang masih
+  // menyimpan data tertunda di localStorage dari versi lama, coba selamatkan sekali.
   useEffect(()=>{
-    const sync=async()=>{
-      const q=offQ.get(); if(!q.length)return;
-      const fresh=await db.get("bzr_transactions")||[];
-      const merged=[...fresh,...q.filter(qt=>!fresh.find(t=>t.id===qt.id))];
-      await db.set("bzr_transactions",merged); setTransactions(merged); offQ.clear();
-    };
-    window.addEventListener("online",sync);
-    return()=>window.removeEventListener("online",sync);
+    (async()=>{
+      try{
+        const raw=localStorage.getItem("bzr_offq");
+        if(!raw)return;
+        const q=JSON.parse(raw);
+        if(!Array.isArray(q)||!q.length){localStorage.removeItem("bzr_offq");return;}
+        const fresh=await db.get("bzr_transactions")||[];
+        const merged=[...fresh,...q.filter(qt=>!fresh.find(t=>t.id===qt.id))];
+        await db.set("bzr_transactions",merged);
+        setTransactions(merged);
+        localStorage.removeItem("bzr_offq");
+        alert(`⚠️ Ditemukan ${q.length} transaksi lama yang belum tersinkron (dari versi aplikasi sebelumnya) dan sudah berhasil dipulihkan ke database.\n\nPENTING: Cek manual apakah saldo pelanggan terkait transaksi ini sudah benar, karena potongan saldo untuk transaksi lama ini mungkin TIDAK ikut tersimpan saat itu.`);
+      }catch(e){ console.error("Gagal pulihkan data offline lama:",e); }
+    })();
   },[]);
 
   const saveTenants=async d=>{setTenants(d);await db.set("bzr_tenants",d);};
-  const saveMenus=async d=>{setMenus(d);await db.set("bzr_menus",d);};
-  const saveTx=async d=>{setTransactions(d);await db.set("bzr_transactions",d);};
-  const saveSettings=async d=>{setSettings(d);await db.set("bzr_settings",d);};
-  const saveAdmins=async d=>{setAdmins(d);await db.set("bzr_admins",d);};
-  const saveAlerts=async d=>{setAlerts(d);await db.set("bzr_alerts",d);};
-  const saveCustomers=async d=>{setCustomers(d);await db.set("bzr_customers",d);};
-  const saveWalletLogs=async d=>{setWalletLogs(d);await db.set("bzr_wallet_logs",d);};
-  const saveOrders=async d=>{setOrders(d);await db.set("bzr_orders",d);};
+  const saveMenus=async d=>{await db.set("bzr_menus",d);setMenus(d);};
+  const saveTx=async d=>{await db.set("bzr_transactions",d);setTransactions(d);};
+  const saveSettings=async d=>{await db.set("bzr_settings",d);setSettings(d);};
+  const saveAdmins=async d=>{await db.set("bzr_admins",d);setAdmins(d);};
+  const saveAlerts=async d=>{await db.set("bzr_alerts",d);setAlerts(d);};
+  const saveCustomers=async d=>{await db.set("bzr_customers",d);setCustomers(d);};
+  const saveWalletLogs=async d=>{await db.set("bzr_wallet_logs",d);setWalletLogs(d);};
+  const saveOrders=async d=>{await db.set("bzr_orders",d);setOrders(d);};
+
+  // ── Update saldo pelanggan ATOMIK (anti race-condition) ──────────────────────
+  // Dipakai untuk: top up, bayar transaksi (potong saldo), refund, kosongkan saldo.
+  // Server Firestore yang menjamin baca-ubah-tulis terjadi tanpa celah antar device.
+  const updateCustomerBalance=async(customerId,deltaOrFn,buildLogEntry,extraCustFields={})=>{
+    const {customer:updatedCust,logEntry}=await db.updateCustomerBalance(customerId,deltaOrFn,buildLogEntry,extraCustFields);
+    // Sinkronkan state lokal supaya UI langsung update tanpa nunggu snapshot listener
+    setCustomers(prev=>prev.map(c=>c.id===customerId?updatedCust:c));
+    if(logEntry) setWalletLogs(prev=>[logEntry,...prev]);
+    return updatedCust;
+  };
+  // ── Tambah pelanggan baru ATOMIK (top up pelanggan baru) ─────────────────────
+  const addNewCustomerAtomic=async(newCustomer,buildLogEntry)=>{
+    await db.addNewCustomer(newCustomer,buildLogEntry);
+    setCustomers(prev=>[...prev,newCustomer]);
+  };
+  // ── Cek koneksi ke server SEBELUM transaksi apapun dimulai ──────────────────
+  // Kalau gagal terhubung, transaksi ditolak cepat (~4 detik) dengan pesan jelas,
+  // tanpa kehilangan data orderan/keranjang yang sudah diisi.
+  const checkConnection=async()=>db.ping();
   const [refreshing,setRefreshing]=useState(false);
   const doRefresh=async()=>{
     setRefreshing(true);
@@ -556,7 +679,7 @@ export default function App(){
     setTimeout(()=>setRefreshing(false),800);
   };
 
-  const logout=()=>{setSession(null);setScreen("login");};
+  const logout=()=>{setSession(null);setScreen("login");clearSessionStorage();};
 
   const restoreBackup=async(bk)=>{
     const newTenants     = Array.isArray(bk.tenants)     ? bk.tenants     : tenants;
@@ -583,6 +706,8 @@ export default function App(){
     onSaveTenants:saveTenants, onSaveMenus:saveMenus, onSaveTx:saveTx,
     onSaveSettings:saveSettings, onSaveAdmins:saveAdmins, onSaveAlerts:saveAlerts,
     onSaveCustomers:saveCustomers, onSaveWalletLogs:saveWalletLogs, onSaveOrders:saveOrders,
+    onUpdateCustomerBalance:updateCustomerBalance, onAddNewCustomer:addNewCustomerAtomic,
+    onCheckConnection:checkConnection,
     onRestoreBackup:restoreBackup, onRefresh:doRefresh, refreshing,
     onLogout:logout,
   };
@@ -592,11 +717,6 @@ export default function App(){
       <div style={{textAlign:"center"}}><div style={{fontSize:48,marginBottom:12}}>🏪</div>
         <p style={{color:"#ea580c",fontWeight:700,fontSize:18}}>Memuat BazaarPOS…</p></div>
     </div>);
-
-  // Deteksi URL ?card=PHONE untuk halaman kartu pelanggan publik
-  const urlParams=new URLSearchParams(window.location.search);
-  const cardPhone=urlParams.get("card");
-  if(cardPhone) return <CustomerCardPage phone={cardPhone} settings={settings} customers={customers} walletLogs={walletLogs} transactions={transactions} loaded={loaded}/>;
 
   if(screen==="superadmin") return <SuperAdminDashboard {...commonProps}/>;
   if(screen==="admin") return <AdminDashboard {...commonProps} adminData={session?.data}/>;
@@ -608,13 +728,26 @@ export default function App(){
       customers={customers} walletLogs={walletLogs} orders={orders}
       onSaveMenus={saveMenus} onSaveTx={saveTx}
       onSaveCustomers={saveCustomers} onSaveWalletLogs={saveWalletLogs} onSaveOrders={saveOrders}
+      onUpdateCustomerBalance={updateCustomerBalance}
+      onCheckConnection={checkConnection}
       onSaveAlerts={saveAlerts} alerts={alerts}
       onRefresh={doRefresh} refreshing={refreshing}
       onLogout={logout}/>);
 
   return <LoginScreen tenants={tenants} admins={admins} settings={settings}
-    onLogin={(type,data)=>{setSession({type,data});setScreen(type);}}/>;
+    onLogin={(type,data)=>{setSession({type,data});setScreen(type);saveSessionToStorage(type,data);}}/>;
 }
+
+// ─── App: titik masuk utama — cek dulu apakah ini link kartu pelanggan publik ──
+// Kalau ya, JANGAN mount MainApp (yang subscribe realtime ke 9 koleksi sekaligus)
+// — cukup load halaman kartu yang ringan, sekali fetch saat dibuka/refresh saja.
+export default function App(){
+  const urlParams=new URLSearchParams(window.location.search);
+  const cardParam=urlParams.get("card");
+  if(cardParam) return <CustomerCardPageLoader phone={cardParam}/>;
+  return <MainApp/>;
+}
+
 
 // ═════════════════════════════════════════════════════════════════════════════
 // LOGIN
@@ -797,7 +930,7 @@ function AlertPopup({alerts,onDismiss}){
 // SUPER ADMIN DASHBOARD
 // ═════════════════════════════════════════════════════════════════════════════
 function SuperAdminDashboard(props){
-  const {tenants,transactions,settings,alerts,allAlerts,onSaveAlerts,onSaveSettings,onRefresh,refreshing,onLogout}=props;
+  const {tenants,transactions,settings,alerts,allAlerts,onSaveAlerts,onSaveSettings,onRefresh,refreshing,onLogout,onCheckConnection}=props;
   const [tab,setTab]=useState("tenants");
   const [filterDate,setFilterDate]=useState(todayStr());
   const [editBazaar,setEditBazaar]=useState(false);
@@ -814,7 +947,10 @@ function SuperAdminDashboard(props){
     {k:"backup",i:"💾",l:"Backup"},{k:"reset",i:"🗑️",l:"Reset Data"},
   ];
 
-  const saveBazaar=()=>{onSaveSettings({...settings,bazaarName:bazaarInput});setEditBazaar(false);};
+  const saveBazaar=async()=>{
+    try{ await onSaveSettings({...settings,bazaarName:bazaarInput}); setEditBazaar(false); }
+    catch(e){ alert("❌ GAGAL MENYIMPAN! "+e.message); }
+  };
   const dismissAlerts=async()=>{await onSaveAlerts(allAlerts.map(a=>({...a,read:true})));setShowAlertPop(false);};
 
   return(
@@ -842,6 +978,7 @@ function SuperAdminDashboard(props){
             </div>
           )}
           {alerts.length>0&&<button onClick={()=>setShowAlertPop(true)} className="pulse" style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontWeight:700,fontSize:13}}>🆘 {alerts.length}</button>}
+          <NetworkBadge onCheckConnection={onCheckConnection}/>
           <button onClick={onRefresh} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}} title="Refresh" className={refreshing?"spinning":""}>🔄</button>
           <button onClick={()=>{if(window.confirm("Yakin ingin keluar dari aplikasi?"))onLogout();}} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}}>Keluar</button>
         </div>
@@ -877,7 +1014,7 @@ function SuperAdminDashboard(props){
 // ADMIN BIASA DASHBOARD
 // ═════════════════════════════════════════════════════════════════════════════
 function AdminDashboard(props){
-  const {tenants,transactions,settings,alerts,allAlerts,onSaveAlerts,adminData,onRefresh,refreshing,onLogout}=props;
+  const {tenants,transactions,settings,alerts,allAlerts,onSaveAlerts,adminData,onRefresh,refreshing,onLogout,onCheckConnection}=props;
   const [tab,setTab]=useState("tenants");
   const [filterDate,setFilterDate]=useState(todayStr());
   const {BackConfirmModal}=useBackConfirm(true);
@@ -904,6 +1041,7 @@ function AdminDashboard(props){
         <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
           <span style={{color:"#fff",fontSize:16,fontWeight:800}}>{settings.bazaarName}</span>
           {alerts.length>0&&<button onClick={()=>setShowAlertPop(true)} className="pulse" style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontWeight:700,fontSize:13}}>🆘 {alerts.length}</button>}
+          <NetworkBadge onCheckConnection={onCheckConnection}/>
           <button onClick={onRefresh} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}} title="Refresh" className={refreshing?"spinning":""}>🔄</button>
           <button onClick={()=>{if(window.confirm("Yakin ingin keluar dari aplikasi?"))onLogout();}} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}}>Keluar</button>
         </div>
@@ -940,11 +1078,15 @@ function AdminUsers({admins,onSaveAdmins}){
   const [form,setForm]=useState({username:"",password:"",name:"",isPOManager:false});
   const openAdd=()=>{setForm({username:"",password:"",name:"",isPOManager:false});setEditing(null);setShowForm(true);};
   const openEdit=a=>{setForm({username:a.username,password:a.password,name:a.name,isPOManager:!!a.isPOManager});setEditing(a.id);setShowForm(true);};
-  const save=()=>{
+  const save=async()=>{
     if(!form.username||!form.password||!form.name){alert("Semua field harus diisi!");return;}
     if(!editing&&admins.find(a=>a.username===form.username)){alert("Username sudah ada!");return;}
-    onSaveAdmins(editing?admins.map(a=>a.id===editing?{...a,...form}:a):[...admins,{id:uid(),...form}]);
-    setShowForm(false);
+    try{
+      await onSaveAdmins(editing?admins.map(a=>a.id===editing?{...a,...form}:a):[...admins,{id:uid(),...form}]);
+      setShowForm(false);
+    }catch(e){
+      alert(`❌ GAGAL MENYIMPAN! Data admin tidak tersimpan. Cek koneksi, lalu coba lagi.\n(${e.message})`);
+    }
   };
   return(
     <div>
@@ -992,7 +1134,7 @@ function AdminUsers({admins,onSaveAdmins}){
               )}
               <div style={{display:"flex",gap:8}}>
                 <button onClick={()=>openEdit(a)} style={{flex:1,padding:"8px",background:"#eff6ff",color:"#2563eb",border:"none",borderRadius:10,cursor:"pointer",fontWeight:600,fontSize:13}}>✏️ Edit</button>
-                <button onClick={()=>{if(window.confirm("Hapus admin ini?"))onSaveAdmins(admins.filter(x=>x.id!==a.id));}} style={{flex:1,padding:"8px",background:"#fef2f2",color:"#dc2626",border:"none",borderRadius:10,cursor:"pointer",fontWeight:600,fontSize:13}}>🗑️ Hapus</button>
+                <button onClick={async()=>{if(window.confirm("Hapus admin ini?")){try{await onSaveAdmins(admins.filter(x=>x.id!==a.id));}catch(e){alert("❌ GAGAL HAPUS! "+e.message);}}}} style={{flex:1,padding:"8px",background:"#fef2f2",color:"#dc2626",border:"none",borderRadius:10,cursor:"pointer",fontWeight:600,fontSize:13}}>🗑️ Hapus</button>
               </div>
             </div>
           ))}
@@ -1010,15 +1152,21 @@ function AdminTenants({tenants,transactions,menus,onSaveTenants}){
 
   const openAdd=()=>{setForm({code:"",name:"",password:""});setEditing(null);setShowForm(true);};
   const openEdit=t=>{setForm({code:t.code,name:t.name,password:t.password});setEditing(t.id);setShowForm(true);};
-  const save=()=>{
+  const save=async()=>{
     if(!form.code||!form.name||!form.password){alert("Semua field harus diisi!");return;}
     if(!editing&&tenants.find(t=>t.code===form.code)){alert("Kode tenant sudah ada!");return;}
-    onSaveTenants(editing?tenants.map(t=>t.id===editing?{...t,...form}:t):[...tenants,{id:uid(),...form}]);
-    setShowForm(false);
+    try{
+      await onSaveTenants(editing?tenants.map(t=>t.id===editing?{...t,...form}:t):[...tenants,{id:uid(),...form}]);
+      setShowForm(false);
+    }catch(e){
+      alert(`❌ GAGAL MENYIMPAN! Data tenant tidak tersimpan. Cek koneksi, lalu coba lagi.\n(${e.message})`);
+    }
   };
-  const del=id=>{
+  const del=async id=>{
     if(transactions.some(t=>t.tenantId===id)){alert("❌ Tenant tidak bisa dihapus karena sudah memiliki data transaksi!");return;}
-    if(window.confirm("Hapus tenant ini?")) onSaveTenants(tenants.filter(t=>t.id!==id));
+    if(!window.confirm("Hapus tenant ini?"))return;
+    try{ await onSaveTenants(tenants.filter(t=>t.id!==id)); }
+    catch(e){ alert("❌ GAGAL HAPUS! "+e.message); }
   };
 
   return(
@@ -1275,7 +1423,7 @@ function BackupPanel({tenants,menus,transactions,settings,admins,onSaveSettings,
             <p style={{margin:0,fontWeight:600,color:"#374151"}}>Auto Backup ke Browser</p>
             <p style={{margin:"2px 0 0",color:"#9ca3af",fontSize:12}}>Simpan otomatis ke localStorage browser</p>
           </div>
-          <button onClick={()=>onSaveSettings({...settings,autoBackup:!settings.autoBackup})}
+          <button onClick={async()=>{try{await onSaveSettings({...settings,autoBackup:!settings.autoBackup});}catch(e){alert("❌ Gagal simpan: "+e.message);}}}
             style={{padding:"8px 18px",background:settings.autoBackup?"#16a34a":"#f3f4f6",color:settings.autoBackup?"#fff":"#6b7280",border:"none",borderRadius:20,fontWeight:700,cursor:"pointer",fontSize:13,transition:"all .2s"}}>
             {settings.autoBackup?"🟢 Aktif":"⚫ Nonaktif"}
           </button>
@@ -1283,7 +1431,7 @@ function BackupPanel({tenants,menus,transactions,settings,admins,onSaveSettings,
         {settings.autoBackup&&(
           <div style={{display:"flex",alignItems:"center",gap:12}}>
             <label style={{fontSize:13,color:"#374151",fontWeight:600}}>Interval</label>
-            <select value={settings.backupInterval||30} onChange={e=>onSaveSettings({...settings,backupInterval:parseInt(e.target.value)})}
+            <select value={settings.backupInterval||30} onChange={async e=>{try{await onSaveSettings({...settings,backupInterval:parseInt(e.target.value)});}catch(err){alert("❌ Gagal simpan: "+err.message);}}}
               style={{border:"2px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:14,color:"#111",outline:"none",cursor:"pointer"}}>
               {[5,10,15,30,60].map(v=><option key={v} value={v}>{v} menit</option>)}
             </select>
@@ -1661,7 +1809,7 @@ function POQuotaBadge({menu, orders, size=12}){
 }
 
 // ─── WhatsApp Sender via Fonnte ───────────────────────────────────────────────
-async function sendWhatsApp({token, phone, message}){
+async function sendWhatsApp({token, phone, message, timeoutMs=8000}){
   if(!token||!phone||!message) return false;
   try{
     // Format nomor: 08xxx → 628xxx, hilangkan karakter non-digit
@@ -1675,11 +1823,22 @@ async function sendWhatsApp({token, phone, message}){
     form.append("message", message);
     form.append("countryCode", "62");
 
-    const res=await fetch("https://api.fonnte.com/send",{
-      method:"POST",
-      headers:{"Authorization":token},
-      body:form,
-    });
+    // Timeout eksplisit — fetch() browser TIDAK punya batas waktu bawaan, jadi kalau
+    // jaringan "kurang baik" (bukan benar-benar mati), request bisa menggantung lama
+    // tanpa pernah resolve/reject, membuat proses kirim WA terasa macet.
+    const controller=new AbortController();
+    const timeoutId=setTimeout(()=>controller.abort(),timeoutMs);
+    let res;
+    try{
+      res=await fetch("https://api.fonnte.com/send",{
+        method:"POST",
+        headers:{"Authorization":token},
+        body:form,
+        signal:controller.signal,
+      });
+    }finally{
+      clearTimeout(timeoutId);
+    }
     const d=await res.json();
     console.log("Fonnte response:", d);
     return d.status===true||d.status==="true"||d.status==="200"||d.detail?.includes("success")||false;
@@ -1767,11 +1926,25 @@ function generateCustomerCard({customer, bazaarName}){
 }
 
 // ─── Kasir Top Up ─────────────────────────────────────────────────────────────
-function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustomers,onSaveWalletLogs,isSuperAdmin}){
+function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustomers,onSaveWalletLogs,onUpdateCustomerBalance,onAddNewCustomer,onCheckConnection,isSuperAdmin}){
   const [tab,setTab]=useState("customers");
   const [form,setForm]=useState({phone:"",name:"",amount:""});
   const [search,setSearch]=useState("");
   const [sending,setSending]=useState(false);
+  const submittingRef=useRef(false); // proteksi anti dobel-submit (klik ganda cepat)
+  const [pendingWaResend,setPendingWaResend]=useState(null); // {phone,message} — kalau auto-kirim WA gagal, tombol kirim manual
+
+  // ── Cegah refresh/tutup halaman SAAT top up sedang diproses ─────────────────
+  // Ini akar masalah utama dari bug "saldo masuk 2x": kasir refresh karena kira
+  // macet, padahal di server transaksi pertama SUDAH tersimpan, lalu top up
+  // diulang. Browser akan tampilkan dialog konfirmasi native kalau ini terjadi.
+  useEffect(()=>{
+    if(!sending)return;
+    const handler=e=>{e.preventDefault();e.returnValue="";return "";};
+    window.addEventListener("beforeunload",handler);
+    return()=>window.removeEventListener("beforeunload",handler);
+  },[sending]);
+
   const [msg,setMsg]=useState("");
   const [filterDate,setFilterDate]=useState(todayStr());
   const [showPinModal,setShowPinModal]=useState(null);
@@ -1785,26 +1958,41 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
   const showMsg=(m,dur=4000)=>{setMsg(m);setTimeout(()=>setMsg(""),dur);};
 
   // Hapus pelanggan (SuperAdmin only)
-  const deleteCustomer=(c)=>{
+  const deleteCustomer=async(c)=>{
     if(c.balance>0){showMsg(`❌ Saldo ${c.name} masih ${idr(c.balance)}. Kosongkan saldo dulu sebelum hapus.`);return;}
     if(!window.confirm(`Hapus pelanggan "${c.name}" (${c.phone})?\nTindakan ini permanen.`))return;
-    onSaveCustomers(customers.filter(x=>x.id!==c.id));
-    showMsg(`✅ Pelanggan ${c.name} berhasil dihapus.`);
+    const online=await onCheckConnection();
+    if(!online){showMsg("Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.",8000);return;}
+    try{
+      await onSaveCustomers(customers.filter(x=>x.id!==c.id));
+      showMsg(`✅ Pelanggan ${c.name} berhasil dihapus & TERSIMPAN.`);
+    }catch(e){
+      console.error("Hapus pelanggan gagal:",e);
+      showMsg(`❌ GAGAL MENYIMPAN! Pelanggan TIDAK terhapus. Cek koneksi, lalu coba lagi. (${e.message})`,8000);
+    }
   };
 
   // Kosongkan saldo (SuperAdmin only)
   const kosongkanSaldo=async(c)=>{
     if(c.balance===0){showMsg(`ℹ️ Saldo ${c.name} sudah 0.`);return;}
-    if(!window.confirm(`Kosongkan saldo ${c.name}?\nSaldo ${idr(c.balance)} akan diset ke Rp 0.\nTindakan ini tidak bisa dibatalkan.`))return;
-    const balBefore=c.balance;
-    await onSaveCustomers(customers.map(x=>x.id===c.id?{...x,balance:0}:x));
-    const logEntry={id:uid(),customerId:c.id,customerPhone:c.phone,customerName:c.name,
-      type:"adjustment",amount:balBefore,balanceBefore:balBefore,balanceAfter:0,
-      nota:"ADJUST-"+todayStr(),tenantId:"",tenantName:"",
-      adminName:adminData?.name||"Super Admin",
-      timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
-    await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
-    showMsg(`✅ Saldo ${c.name} berhasil dikosongkan (${idr(balBefore)} → Rp 0).`);
+    if(!window.confirm(`Kosongkan saldo ${c.name}?\nSaldo saat ini ${idr(c.balance)} akan diset ke Rp 0.\nTindakan ini tidak bisa dibatalkan.`))return;
+    const online=await onCheckConnection();
+    if(!online){showMsg("Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.",8000);return;}
+    try{
+      const result=await onUpdateCustomerBalance(
+        c.id,
+        ()=>0, // set absolut ke 0 (bukan delta) — selalu pakai saldo TERBARU di server
+        (balBefore,balAfter)=>({id:uid(),customerId:c.id,customerPhone:c.phone,customerName:c.name,
+          type:"adjustment",amount:balBefore,balanceBefore:balBefore,balanceAfter:0,
+          nota:"ADJUST-"+todayStr(),tenantId:"",tenantName:"",
+          adminName:adminData?.name||"Super Admin",
+          timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()})
+      );
+      showMsg(`✅ Saldo ${c.name} berhasil dikosongkan & TERSIMPAN (Rp 0).`);
+    }catch(e){
+      console.error("Kosongkan saldo gagal:",e);
+      showMsg(`❌ GAGAL MENYIMPAN! Saldo TIDAK dikosongkan. Cek koneksi, lalu coba lagi. (${e.message})`,8000);
+    }
   };
 
   // Scanner QR untuk cari pelanggan
@@ -1850,26 +2038,90 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
   };
 
   const handleTopUp=async()=>{
-    const result=findOrCreate(); if(!result)return;
+    if(submittingRef.current)return; // proteksi anti dobel-submit (klik ganda cepat)
+    if(!form.phone.trim()||!form.name.trim()){showMsg("❌ Nomor WA dan nama harus diisi!");return;}
     const amount=parseInt(form.amount);
     if(isNaN(amount)||amount<=0){showMsg("❌ Nominal top up tidak valid!");return;}
+    const phone=form.phone.trim().replace(/\D/g,"");
+
+    // ── Deteksi duplikat "lunak": cek apakah ada top up nominal+nomor SAMA dalam ──
+    // 90 detik terakhir. Ini jaring pengaman utama untuk kasus: kasir top up →
+    // jaringan lambat → kasir kira macet → refresh halaman (padahal di server SUDAH
+    // tersimpan) → form kosong lagi → top up diulang tanpa sadar sudah berhasil.
+    const recentDup=(walletLogs||[]).find(l=>{
+      if(l.type!=="topup"||l.customerPhone!==phone||l.amount!==amount)return false;
+      const ageMs=Date.now()-new Date(l.timestamp).getTime();
+      return ageMs>=0&&ageMs<90000; // dalam 90 detik terakhir
+    });
+    if(recentDup){
+      const ageSec=Math.round((Date.now()-new Date(recentDup.timestamp).getTime())/1000);
+      const proceed=window.confirm(
+        `⚠️ PERINGATAN DUPLIKAT!\n\nTop up dengan nominal ${idr(amount)} untuk nomor ${phone} BARU SAJA tercatat ${ageSec} detik lalu (oleh ${recentDup.adminName||"admin"}).\n\nIni KEMUNGKINAN top up yang sama (misal akibat refresh halaman sebelumnya). Saldo BISA SUDAH masuk.\n\nCek dulu saldo pelanggan sebelum lanjut!\n\nTekan OK HANYA JIKA Anda yakin ini memang top up BARU yang berbeda (bukan pengulangan).`
+      );
+      if(!proceed){
+        showMsg("⛔ Top up dibatalkan — terdeteksi kemungkinan duplikat. Cek saldo pelanggan dulu.",8000);
+        return;
+      }
+    }
+
+    submittingRef.current=true;
     setSending(true);
+    setPendingWaResend(null);
 
-    const {cust,isNew}=result;
-    const balBefore=cust.balance;
-    const balAfter=balBefore+amount;
-    const now=new Date();
-    const logEntry={
-      id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
-      type:"topup",amount,balanceBefore:balBefore,balanceAfter:balAfter,
-      adminName:adminData?.name||adminData?.username||"Super Admin",
-      timestamp:now.toISOString(),date:todayStr(),time:timeStr(),
-    };
+    // ── Cek koneksi server DULU. Kalau gagal, tolak cepat & form tetap terisi ──
+    const online=await onCheckConnection();
+    if(!online){
+      setSending(false);
+      submittingRef.current=false;
+      showMsg("Top Up Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.",8000);
+      return;
+    }
 
-    const updCust={...cust,balance:balAfter,name:form.name.trim()};
-    const newCusts=isNew?[...customers,updCust]:customers.map(c=>c.id===cust.id?updCust:c);
-    await onSaveCustomers(newCusts);
-    await onSaveWalletLogs([logEntry,...walletLogs]);
+    const existingCust=customers.find(c=>c.phone===phone);
+    const adminName=adminData?.name||adminData?.username||"Super Admin";
+    let updCust, balBefore, balAfter, isNew;
+
+    // ── Simpan ke database DULU secara ATOMIK. Jika gagal, STOP — jangan kirim WA ──
+    try{
+      if(existingCust){
+        isNew=false;
+        const result=await onUpdateCustomerBalance(
+          existingCust.id,
+          amount, // delta: tambah
+          (bBefore,bAfter)=>({
+            id:uid(),customerId:existingCust.id,customerPhone:existingCust.phone,customerName:form.name.trim(),
+            type:"topup",amount,balanceBefore:bBefore,balanceAfter:bAfter,
+            adminName,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
+          }),
+          {name:form.name.trim()} // update nama sekalian kalau berubah
+        );
+        updCust=result; balBefore=result.balance-amount; balAfter=result.balance;
+      } else {
+        isNew=true;
+        const pin=String(Math.floor(1000+Math.random()*9000));
+        updCust={id:uid(),phone,name:form.name.trim(),balance:amount,pin,createdAt:new Date().toISOString()};
+        balBefore=0; balAfter=amount;
+        await onAddNewCustomer(updCust,()=>({
+          id:uid(),customerId:updCust.id,customerPhone:phone,customerName:updCust.name,
+          type:"topup",amount,balanceBefore:0,balanceAfter:amount,
+          adminName,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
+        }));
+      }
+    }catch(e){
+      console.error("Top up gagal simpan:",e);
+      showMsg(`❌ GAGAL MENYIMPAN! Top up TIDAK tercatat. (${e.message})`,8000);
+      setSending(false);
+      submittingRef.current=false;
+      return; // STOP — tidak lanjut kirim WA
+    }
+
+    // ── Saldo SUDAH tersimpan di server — lepas kunci "jangan refresh" SEKARANG. ──
+    // Sisa proses (kirim WA) bukan data finansial kritis & sudah ada fallback manual,
+    // jadi tidak perlu lagi menahan kasir menunggu sebelum dapat konfirmasi jelas.
+    setSending(false);
+    submittingRef.current=false;
+    setForm({phone:"",name:"",amount:""});
+    showMsg(`✅ Top up berhasil & TERSIMPAN!${isNew?` PIN pelanggan: ${updCust.pin} (catat & sampaikan ke pelanggan)`:""} Mengirim struk WA...`,4000);
 
     // Link kartu pakai customer ID (aman, tidak expose nomor HP)
     const cardLink=`${window.location.origin}${window.location.pathname}?card=${updCust.id}`;
@@ -1879,18 +2131,21 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
 
     let waSent=false;
     if(settings.fonnteToken){
+      // Coba kirim, kalau gagal coba 1x lagi (jaringan kurang baik sering cuma butuh 1 retry)
       waSent=await sendWhatsApp({token:settings.fonnteToken,phone:updCust.phone,message:waMsg});
+      if(!waSent){
+        await new Promise(r=>setTimeout(r,1000));
+        waSent=await sendWhatsApp({token:settings.fonnteToken,phone:updCust.phone,message:waMsg});
+      }
     }
-    // Fallback: buka WA langsung ke nomor pelanggan
+    // Kalau auto-kirim (termasuk retry) gagal: JANGAN andalkan window.open() otomatis
+    // (sering diblokir browser mobile kalau dipanggil setelah jeda async) — tampilkan
+    // tombol kirim manual yang pasti berfungsi karena diklik langsung oleh kasir.
     if(!waSent){
-      const waPhone=updCust.phone.replace(/\D/g,"");
-      const target=waPhone.startsWith("0")?"62"+waPhone.slice(1):waPhone;
-      window.open(`https://wa.me/${target}?text=${encodeURIComponent(waMsg)}`,"_blank");
+      setPendingWaResend({phone:updCust.phone,message:waMsg,name:updCust.name});
     }
 
-    showMsg(`✅ Top up berhasil!${isNew?` PIN pelanggan: ${updCust.pin} (catat & sampaikan ke pelanggan)`:""}${waSent?" WA terkirim otomatis!":" WA dibuka — kirim manual."}`);
-    setForm({phone:"",name:"",amount:""});
-    setSending(false);
+    showMsg(`✅ Top up berhasil & TERSIMPAN!${isNew?` PIN pelanggan: ${updCust.pin} (catat & sampaikan ke pelanggan)`:""}${waSent?" WA terkirim otomatis!":" ⚠️ WA OTOMATIS GAGAL — tekan tombol kirim manual di bawah."}`,waSent?5000:10000);
   };
 
   const handleDownloadCard=async(cust)=>{
@@ -2121,9 +2376,31 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
             <button onClick={handleTopUp} disabled={sending}
               style={{width:"100%",padding:"14px",background:sending?"#9ca3af":"#ea580c",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:sending?"not-allowed":"pointer",fontSize:15,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:10}}
               onMouseOver={e=>{if(!sending)e.currentTarget.style.background="#c2410c";}} onMouseOut={e=>{if(!sending)e.currentTarget.style.background="#ea580c";}}>
-              {sending?"⏳ Memproses...":"💰 Proses Top Up & Download Kartu"}
+              {sending?(<><span style={{display:"inline-block",animation:"spin 1s linear infinite"}}>⏳</span> Memproses...</>):"💰 Proses Top Up & Download Kartu"}
             </button>
+            {sending&&(
+              <div style={{marginTop:8,background:"#fef2f2",border:"2px solid #fca5a5",borderRadius:10,padding:"10px 12px",textAlign:"center"}}>
+                <p style={{margin:0,fontSize:13,fontWeight:800,color:"#dc2626"}}>⚠️ JANGAN REFRESH ATAU TUTUP HALAMAN!</p>
+                <p style={{margin:"3px 0 0",fontSize:11,color:"#991b1b"}}>Sedang menyimpan ke server, mohon tunggu sampai selesai (maks ±20 detik)</p>
+              </div>
+            )}
             {!settings.fonnteToken&&<p style={{textAlign:"center",color:"#f97316",fontSize:12,margin:"8px 0 0"}}>⚠️ Fonnte token belum diisi — notifikasi WA tidak akan terkirim</p>}
+
+            {/* Top up SUDAH tersimpan, tapi WA otomatis gagal — tombol kirim manual */}
+            {pendingWaResend&&(
+              <div style={{marginTop:12,background:"#fef3c7",border:"2px solid #fbbf24",borderRadius:12,padding:14}}>
+                <p style={{margin:"0 0 8px",fontSize:13,fontWeight:700,color:"#92400e"}}>⚠️ Saldo {pendingWaResend.name} sudah tersimpan, tapi WA otomatis gagal terkirim (jaringan kurang baik).</p>
+                <button onClick={()=>{
+                    const waPhone=pendingWaResend.phone.replace(/\D/g,"");
+                    const target=waPhone.startsWith("0")?"62"+waPhone.slice(1):waPhone;
+                    window.open(`https://wa.me/${target}?text=${encodeURIComponent(pendingWaResend.message)}`,"_blank");
+                    setPendingWaResend(null);
+                  }}
+                  style={{width:"100%",padding:"11px",background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                  💬 Kirim WA Manual Sekarang
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2231,7 +2508,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
 // ─── Pre-Order Manager (Admin & SuperAdmin) ───────────────────────────────────
 // Setiap order disimpan TERPISAH per tenant (1 sesi checkout → N order records)
 // groupNota menghubungkan semua order dari sesi yang sama
-function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,onSaveCustomers,onSaveWalletLogs,onSaveOrders,onSaveMenus,adminData,isSuperAdmin}){
+function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,onSaveCustomers,onSaveWalletLogs,onSaveOrders,onSaveMenus,onUpdateCustomerBalance,onCheckConnection,adminData,isSuperAdmin}){
   // Bisa edit kuota: SuperAdmin atau admin dengan flag isPOManager
   const canEditQuota=isSuperAdmin||(adminData?.isPOManager===true);
   const [subTab,setSubTab]=useState("new");
@@ -2252,7 +2529,9 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
   const [pinError,setPinError]=useState("");
   const [scannedCust,setScannedCust]=useState(null);
   const [processing,setProcessing]=useState(false);
+  const submittingRef=useRef(false); // proteksi anti dobel-submit (klik ganda cepat)
   const [successMsg,setSuccessMsg]=useState("");
+  const [pendingWaResend,setPendingWaResend]=useState(null);
   const [cartMinimized,setCartMinimized]=useState(false);
   // PO Tercatat
   const [poSearch,setPOSearch]=useState("");
@@ -2315,20 +2594,30 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
 
   // Proses checkout: buat order TERPISAH per tenant
   const handleCheckout=async()=>{
+    if(submittingRef.current)return; // proteksi anti dobel-submit (klik ganda cepat)
     const cust=scannedCust||customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone);
     if(!cust){setScanError("Pelanggan tidak ditemukan!");return;}
     // Verifikasi: QR harus cocok dengan pelanggan yang dipilih
     if(selCust&&cust.id!==selCust.id){setScanError(`❌ QR Code bukan milik ${selCust.name}! Scan QR yang benar.`);return;}
     if(cust.pin&&pinInput!==cust.pin){setPinError("❌ PIN salah!");setPinInput("");return;}
     if(cust.balance<total){setScanError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(total)}`);return;}
+    submittingRef.current=true;
     setProcessing(true);
+
+    // ── Cek koneksi server DULU. Kalau gagal, tolak cepat & keranjang tetap utuh ──
+    const online=await onCheckConnection();
+    if(!online){
+      setProcessing(false);
+      submittingRef.current=false;
+      setScanError("PO Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
+      return;
+    }
 
     // Generate group nota
     const todayOrders=(orders||[]).filter(o=>o.date===todayStr());
     const groupSeq=String(todayOrders.reduce((max,o)=>Math.max(max,parseInt((o.groupNota||"PO-0-0").split("-").pop())||0),0)+1).padStart(3,"0");
     const groupNota=`PO-${todayStr().replace(/-/g,"")}-${groupSeq}`;
     const groupId=uid();
-    const balBefore=cust.balance; const balAfter=balBefore-total;
 
     // Buat 1 order record per tenant
     const newOrders=[];
@@ -2347,15 +2636,35 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
         createdBy:adminData?.name||"Admin",
       });
     }
-    await onSaveOrders([...(orders||[]),...newOrders]);
 
-    // Potong saldo sekali untuk total group
-    await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
-    const logEntry={id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
-      type:"payment",amount:total,balanceBefore:balBefore,balanceAfter:balAfter,
-      nota:groupNota,tenantId:"PO",tenantName:"Pre-Order",
-      items:cart,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
-    await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+    let balAfter;
+    // ── Potong saldo DULU secara ATOMIK (paling rawan gagal: validasi saldo & race-condition) ──
+    try{
+      const result=await onUpdateCustomerBalance(
+        cust.id,
+        -total,
+        (balBefore,bAfter)=>({id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
+          type:"payment",amount:total,balanceBefore:balBefore,balanceAfter:bAfter,
+          nota:groupNota,tenantId:"PO",tenantName:"Pre-Order",
+          items:cart,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()})
+      );
+      balAfter=result.balance;
+    }catch(e){
+      console.error("PO checkout gagal potong saldo:",e);
+      setProcessing(false);
+      setScanError(`❌ GAGAL! ${e.message}`);
+      return; // STOP — saldo belum terpotong, PO belum dibuat sama sekali
+    }
+
+    // ── Baru simpan record PO ──
+    try{
+      await onSaveOrders([...(orders||[]),...newOrders]);
+    }catch(e){
+      console.error("PO gagal simpan SETELAH saldo terpotong:",e);
+      setProcessing(false);
+      alert(`⚠️ PERHATIAN! Saldo pelanggan SUDAH terpotong (Rp ${idr(total)}), TAPI catatan PO GAGAL tersimpan.\n\nNota: ${groupNota}\nJANGAN potong saldo lagi. Screenshot pesan ini dan laporkan ke Super Admin.\n\nDetail: ${e.message}`);
+      return;
+    }
 
     // Kirim WA nota PO
     if(settings?.fonnteToken){
@@ -2366,11 +2675,11 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
       }).join("\n");
       const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n📦 *NOTA PRE-ORDER* ✅ *LUNAS*\n📋 Nota: *${groupNota}*\n👤 Nama: ${cust.name}\n📅 ${todayStr()} ${timeStr()}\n---------------------------\n${lines}\n---------------------------\n💰 *TOTAL: ${idr(total)}*\n🪙 Sisa Saldo: ${idr(balAfter)}\n\n✅ *Pembayaran LUNAS*\nAmbil pesanan saat bazaar. Terima kasih! 🙏\n${waSignature(adminData?.name||"Admin")}`;
       const _ok1=await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg});
-      if(!_ok1){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
+      if(!_ok1){setPendingWaResend({phone:cust.phone,message:waMsg,name:cust.name});}
     }
 
     closeScanner();setCart([]);setSelCust(null);setProcessing(false);
-    setSuccessMsg(`✅ ${newOrders.length} PO (${groupNota}) berhasil! Saldo -${idr(total)}`);
+    setSuccessMsg(`✅ ${newOrders.length} PO (${groupNota}) berhasil & TERSIMPAN! Saldo -${idr(total)}`);
     setTimeout(()=>setSuccessMsg(""),5000);
   };
 
@@ -2383,30 +2692,58 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
     if(!cust||cust.id!==order.customerId){setVerifyError("❌ QR tidak cocok dengan pelanggan PO ini!");return;}
     if(cust.pin&&verifyPin!==cust.pin){setVerifyPinError("❌ PIN salah! Coba lagi.");setVerifyPin("");return;}
 
-    // Jika Belum Lunas — potong saldo dulu
-    if(order.paymentStatus==="unpaid"){
-      if(cust.balance<order.subtotal){setVerifyError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(order.subtotal)}`);return;}
-      const balBefore=cust.balance; const balAfter=balBefore-order.subtotal;
-      await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
-      const logEntry={id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
-        type:"payment",amount:order.subtotal,balanceBefore:balBefore,balanceAfter:balAfter,
-        nota:order.nota,tenantId:order.tenantId,tenantName:order.tenantName,
-        items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
-      await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+    // ── Cek koneksi server DULU. Kalau gagal, tolak cepat & data PO tetap utuh ──
+    const online=await onCheckConnection();
+    if(!online){
+      setVerifyError("Verifikasi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
+      return;
+    }
+
+    const isUnpaid=order.paymentStatus==="unpaid";
+    let balAfter=null;
+
+    // ── Potong saldo DULU secara ATOMIK jika belum lunas ──
+    if(isUnpaid){
+      try{
+        const result=await onUpdateCustomerBalance(
+          cust.id,
+          -order.subtotal,
+          (balBefore,bAfter)=>({id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
+            type:"payment",amount:order.subtotal,balanceBefore:balBefore,balanceAfter:bAfter,
+            nota:order.nota,tenantId:order.tenantId,tenantName:order.tenantName,
+            items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()})
+        );
+        balAfter=result.balance;
+      }catch(e){
+        console.error("Verifikasi PO gagal potong saldo:",e);
+        setVerifyError(`❌ GAGAL! ${e.message}`);
+        return; // STOP — saldo belum terpotong, order belum ditandai selesai
+      }
+    }
+
+    // ── Baru tandai order selesai ──
+    try{
+      await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",paymentStatus:"paid",verifiedAt:new Date().toISOString(),verifiedBy:adminData?.name||"Admin"}:o));
+    }catch(e){
+      console.error("Order PO gagal disimpan SETELAH saldo terpotong:",e);
+      setVerifyError(`⚠️ Saldo SUDAH terpotong tapi status PO gagal diupdate! Laporkan ke Super Admin. (${e.message})`);
+      return;
+    }
+
+    // ── Database sudah confirmed tersimpan, baru kirim WA ──
+    if(isUnpaid){
       const _itemsUnpaid=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
       const _msg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\n✅ *Pembayaran & Pengambilan PO*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n---------------------------\n${_itemsUnpaid}\n---------------------------\n💸 Dibayar: ${idr(order.subtotal)}\n🪙 Sisa Saldo: ${idr(balAfter)}\n\nTerima kasih! 🙏\n${waSignature(adminData?.name||"Admin")}`;
       const _ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:_msg}):false;
-      if(!_ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_msg)}`,"_blank");}
+      if(!_ok){setPendingWaResend({phone:cust.phone,message:_msg,name:cust.name});}
     } else {
-      // PO sudah lunas — kirim WA konfirmasi pengambilan
       const _items2=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
       const _msg2=`🏪 *${settings?.bazaarName||"BazaarPOS"}*\n\n✅ *Pengambilan PO Dikonfirmasi*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n👤 Pelanggan: ${cust.name}\n---------------------------\n${_items2}\n---------------------------\n💰 *TOTAL: ${idr(order.subtotal)}*\n\nTerima kasih! 🙏\n${waSignature(adminData?.name||"Admin")}`;
       const _ok2=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:_msg2}):false;
-      if(!_ok2){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_msg2)}`,"_blank");}
+      if(!_ok2){setPendingWaResend({phone:cust.phone,message:_msg2,name:cust.name});}
     }
-    await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",paymentStatus:"paid",verifiedAt:new Date().toISOString(),verifiedBy:adminData?.name||"Admin"}:o));
     closeVerify();
-    setSuccessMsg(`✅ PO ${order.nota} (${order.tenantName}) — ${order.paymentStatus==="unpaid"?"Dibayar & ":""}Selesai!`);
+    setSuccessMsg(`✅ PO ${order.nota} (${order.tenantName}) — ${isUnpaid?"Dibayar & ":""}Selesai & Tersimpan!`);
     setTimeout(()=>setSuccessMsg(""),4000);
   };
 
@@ -2440,16 +2777,25 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
   // ── Refund PO (sudah bayar) ──────────────────────────────────────────────
   const doRefundPO=async(order)=>{
     setPOActionLoading(true);
+    // ── Cek koneksi server DULU ──
+    const online=await onCheckConnection();
+    if(!online){
+      setPOActionLoading(false);
+      setSuccessMsg("Refund Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
+      return;
+    }
     try{
       const cust=customers.find(c=>c.id===order.customerId);
       if(cust){
-        const balBefore=cust.balance; const balAfter=balBefore+order.subtotal;
-        await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
-        const logEntry={id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
-          type:"refund",amount:order.subtotal,balanceBefore:balBefore,balanceAfter:balAfter,
-          nota:order.nota,tenantId:order.tenantId,tenantName:order.tenantName,
-          items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
-        await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+        const result=await onUpdateCustomerBalance(
+          cust.id,
+          order.subtotal, // delta: tambah (refund)
+          (balBefore,balAfter)=>({id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
+            type:"refund",amount:order.subtotal,balanceBefore:balBefore,balanceAfter:balAfter,
+            nota:order.nota,tenantId:order.tenantId,tenantName:order.tenantName,
+            items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()})
+        );
+        const balAfter=result.balance;
         const itemsTxt=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
         const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n↩️ *Refund Pre-Order*\n📋 Nota: ${order.nota}\n🏪 Tenant: ${order.tenantName}\n---------------------------\n${itemsTxt}\n---------------------------\n💰 Refund: +${idr(order.subtotal)}\n🪙 Saldo Baru: ${idr(balAfter)}\n\nMaaf atas ketidaknyamanan ini.\n${waSignature(adminData?.name||"Super Admin")}`;
         const ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg}):false;
@@ -2457,7 +2803,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
       }
       await onSaveOrders((orders||[]).map(o=>o.id===order.id?{...o,status:"cancelled",cancelledAt:new Date().toISOString(),cancelledBy:adminData?.name||"Super Admin",cancelReason:"refund"}:o));
       setConfirmPOAction(null);
-      setSuccessMsg(`✅ PO ${order.nota} direfund! Saldo +${idr(order.subtotal)} dikembalikan.`);
+      setSuccessMsg(`✅ PO ${order.nota} direfund & TERSIMPAN! Saldo +${idr(order.subtotal)} dikembalikan.`);
       setTimeout(()=>setSuccessMsg(""),5000);
     }catch(e){setSuccessMsg("❌ Gagal refund: "+e.message);}
     setPOActionLoading(false);
@@ -2466,6 +2812,13 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
   // ── Cancel PO (belum bayar) ───────────────────────────────────────────────
   const doCancelPO=async(order)=>{
     setPOActionLoading(true);
+    // ── Cek koneksi server DULU ──
+    const online=await onCheckConnection();
+    if(!online){
+      setPOActionLoading(false);
+      setSuccessMsg("Pembatalan Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
+      return;
+    }
     try{
       const cust=customers.find(c=>c.id===order.customerId);
       const itemsTxt=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
@@ -2677,6 +3030,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
         </div>
       </div>
       {successMsg&&<div className="pop-in" style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:12,padding:"10px 16px",marginBottom:16,fontWeight:600,fontSize:13,color:"#16a34a"}}>{successMsg}</div>}
+      <WaFallbackCard pending={pendingWaResend} onDismiss={()=>setPendingWaResend(null)}/>
 
       {/* Sub-tabs */}
       <div style={{display:"flex",gap:4,marginBottom:20,background:"#f9fafb",borderRadius:14,padding:4}}>
@@ -2777,24 +3131,49 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                         {isHabis&&<p style={{margin:"2px 0 0",fontSize:11,color:"#dc2626",fontWeight:700}}>❌ Kuota habis</p>}
                       </button>
                       {/* Kontrol kuota — hanya Manager PO & SuperAdmin */}
-                      {canEditQuota&&(
-                      <div style={{borderTop:"1px dashed #e5e7eb",marginTop:8,paddingTop:6}}>
-                        <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",userSelect:"none"}}>
-                          <input type="checkbox" checked={!!m.poLimit}
-                            onChange={()=>onSaveMenus(menus.map(x=>x.id===m.id?{...x,poLimit:x.poLimit?null:100}:x))}
-                            style={{width:14,height:14,cursor:"pointer",accentColor:"#ea580c"}}/>
-                          <span style={{fontSize:11,color:"#6b7280",fontWeight:600}}>Batas Kuota</span>
-                        </label>
-                        {m.poLimit&&(
-                          <div style={{display:"flex",alignItems:"center",gap:6,marginTop:5}}>
-                            <input type="number" defaultValue={m.poLimit} min="1"
-                              onBlur={e=>{const n=parseInt(e.target.value)||1;onSaveMenus(menus.map(x=>x.id===m.id?{...x,poLimit:n}:x));}}
-                              style={{width:55,border:"2px solid #fed7aa",borderRadius:7,padding:"3px 6px",fontSize:13,fontWeight:700,color:"#ea580c",outline:"none",textAlign:"center"}}/>
-                            <span style={{fontSize:11,color:"#9ca3af"}}>maks</span>
-                          </div>
-                        )}
-                      </div>
-                      )}
+                      {canEditQuota&&(()=>{
+                        const usedQty=getPOUsed(m.id,orders);
+                        const hasUsage=usedQty>0;
+                        return(
+                        <div style={{borderTop:"1px dashed #e5e7eb",marginTop:8,paddingTop:6}}>
+                          <label style={{display:"flex",alignItems:"center",gap:6,cursor:hasUsage?"not-allowed":"pointer",userSelect:"none"}}
+                            title={hasUsage?`Sudah ada ${usedQty} PO untuk menu ini — tidak bisa nonaktifkan kuota`:""}>
+                            <input type="checkbox" checked={!!m.poLimit} disabled={hasUsage}
+                              onChange={async()=>{
+                                if(hasUsage)return;
+                                const newLimit=m.poLimit?null:Math.max(100,usedQty+10);
+                                try{ await onSaveMenus(menus.map(x=>x.id===m.id?{...x,poLimit:newLimit}:x)); }
+                                catch(e){ alert("❌ Gagal simpan kuota: "+e.message); }
+                              }}
+                              style={{width:14,height:14,cursor:hasUsage?"not-allowed":"pointer",accentColor:"#ea580c",opacity:hasUsage?0.5:1}}/>
+                            <span style={{fontSize:11,color:hasUsage?"#9ca3af":"#6b7280",fontWeight:600}}>Batas Kuota</span>
+                          </label>
+                          {hasUsage&&!m.poLimit&&<p style={{margin:"3px 0 0",fontSize:10,color:"#f97316"}}>🔒 Sudah ada {usedQty} PO</p>}
+                          {m.poLimit&&(
+                            <div style={{display:"flex",alignItems:"center",gap:6,marginTop:5}}>
+                              <input type="number" key={m.poLimit} defaultValue={m.poLimit} min="1"
+                                onBlur={async e=>{
+                                  const n=parseInt(e.target.value)||0;
+                                  if(n===m.poLimit)return; // tidak berubah
+                                  if(n<=usedQty){
+                                    alert(`❌ Kuota yang diinput tidak bisa lebih sedikit dari batas sebelumnya!\nPO sudah terpesan: ${usedQty}\nMinimal kuota: ${usedQty+1}`);
+                                    e.target.value=m.poLimit;
+                                    return;
+                                  }
+                                  if(window.confirm(`Anda yakin mengubah jumlah kuota PO dari ${m.poLimit} menjadi ${n}?`)){
+                                    try{ await onSaveMenus(menus.map(x=>x.id===m.id?{...x,poLimit:n}:x)); }
+                                    catch(err){ alert("❌ Gagal simpan kuota: "+err.message); e.target.value=m.poLimit; }
+                                  } else {
+                                    e.target.value=m.poLimit;
+                                  }
+                                }}
+                                style={{width:55,border:"2px solid #fed7aa",borderRadius:7,padding:"3px 6px",fontSize:13,fontWeight:700,color:"#ea580c",outline:"none",textAlign:"center"}}/>
+                              <span style={{fontSize:11,color:"#9ca3af"}}>maks</span>
+                            </div>
+                          )}
+                        </div>
+                        );
+                      })()}
                     </div>
                   );})}
                 </div>;
@@ -2858,6 +3237,11 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                   <button onClick={async()=>{
                       if(!selCust){alert("Pilih pelanggan terlebih dahulu!");return;}
                       if(!window.confirm(`Buat PO "Bayar Nanti" untuk ${selCust.name}?\nSaldo TIDAK dipotong sekarang, pelanggan bayar saat pengambilan.`))return;
+                      const online=await onCheckConnection();
+                      if(!online){
+                        alert("PO Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
+                        return;
+                      }
                       const todayOrders=(orders||[]).filter(o=>o.date===todayStr());
                       const groupSeq=String(todayOrders.reduce((max,o)=>Math.max(max,parseInt((o.groupNota||"PO-0-0").split("-").pop())||0),0)+1).padStart(3,"0");
                       const groupNota=`PO-${todayStr().replace(/-/g,"")}-${groupSeq}`;
@@ -2877,7 +3261,13 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                           createdBy:adminData?.name||"Admin",
                         });
                       }
-                      await onSaveOrders([...(orders||[]),...newOrders]);
+                      try{
+                        await onSaveOrders([...(orders||[]),...newOrders]);
+                      }catch(e){
+                        console.error("PO Bayar Nanti gagal simpan:",e);
+                        alert(`❌ GAGAL MENYIMPAN PO! Coba lagi.\n\nDetail: ${e.message}`);
+                        return; // STOP — keranjang tetap utuh
+                      }
                       if(settings?.fonnteToken){
                         const lines=tenantIds.map(tid=>{const t=tenants.find(x=>x.id===tid);const its=cart.filter(it=>it.tenantId===tid);return`🏪 *${t?.name||tid}*\n`+its.map(it=>`  🍽️ ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");}).join("\n");
                         const _bnMsg=`*${settings.bazaarName||"BazaarPOS"}*\n\nPRE-ORDER — BAYAR NANTI\nNota: ${groupNota}\nNama: ${selCust.name}\n---------------------------\n${lines}\n---------------------------\n*TOTAL: ${idr(total)}*\nPembayaran saat pengambilan.\n\nTerima kasih!\n${waSignature(adminData?.name||"Admin")}`;
@@ -2885,7 +3275,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                         if(!_bnOk){const _p=selCust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_bnMsg)}`,"_blank");}
                       }
                       setCart([]);setSelCust(null);
-                      setSuccessMsg(`✅ PO Bayar Nanti (${groupNota}) dicatat! Bayar saat pengambilan.`);
+                      setSuccessMsg(`✅ PO Bayar Nanti (${groupNota}) dicatat & TERSIMPAN! Bayar saat pengambilan.`);
                       setTimeout(()=>setSuccessMsg(""),5000);
                     }}
                     style={{width:"100%",padding:"12px",background:"#fff7ed",color:"#ea580c",border:"2px solid #fed7aa",borderRadius:12,fontWeight:800,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
@@ -3103,7 +3493,7 @@ function POReport({orders,tenants,customers}){
 }
 
 // ─── PO Tenant ────────────────────────────────────────────────────────────────
-function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,settings,menus}){
+function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,onUpdateCustomerBalance,onCheckConnection,settings,menus}){
   const [poSearch,setPOSearch]=useState("");
   const [showScanner,setShowScanner]=useState(false);
   const [verifyOrderId,setVerifyOrderId]=useState(null);
@@ -3146,28 +3536,58 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,settings
     if(!cust||cust.id!==order.customerId){setVerifyError("❌ QR tidak cocok dengan pelanggan PO ini!");return;}
     if(cust.pin&&verifyPin!==cust.pin){setVerifyPinError("❌ PIN salah! Coba lagi.");setVerifyPin("");return;}
 
-    // Jika Belum Lunas — potong saldo
-    if(order.paymentStatus==="unpaid"){
-      if(cust.balance<order.subtotal){setVerifyError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(order.subtotal)}`);return;}
-      const balBefore=cust.balance; const balAfter=balBefore-order.subtotal;
-      if(typeof onSaveCustomers==="function"){
-        await onSaveCustomers(customers.map(c=>c.id===cust.id?{...c,balance:balAfter}:c));
+    // ── Cek koneksi server DULU. Kalau gagal, tolak cepat & data PO tetap utuh ──
+    const online=onCheckConnection?await onCheckConnection():true;
+    if(!online){
+      setVerifyError("Verifikasi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
+      return;
+    }
+
+    const isUnpaid=order.paymentStatus==="unpaid";
+    let balAfter=null;
+
+    // ── Potong saldo DULU secara ATOMIK jika belum lunas ──
+    if(isUnpaid&&typeof onUpdateCustomerBalance==="function"){
+      try{
+        const result=await onUpdateCustomerBalance(
+          cust.id,
+          -order.subtotal,
+          (balBefore,bAfter)=>({id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
+            type:"payment",amount:order.subtotal,balanceBefore:balBefore,balanceAfter:bAfter,
+            nota:order.nota,tenantId:order.tenantId,tenantName:order.tenantName,
+            items:order.items,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()})
+        );
+        balAfter=result.balance;
+      }catch(e){
+        console.error("Verifikasi PO gagal potong saldo:",e);
+        setVerifyError(`❌ GAGAL! ${e.message}`);
+        return; // STOP — saldo belum terpotong
       }
-      // Kirim WA notif bayar + ambil
+    }
+
+    // ── Baru tandai order selesai ──
+    try{
+      await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",paymentStatus:"paid",verifiedAt:new Date().toISOString(),verifiedBy:tenant.name}:o));
+    }catch(e){
+      console.error("Order PO gagal disimpan SETELAH saldo terpotong:",e);
+      setVerifyError(`⚠️ Saldo SUDAH terpotong tapi status PO gagal diupdate! Laporkan ke Super Admin. (${e.message})`);
+      return;
+    }
+
+    // ── Database sudah confirmed tersimpan, baru kirim WA ──
+    if(isUnpaid){
       const _itemsTxt=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
       const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n✅ Pembayaran & Pengambilan PO\nNota: ${order.nota}\nTenant: ${order.tenantName}\n---------------------------\n${_itemsTxt}\n---------------------------\nDibayar: ${idr(order.subtotal)}\nSisa Saldo: ${idr(balAfter)}\n\nTerima kasih!\n${waSignature(tenant.name)}`;
       const _ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg}):false;
       if(!_ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
     } else {
-      // PO sudah lunas — kirim WA konfirmasi pengambilan saja
       const _itemsTxt2=order.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
       const waMsg=`*${settings?.bazaarName||"BazaarPOS"}*\n\n✅ Pengambilan PO Dikonfirmasi\nNota: ${order.nota}\nTenant: ${order.tenantName}\n---------------------------\n${_itemsTxt2}\n---------------------------\nTotal: ${idr(order.subtotal)}\n\nTerima kasih!\n${waSignature(tenant.name)}`;
       const _ok=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:waMsg}):false;
       if(!_ok){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(waMsg)}`,"_blank");}
     }
-    await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",paymentStatus:"paid",verifiedAt:new Date().toISOString(),verifiedBy:tenant.name}:o));
     closeScanner();
-    setSuccessMsg(`✅ PO ${order.nota} — ${order.paymentStatus==="unpaid"?"Dibayar & ":""}Selesai!`);
+    setSuccessMsg(`✅ PO ${order.nota} — ${isUnpaid?"Dibayar & ":""}Selesai & Tersimpan!`);
     setTimeout(()=>setSuccessMsg(""),4000);
   };
 
@@ -3284,8 +3704,9 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,settings
         {poSearch&&<button onClick={()=>setPOSearch("")} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:"#9ca3af",fontSize:18}}>✕</button>}
       </div>
 
-      {pendingOrders.length===0&&!poSearch?<EmptyState icon="📦" text="Tidak ada PO untuk tenant ini."/>:
+      {pendingOrders.length===0&&completedOrders.length===0&&!poSearch?<EmptyState icon="📦" text="Tidak ada PO untuk tenant ini."/>:
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {pendingOrders.length===0&&poSearch&&<EmptyState icon="🔍" text="Tidak ada PO belum selesai yang cocok dengan pencarian."/>}
           {pendingOrders.map(order=>(
             <div key={order.id} style={{background:"#fff",border:"2px solid #fbbf24",borderRadius:16,padding:16}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8,marginBottom:10}}>
@@ -3339,7 +3760,7 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,settings
 }
 
 // ─── Admin Transactions ───────────────────────────────────────────────────────
-function AdminTransactions({tenants,transactions,settings,customers,walletLogs,onSaveTx,onSaveCustomers,onSaveWalletLogs,filterDate,setFilterDate,isSuperAdmin,adminData}){
+function AdminTransactions({tenants,transactions,settings,customers,walletLogs,onSaveTx,onSaveCustomers,onSaveWalletLogs,onUpdateCustomerBalance,onCheckConnection,filterDate,setFilterDate,isSuperAdmin,adminData}){
   const getTn=id=>tenants.find(t=>t.id===id)||{};
   const [searchNota,setSearchNota]=useState("");
   const [refunding,setRefunding]=useState(null);
@@ -3357,24 +3778,34 @@ function AdminTransactions({tenants,transactions,settings,customers,walletLogs,o
 
   const doRefund=async(tx)=>{
     setRefunding(tx.id); setShowConfirmId(null);
+    // ── Cek koneksi server DULU ──
+    const online=await onCheckConnection();
+    if(!online){
+      setRefunding(null);
+      setRefundMsg("Refund Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
+      setTimeout(()=>setRefundMsg(""),6000);
+      return;
+    }
     try{
       const updTx=transactions.map(t=>t.id===tx.id?{...t,refunded:true,refundedAt:new Date().toISOString()}:t);
       await onSaveTx(updTx);
       if(tx.walletCustomerPhone){
         const cust=(customers||[]).find(c=>c.phone===tx.walletCustomerPhone);
         if(cust){
-          const balBefore=cust.balance; const balAfter=balBefore+tx.total;
-          await onSaveCustomers(customers.map(c=>c.phone===tx.walletCustomerPhone?{...c,balance:balAfter}:c));
-          const logEntry={id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
-            type:"refund",amount:tx.total,balanceBefore:balBefore,balanceAfter:balAfter,
-            nota:tx.nota,tenantId:tx.tenantId,tenantName:tenants.find(t=>t.id===tx.tenantId)?.name||"",
-            timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()};
-          await onSaveWalletLogs([logEntry,...(walletLogs||[])]);
+          const result=await onUpdateCustomerBalance(
+            cust.id,
+            tx.total, // delta: tambah (refund)
+            (balBefore,balAfter)=>({id:uid(),customerId:cust.id,customerPhone:cust.phone,customerName:cust.name,
+              type:"refund",amount:tx.total,balanceBefore:balBefore,balanceAfter:balAfter,
+              nota:tx.nota,tenantId:tx.tenantId,tenantName:tenants.find(t=>t.id===tx.tenantId)?.name||"",
+              timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()})
+          );
+          const balAfter=result.balance;
           const _rfItems=tx.items.map(it=>`  ${it.menuName} x${it.qty} = ${idr(it.qty*it.price)}`).join("\n");
           const _rfMsg=`*${bname}*\n\n↩️ *Refund/Pembatalan Transaksi*\n📋 Nota: ${tx.nota}\n🏪 Tenant: ${tenants.find(t=>t.id===tx.tenantId)?.name||""}\n---------------------------\n${_rfItems}\n---------------------------\n💰 Refund: +${idr(tx.total)}\n🪙 Saldo Baru: ${idr(balAfter)}\n\nTerima kasih!\n${waSignature((adminData?.name)||"Admin")}`;
           const _rfOk=settings?.fonnteToken?await sendWhatsApp({token:settings.fonnteToken,phone:cust.phone,message:_rfMsg}):false;
           if(!_rfOk){const _p=cust.phone.replace(/\D/g,"");const _t=_p.startsWith("0")?"62"+_p.slice(1):_p;window.open(`https://wa.me/${_t}?text=${encodeURIComponent(_rfMsg)}`,"_blank");}
-          setRefundMsg(`✅ Refund berhasil! Saldo ${cust.name} +${idr(tx.total)} → ${idr(balAfter)}`);
+          setRefundMsg(`✅ Refund berhasil & TERSIMPAN! Saldo ${cust.name} +${idr(tx.total)} → ${idr(balAfter)}`);
         } else { setRefundMsg("✅ Transaksi dibatalkan. Pelanggan tidak ditemukan."); }
       } else { setRefundMsg("✅ Transaksi dibatalkan."); }
     }catch(e){ setRefundMsg("❌ Gagal: "+e.message); }
@@ -3726,11 +4157,9 @@ function AdminSummary({tenants,transactions,settings,filterDate,setFilterDate}){
 // ═════════════════════════════════════════════════════════════════════════════
 // TENANT APP
 // ═════════════════════════════════════════════════════════════════════════════
-function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,customers,walletLogs,orders,onSaveMenus,onSaveTx,onSaveCustomers,onSaveWalletLogs,onSaveOrders,onSaveAlerts,alerts,onRefresh,refreshing,onLogout}){
+function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,customers,walletLogs,orders,onSaveMenus,onSaveTx,onSaveCustomers,onSaveWalletLogs,onSaveOrders,onUpdateCustomerBalance,onCheckConnection,onSaveAlerts,alerts,onRefresh,refreshing,onLogout}){
   const [tab,setTab]=useState("pos");
   const {BackConfirmModal}=useBackConfirm(true);
-  const [btPrinter,setBtPrinter]=useState(null);
-  const [btConnecting,setBtConnecting]=useState(false);
   const [isOnline,setIsOnline]=useState(navigator.onLine);
   const [showEmerg,setShowEmerg]=useState(false);
   const [emergMsg,setEmergMsg]=useState("");
@@ -3740,8 +4169,6 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
     window.addEventListener("online",on); window.addEventListener("offline",off);
     return()=>{window.removeEventListener("online",on);window.removeEventListener("offline",off);};
   },[]);
-
-  const connectBT=async()=>{setBtConnecting(true);const p=await connectBTPrinter();if(p){setBtPrinter(p);alert(`✅ Terhubung ke: ${p.name}`);}setBtConnecting(false);};
 
   const sendEmergency=async()=>{
     if(!emergMsg.trim()){alert("Tulis pesan darurat terlebih dahulu!");return;}
@@ -3753,7 +4180,7 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
   return(
     <div style={{minHeight:"100vh",background:"#f0fdf4"}}>
       <BackConfirmModal/>
-      {!isOnline&&<div style={{background:"#dc2626",color:"#fff",textAlign:"center",padding:"8px",fontSize:13,fontWeight:700}}>⚠️ Offline — Transaksi tersimpan lokal, sync otomatis saat online</div>}
+      {!isOnline&&<div style={{background:"#dc2626",color:"#fff",textAlign:"center",padding:"8px",fontSize:13,fontWeight:700}}>⚠️ Tidak ada koneksi internet — transaksi akan DITOLAK sampai jaringan kembali normal</div>}
 
       {showEmerg&&<Modal title="🆘 Kirim Pesan Darurat" onClose={()=>setShowEmerg(false)} accent="#dc2626">
         <p style={{color:"#6b7280",fontSize:13,margin:"0 0 12px"}}>Pesan ini akan langsung tampil di panel Admin. Gunakan hanya saat ada masalah mendesak.</p>
@@ -3770,7 +4197,6 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
           <div>
             <div style={{display:"flex",gap:8,marginBottom:4}}>
               <span style={{background:"rgba(255,255,255,.2)",color:"#fff",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20}}>{tenant.code}</span>
-              {btPrinter&&<span style={{background:"rgba(255,255,255,.2)",color:"#fff",fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>🖨️ {btPrinter.name}</span>}
             </div>
             <h1 style={{color:"#fff",fontSize:18,fontWeight:800,margin:0}}>{tenant.name}</h1>
             <p style={{color:"#bbf7d0",fontSize:11,margin:"2px 0 0"}}>Tenant App • {todayStr()}</p>
@@ -3790,10 +4216,8 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
           </div>
           <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
             <span style={{color:"#fff",fontSize:15,fontWeight:800}}>{settings?.bazaarName}</span>
+            <NetworkBadge onCheckConnection={onCheckConnection}/>
             <button onClick={()=>setShowEmerg(true)} className="pulse" style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>🆘</button>
-            <button onClick={connectBT} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}} disabled={btConnecting}>
-              {btConnecting?"⏳":"🖨️"} {btPrinter?"Ganti BT":"Koneksi BT"}
-            </button>
             <button onClick={onRefresh} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}} title="Refresh" className={refreshing?"spinning":""}>🔄</button>
             <button onClick={()=>{if(window.confirm("Yakin ingin keluar dari aplikasi?"))onLogout();}} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}}>Keluar</button>
           </div>
@@ -3809,8 +4233,8 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
       </div>
 
       <div style={{padding:16,maxWidth:520,margin:"0 auto"}} className="fade-in">
-        {tab==="pos"&&<TenantPOS tenant={tenant} menus={menus} allTransactions={allTransactions} onSaveTx={onSaveTx} settings={settings} isOnline={isOnline} customers={customers} walletLogs={walletLogs} onSaveCustomers={onSaveCustomers} onSaveWalletLogs={onSaveWalletLogs}/>}
-        {tab==="po"&&<POTenant tenant={tenant} orders={orders} customers={customers} onSaveOrders={onSaveOrders} onSaveCustomers={onSaveCustomers} settings={settings} menus={menus}/>}
+        {tab==="pos"&&<TenantPOS tenant={tenant} menus={menus} allTransactions={allTransactions} onSaveTx={onSaveTx} settings={settings} customers={customers} walletLogs={walletLogs} onSaveCustomers={onSaveCustomers} onSaveWalletLogs={onSaveWalletLogs} onUpdateCustomerBalance={onUpdateCustomerBalance} onCheckConnection={onCheckConnection}/>}
+        {tab==="po"&&<POTenant tenant={tenant} orders={orders} customers={customers} onSaveOrders={onSaveOrders} onSaveCustomers={onSaveCustomers} onUpdateCustomerBalance={onUpdateCustomerBalance} onCheckConnection={onCheckConnection} settings={settings} menus={menus}/>}
         {tab==="menu"&&<TenantMenuMgr tenant={tenant} menus={menus} allMenus={allMenus} allTransactions={allTransactions} orders={orders} onSaveMenus={onSaveMenus}/>}
         {tab==="history"&&<TenantHistory transactions={transactions} tenant={tenant} settings={settings}/>}
       </div>
@@ -3819,7 +4243,7 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
 }
 
 // ─── Tenant POS ───────────────────────────────────────────────────────────────
-function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,customers,walletLogs,onSaveCustomers,onSaveWalletLogs}){
+function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,customers,walletLogs,onSaveCustomers,onSaveWalletLogs,onUpdateCustomerBalance,onCheckConnection}){
   const [cart,setCart]=useState([]);
   const [lastNota,setLastNota]=useState(null);
   const [printed,setPrinted]=useState(false);
@@ -3829,6 +4253,8 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
   const [pinInput,setPinInput]=useState(""); // PIN yang diinput pelanggan
   const [pinError,setPinError]=useState("");
   const [scannedCust,setScannedCust]=useState(null); // customer hasil scan, menunggu PIN
+  const [checkoutLoading,setCheckoutLoading]=useState(false);
+  const submittingRef=useRef(false); // proteksi anti dobel-submit (klik ganda cepat)
   const videoRef=useRef(null);
   const scanIntervalRef=useRef(null);
 
@@ -3897,48 +4323,79 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,isOnline,cust
     // Verifikasi PIN
     if(cust.pin&&pinInput!==cust.pin){setPinError("❌ PIN salah! Coba lagi.");setPinInput("");return;}
     if(cust.balance<total){setScanError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(total)}`);return;}
-    closeScanner();
+    setScanError("");
+    // Modal scan/PIN TIDAK ditutup dulu — biar kasir lihat status proses & bisa retry
+    // tanpa scan ulang QR/PIN kalau gagal karena jaringan.
     await handleCheckout("wallet",cust);
   };
 
   // ── Checkout utama ────────────────────────────────────────────────────────
   const handleCheckout=async(paymentMethod,walletCust=null)=>{
+    if(submittingRef.current)return; // proteksi anti dobel-submit (klik ganda cepat)
     if(!cart.length){alert("Keranjang kosong!");return;}
+    submittingRef.current=true;
+    setCheckoutLoading(true);
+
+    // ── Cek koneksi server DULU sebelum apapun (1x ping cepat). Kalau gagal, tolak cepat & keranjang/scan tetap utuh ──
+    const online=await onCheckConnection();
+    if(!online){
+      setCheckoutLoading(false);
+      submittingRef.current=false;
+      const msg="Transaksi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.";
+      if(paymentMethod==="wallet") setScanError(msg); else alert(msg);
+      return; // STOP — cart & data scan/PIN tidak hilang, kasir tinggal coba lagi
+    }
+
     const nota=genNota(tenant.code,allTransactions);
     const tx={id:uid(),tenantId:tenant.id,tenantCode:tenant.code,nota,items:cart,total,paymentMethod,
       walletCustomerId:walletCust?.id||null, walletCustomerPhone:walletCust?.phone||null,
       walletCustomerName:walletCust?.name||null, date:todayStr(),time:timeStr()};
 
-    if(isOnline) await onSaveTx([...allTransactions,tx]);
-    else offQ.add(tx);
-
-    // Potong saldo jika bayar wallet
-    if(paymentMethod==="wallet"&&walletCust){
-      const balBefore=walletCust.balance;
-      const balAfter=balBefore-total;
-      const updCust={...walletCust,balance:balAfter};
-      const newCusts=customers.map(c=>c.id===walletCust.id?updCust:c);
-      const logEntry={
-        id:uid(),customerId:walletCust.id,customerPhone:walletCust.phone,customerName:walletCust.name,
-        type:"payment",amount:total,balanceBefore:balBefore,balanceAfter:balAfter,
-        tenantId:tenant.id,tenantName:tenant.name,nota,
-        items:cart.map(it=>({menuCode:it.menuCode,menuName:it.menuName,qty:it.qty,price:it.price})),
-        timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
-      };
-      await onSaveCustomers(newCusts);
-      await onSaveWalletLogs([logEntry,...walletLogs]);
-
-      // Kirim WA notifikasi saldo
-      if(settings.fonnteToken){
+    try{
+      // ── Potong saldo DULU (paling rawan gagal: validasi saldo & race-condition) ──
+      // Supaya tidak ada transaksi "hantu" yang tercatat tanpa saldo benar-benar terpotong.
+      if(paymentMethod==="wallet"&&walletCust){
+        const result=await onUpdateCustomerBalance(
+          walletCust.id,
+          -total, // delta: kurangi
+          (balBefore,balAfter)=>({
+            id:uid(),customerId:walletCust.id,customerPhone:walletCust.phone,customerName:walletCust.name,
+            type:"payment",amount:total,balanceBefore:balBefore,balanceAfter:balAfter,
+            tenantId:tenant.id,tenantName:tenant.name,nota,
+            items:cart.map(it=>({menuCode:it.menuCode,menuName:it.menuName,qty:it.qty,price:it.price})),
+            timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
+          })
+        );
+        tx.walletBalanceAfter=result.balance;
       }
-      // Simpan info customer ke tx untuk ditampilkan di struk
-      tx.walletBalanceAfter=balAfter;
-    }
 
-    setLastNota(tx);setPrinted(false);setCart([]);
+      // ── Baru simpan record transaksi (selalu langsung ke server, TIDAK ada antrian offline) ──
+      try{
+        await onSaveTx([...allTransactions,tx]);
+      }catch(txErr){
+        // Saldo SUDAH terpotong tapi transaksi gagal tersimpan — kasus kritis, beri tahu jelas
+        console.error("Transaksi gagal simpan SETELAH saldo terpotong:",txErr);
+        setCheckoutLoading(false);
+        submittingRef.current=false;
+        alert(`⚠️ PERHATIAN! Saldo pelanggan SUDAH terpotong (Rp ${idr(total)}), TAPI catatan transaksi GAGAL tersimpan.\n\nNota: ${nota}\nJANGAN potong saldo lagi. Screenshot pesan ini dan laporkan ke Super Admin untuk dicatat manual.\n\nDetail: ${txErr.message}`);
+        return;
+      }
+
+      if(paymentMethod==="wallet") closeScanner();
+      setLastNota(tx);setPrinted(false);setCart([]);
+      setCheckoutLoading(false);
+      submittingRef.current=false;
+    }catch(e){
+      console.error("Checkout gagal:",e);
+      setCheckoutLoading(false);
+      submittingRef.current=false;
+      alert("Transaksi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
+      // Jangan kosongkan cart — biarkan kasir retry
+    }
   };
 
   const [sendStatus,setSendStatus]=useState("");
+  const [pendingWaResend,setPendingWaResend]=useState(null);
 
   const doPrint=async()=>{
     setSendStatus("⏳ Mengirim struk...");
@@ -3971,23 +4428,19 @@ ${waSignature(tenant.name)}`;
         if(sent){
           setSendStatus("✅ Struk terkirim ke WhatsApp pelanggan!");
           setPrinted(true);
+          setTimeout(()=>{setLastNota(null);setPrinted(false);setSendStatus("");},1500);
           return;
         }
       }
-      // Fallback: buka WA langsung jika Fonnte gagal atau tidak dikonfigurasi
-      if(lastNota.walletCustomerPhone){
-        const waPhone=lastNota.walletCustomerPhone.replace(/\D/g,"");
-        const target=waPhone.startsWith("0")?"62"+waPhone.slice(1):waPhone;
-        window.open(`https://wa.me/${target}?text=${encodeURIComponent(receiptText)}`,"_blank");
-        setSendStatus("✅ WhatsApp pelanggan dibuka — kirim struk manual.");
-      } else {
-        window.open(`https://wa.me/?text=${encodeURIComponent(receiptText)}`,"_blank");
-        setSendStatus("✅ WhatsApp dibuka dengan struk.");
-      }
+      // Fallback: JANGAN window.open() otomatis (rawan diblokir setelah jeda jaringan
+      // lambat) — tampilkan tombol kirim manual yang pasti berfungsi karena diklik
+      // langsung oleh kasir.
+      setPendingWaResend({phone:lastNota.walletCustomerPhone||"",message:receiptText,name:lastNota.walletCustomerName||""});
+      setSendStatus("⚠️ WA otomatis gagal — tekan tombol kirim manual di bawah.");
       setPrinted(true);
     }catch(e){
       console.error("doPrint error:",e);
-      setSendStatus("⚠️ Error: "+e.message);
+      setSendStatus("⚠️ Gagal kirim: "+e.message+" — coba lagi atau pilih Transaksi Baru.");
       setPrinted(true);
     }
   };
@@ -4058,16 +4511,16 @@ ${waSignature(tenant.name)}`;
             );
           })()}
           <div style={{display:"flex",gap:10}}>
-            <button onClick={closeScanner} style={{...btnSec,flex:1}}>Batal</button>
+            <button onClick={closeScanner} disabled={checkoutLoading} style={{...btnSec,flex:1,opacity:checkoutLoading?0.5:1,cursor:checkoutLoading?"not-allowed":"pointer"}}>Batal</button>
             {scanPhone&&(customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone))&&(customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone)).balance>=total&&(pinInput.length===4||!(customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone)).pin)?(
-              <button onClick={handleWalletPay}
-                style={{flex:2,padding:"13px",background:"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
-                onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
-                ✅ Bayar {idr(total)}
+              <button onClick={handleWalletPay} disabled={checkoutLoading}
+                style={{flex:2,padding:"13px",background:checkoutLoading?"#86efac":"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:checkoutLoading?"not-allowed":"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}
+                onMouseOver={e=>{if(!checkoutLoading)e.currentTarget.style.background="#15803d";}} onMouseOut={e=>{if(!checkoutLoading)e.currentTarget.style.background="#16a34a";}}>
+                {checkoutLoading?(<><span style={{display:"inline-block",animation:"spin 1s linear infinite"}}>⏳</span> Memproses...</>):`✅ Bayar ${idr(total)}`}
               </button>
             ):(
-              <button onClick={()=>{setScanPhone("");setScanError("");startScanner();}}
-                style={{flex:2,padding:"13px",background:"#ea580c",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+              <button onClick={()=>{setScanPhone("");setScanError("");startScanner();}} disabled={checkoutLoading}
+                style={{flex:2,padding:"13px",background:"#ea580c",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:checkoutLoading?"not-allowed":"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
                 onMouseOver={e=>e.currentTarget.style.background="#c2410c"} onMouseOut={e=>e.currentTarget.style.background="#ea580c"}>
                 🔄 Scan Ulang
               </button>
@@ -4081,11 +4534,11 @@ ${waSignature(tenant.name)}`;
         <Modal title="" onClose={()=>{}}>
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,background:"#f0fdf4",borderRadius:12,padding:"10px 14px"}}>
             <div style={{fontSize:28}}>
-              {"🪙"}
+              {"✅"}
             </div>
             <div style={{flex:1}}>
-              <p style={{margin:0,fontWeight:800,fontSize:15,color:"#14532d"}}>Transaksi Berhasil!</p>
-              <p style={{margin:"2px 0 0",fontSize:12,color:"#6b7280"}}>Nota: <strong style={{color:"#1c0a00"}}>{lastNota.nota}</strong></p>
+              <p style={{margin:0,fontWeight:800,fontSize:15,color:"#14532d"}}>Transaksi Selesai</p>
+              <p style={{margin:"2px 0 0",fontSize:11,color:"#16a34a",fontWeight:600}}>Tersimpan di server • Nota: <strong style={{color:"#1c0a00"}}>{lastNota.nota}</strong></p>
             </div>
             <PayBadge method={lastNota.paymentMethod}/>
           </div>
@@ -4098,8 +4551,6 @@ ${waSignature(tenant.name)}`;
               <p style={{margin:"2px 0 0",fontSize:12,color:"#6b7280"}}>Sisa saldo: <strong style={{color:"#7c3aed"}}>{idr(lastNota.walletBalanceAfter??0)}</strong></p>
             </div>
           )}
-
-          {!isOnline&&<div style={{background:"#fef3c7",border:"1px solid #fbbf24",borderRadius:8,padding:"5px 10px",marginBottom:8,fontSize:11,color:"#92400e",fontWeight:600,textAlign:"center"}}>⚠️ Tersimpan offline</div>}
 
           <div style={{background:"#f9fafb",borderRadius:10,padding:"8px 12px",marginBottom:8,maxHeight:120,overflowY:"auto",WebkitOverflowScrolling:"touch"}}>
             {lastNota.items.map((it,i)=>(
@@ -4115,17 +4566,24 @@ ${waSignature(tenant.name)}`;
           </div>
 
           {sendStatus&&<div style={{background:sendStatus.startsWith("✅")?"#f0fdf4":sendStatus.startsWith("📥")?"#eff6ff":"#fef3c7",border:`1px solid ${sendStatus.startsWith("✅")?"#bbf7d0":sendStatus.startsWith("📥")?"#bae6fd":"#fbbf24"}`,borderRadius:10,padding:"8px 12px",marginBottom:8,fontSize:12,fontWeight:600,color:sendStatus.startsWith("✅")?"#16a34a":sendStatus.startsWith("📥")?"#0284c7":"#92400e",textAlign:"center"}}>{sendStatus}</div>}
-          <button onClick={doPrint}
-            style={{width:"100%",padding:"12px",background:"#16a34a",color:"#fff",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+          <WaFallbackCard pending={pendingWaResend} onDismiss={()=>{setPendingWaResend(null);setLastNota(null);setPrinted(false);setSendStatus("");}}/>
+
+          <p style={{textAlign:"center",color:"#9ca3af",fontSize:11,margin:"0 0 8px"}}>Pilih salah satu untuk melanjutkan:</p>
+
+          {/* Pilihan utama (default, lebih besar): lanjut tanpa kirim WA — pelanggan cek riwayat di link kartunya sendiri */}
+          <button onClick={()=>{setLastNota(null);setPrinted(false);setSendStatus("");setPendingWaResend(null);}}
+            style={{width:"100%",padding:"16px",background:"#16a34a",color:"#fff",border:"none",borderRadius:13,fontSize:16,fontWeight:800,cursor:"pointer",marginBottom:10,display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontFamily:"'Plus Jakarta Sans',sans-serif",boxShadow:"0 4px 14px rgba(22,163,74,.35)"}}
             onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
-            {sendStatus.includes("⏳")?"⏳ Memproses...":printed?"🔄 Kirim Ulang Struk":"💬 Kirim Struk via WhatsApp"}
+            ➕ Transaksi Baru
           </button>
-          <button onClick={()=>{setLastNota(null);setPrinted(false);setSendStatus("");}} disabled={!printed}
-            style={{width:"100%",padding:"12px",background:printed?"#16a34a":"#e5e7eb",color:printed?"#fff":"#9ca3af",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:printed?"pointer":"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif",transition:"all .2s"}}
-            onMouseOver={e=>{if(printed)e.currentTarget.style.background="#15803d";}} onMouseOut={e=>{if(printed)e.currentTarget.style.background="#16a34a";}}>
-            {printed?"➕ Transaksi Baru":"🔒 Cetak Struk Dulu"}
+          <p style={{textAlign:"center",color:"#9ca3af",fontSize:11,margin:"-4px 0 10px"}}>Pelanggan bisa cek struk di link kartu saldonya</p>
+
+          {/* Pilihan kedua: kirim struk WA, lalu otomatis lanjut transaksi baru */}
+          <button onClick={doPrint} disabled={sendStatus.includes("⏳")}
+            style={{width:"100%",padding:"11px",background:"#fff",color:"#16a34a",border:"2px solid #bbf7d0",borderRadius:11,fontSize:13,fontWeight:700,cursor:sendStatus.includes("⏳")?"not-allowed":"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+            onMouseOver={e=>{if(!sendStatus.includes("⏳"))e.currentTarget.style.background="#f0fdf4";}} onMouseOut={e=>e.currentTarget.style.background="#fff"}>
+            {sendStatus.includes("⏳")?"⏳ Mengirim...":printed?"🔄 Kirim Ulang Struk":"💬 Kirim Struk via WhatsApp"}
           </button>
-          {!printed&&<p style={{textAlign:"center",color:"#9ca3af",fontSize:11,margin:"5px 0 0"}}>Cetak struk terlebih dahulu</p>}
         </Modal>
       )}
 
@@ -4202,17 +4660,23 @@ function TenantMenuMgr({tenant,menus,allMenus,allTransactions,orders,onSaveMenus
     if(usedIds.has(m.id)){alert("❌ Menu yang sudah dipakai dalam transaksi tidak bisa diedit!");return;}
     setForm({code:m.code,name:m.name,price:m.price.toString()});setEditing(m.id);setShowForm(true);
   };
-  const save=()=>{
+  const save=async()=>{
     if(!form.code||!form.name||!form.price){alert("Semua field harus diisi!");return;}
     const price=parseInt(form.price);if(isNaN(price)||price<=0){alert("Harga tidak valid!");return;}
     if(!editing&&menus.find(m=>m.code===form.code)){alert("Kode menu sudah ada!");return;}
     const p={code:form.code,name:form.name,price};
-    onSaveMenus(editing?allMenus.map(m=>m.id===editing?{...m,...p}:m):[...allMenus,{id:uid(),tenantId:tenant.id,...p}]);
-    setShowForm(false);
+    try{
+      await onSaveMenus(editing?allMenus.map(m=>m.id===editing?{...m,...p}:m):[...allMenus,{id:uid(),tenantId:tenant.id,...p}]);
+      setShowForm(false);
+    }catch(e){
+      alert(`❌ GAGAL MENYIMPAN! Menu tidak tersimpan. Cek koneksi, lalu coba lagi.\n(${e.message})`);
+    }
   };
-  const del=m=>{
+  const del=async m=>{
     if(usedIds.has(m.id)){alert("❌ Menu tidak bisa dihapus karena sudah digunakan dalam transaksi!");return;}
-    if(window.confirm("Hapus menu ini?")) onSaveMenus(allMenus.filter(x=>x.id!==m.id));
+    if(!window.confirm("Hapus menu ini?"))return;
+    try{ await onSaveMenus(allMenus.filter(x=>x.id!==m.id)); }
+    catch(e){ alert("❌ GAGAL HAPUS! "+e.message); }
   };
   return(
     <div>
@@ -4371,19 +4835,43 @@ ${waSignature(tenant.name)}`;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// CUSTOMER CARD PAGE — halaman publik ?card=PHONE
+// CUSTOMER CARD PAGE LOADER — fetch SEKALI SAJA (bukan realtime) saat halaman
+// dibuka atau di-refresh, untuk meringankan beban koneksi ke database. Halaman
+// publik ini TIDAK subscribe ke 9 koleksi sekaligus seperti aplikasi utama —
+// hanya ambil 3 dokumen yang benar-benar dibutuhkan untuk kartu pelanggan.
 // ═════════════════════════════════════════════════════════════════════════════
-function CustomerCardPage({phone,settings,customers,walletLogs,transactions,loaded}){
-  // Cari customer by ID (format baru, aman) atau phone (backward compat QR lama)
-  const param=(phone||"").trim();
-  const customer=customers.find(c=>c.id===param)||customers.find(c=>c.phone===param)||customers.find(c=>c.phone===param.replace(/\D/g,""));
-  const bazaarName=settings?.bazaarName||"BazaarPOS";
-  // Share link selalu pakai customer ID — tidak expose nomor HP
-  const shareUrl=customer?`${window.location.origin}${window.location.pathname}?card=${customer.id}`:window.location.href;
-  const waShare=`https://wa.me/?text=${encodeURIComponent(`Cek saldo kamu di ${bazaarName}:\n${shareUrl}`)}`;
-  const [expandedTx,setExpandedTx]=useState(null);
+function CustomerCardPageLoader({phone}){
+  const [data,setData]=useState(null);
+  const [loaded,setLoaded]=useState(false);
+  const [fetchError,setFetchError]=useState("");
+  const [refreshKey,setRefreshKey]=useState(0);
+  const [refreshing,setRefreshing]=useState(false);
+  const [lastUpdated,setLastUpdated]=useState(null);
+  const [justRefreshed,setJustRefreshed]=useState(false);
 
-  const idr2=n=>new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n||0);
+  useEffect(()=>{
+    let cancelled=false;
+    (async()=>{
+      if(refreshKey>0) setRefreshing(true); else setLoaded(false);
+      setFetchError("");
+      try{
+        // Fetch sekali — hanya 3 dokumen yang dipakai kartu pelanggan (bukan 9 realtime listener)
+        const [customers,walletLogs,settings]=await Promise.all([
+          db.get("bzr_customers"),
+          db.get("bzr_wallet_logs"),
+          db.get("bzr_settings"),
+        ]);
+        if(cancelled)return;
+        setData({customers:customers||[],walletLogs:walletLogs||[],settings:{...DEF,...(settings||{})}});
+        setLastUpdated(new Date());
+        if(refreshKey>0){ setJustRefreshed(true); setTimeout(()=>setJustRefreshed(false),2000); }
+      }catch(e){
+        if(!cancelled) setFetchError("Gagal memuat data. Cek koneksi internet lalu coba refresh lagi.");
+      }
+      if(!cancelled){ setLoaded(true); setRefreshing(false); }
+    })();
+    return()=>{cancelled=true;};
+  },[refreshKey]);
 
   if(!loaded) return(
     <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -4393,6 +4881,37 @@ function CustomerCardPage({phone,settings,customers,walletLogs,transactions,load
       </div>
     </div>
   );
+
+  if(fetchError) return(
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{background:"#fff",borderRadius:24,padding:40,maxWidth:380,width:"100%",textAlign:"center"}}>
+        <div style={{fontSize:52,marginBottom:12}}>📡</div>
+        <h2 style={{color:"#dc2626",margin:"0 0 8px"}}>Gagal Memuat Data</h2>
+        <p style={{color:"#6b7280",fontSize:14,marginBottom:16}}>{fetchError}</p>
+        <button onClick={()=>setRefreshKey(k=>k+1)} style={{padding:"10px 20px",background:"#4c1d95",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14}}>🔄 Coba Lagi</button>
+      </div>
+    </div>
+  );
+
+  return <CustomerCardPage phone={phone} settings={data.settings} customers={data.customers} walletLogs={data.walletLogs}
+    onRefresh={()=>setRefreshKey(k=>k+1)} refreshing={refreshing} lastUpdated={lastUpdated} justRefreshed={justRefreshed}/>;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// CUSTOMER CARD PAGE — halaman publik ?card=PHONE
+// ═════════════════════════════════════════════════════════════════════════════
+function CustomerCardPage({phone,settings,customers,walletLogs,onRefresh,refreshing,lastUpdated,justRefreshed}){
+  // Cari customer by ID (format baru, aman) atau phone (backward compat QR lama)
+  const param=(phone||"").trim();
+  const customer=customers.find(c=>c.id===param)||customers.find(c=>c.phone===param)||customers.find(c=>c.phone===param.replace(/\D/g,""));
+  const bazaarName=settings?.bazaarName||"BazaarPOS";
+  // Share link selalu pakai customer ID — tidak expose nomor HP
+  const shareUrl=customer?`${window.location.origin}${window.location.pathname}?card=${customer.id}`:window.location.href;
+  const waShare=`https://wa.me/?text=${encodeURIComponent(`Cek saldo kamu di ${bazaarName}:\n${shareUrl}`)}`;
+  const [expandedTx,setExpandedTx]=useState(null);
+  const [showAllTx,setShowAllTx]=useState(false);
+
+  const idr2=n=>new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n||0);
 
   if(!customer) return(
     <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
@@ -4420,6 +4939,15 @@ function CustomerCardPage({phone,settings,customers,walletLogs,transactions,load
         <div style={{textAlign:"center",marginBottom:20}}>
           <p style={{color:"rgba(255,255,255,.8)",fontSize:14,margin:0,fontWeight:600}}>🏪 {bazaarName}</p>
           <p style={{color:"rgba(255,255,255,.6)",fontSize:12,margin:"4px 0 0"}}>Kartu Saldo Pelanggan</p>
+          {onRefresh&&(
+            <button onClick={onRefresh} disabled={refreshing}
+              style={{marginTop:10,padding:"6px 16px",background:justRefreshed?"#16a34a":"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:20,cursor:refreshing?"not-allowed":"pointer",fontSize:12,fontWeight:600,display:"inline-flex",alignItems:"center",gap:6,transition:"background .3s"}}>
+              <span style={{display:"inline-block",animation:refreshing?"spin 1s linear infinite":"none"}}>{justRefreshed?"✅":"🔄"}</span> {refreshing?"Memuat...":justRefreshed?"Data Terbaru!":"Refresh Data"}
+            </button>
+          )}
+          {lastUpdated&&!refreshing&&(
+            <p style={{color:"rgba(255,255,255,.5)",fontSize:11,margin:"6px 0 0"}}>Terakhir diperbarui: {lastUpdated.toLocaleTimeString("id-ID")}</p>
+          )}
         </div>
 
         {/* Card utama */}
@@ -4443,8 +4971,8 @@ function CustomerCardPage({phone,settings,customers,walletLogs,transactions,load
               {idr2(customer.balance)}
             </p>
             <div style={{display:"flex",alignItems:"center",gap:6,marginTop:8}}>
-              <div style={{width:8,height:8,borderRadius:"50%",background:"#16a34a",animation:"pulse 2s infinite"}}/>
-              <p style={{color:"#9ca3af",fontSize:12,margin:0}}>Saldo diperbarui secara real-time</p>
+              <div style={{width:8,height:8,borderRadius:"50%",background:"#9ca3af"}}/>
+              <p style={{color:"#9ca3af",fontSize:12,margin:0}}>Data per {lastUpdated?lastUpdated.toLocaleTimeString("id-ID"):"-"} — tekan "Refresh Data" untuk update terbaru</p>
             </div>
             {customer.balance<=0&&(
               <div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:10,padding:"8px 12px",marginTop:12}}>
@@ -4478,45 +5006,54 @@ function CustomerCardPage({phone,settings,customers,walletLogs,transactions,load
 
             {/* Recent transactions */}
             {(()=>{
-              const recentTx=(walletLogs||[]).filter(l=>l.customerId===customer.id&&l.type==="payment").sort((a,b)=>b.timestamp?.localeCompare(a.timestamp)||0).slice(0,5);
-              return recentTx.length>0?(
+              const allTx=(walletLogs||[]).filter(l=>l.customerId===customer.id&&l.type==="payment").sort((a,b)=>b.timestamp?.localeCompare(a.timestamp)||0);
+              const visibleTx=showAllTx?allTx:allTx.slice(0,5);
+              return allTx.length>0?(
                 <div style={{marginBottom:14}}>
                   <p style={{color:"#374151",fontSize:13,fontWeight:700,margin:"0 0 8px"}}>🛒 Transaksi Terakhir <span style={{color:"#9ca3af",fontWeight:400,fontSize:12}}>(tap untuk detail)</span></p>
-                  {recentTx.map(tx=>(
-                    <div key={tx.id} style={{borderRadius:10,marginBottom:6,overflow:"hidden",border:"1px solid #f3f4f6"}}>
-                      {/* Header baris - bisa diklik */}
-                      <button onClick={()=>setExpandedTx(expandedTx===tx.id?null:tx.id)}
-                        style={{width:"100%",background:"#f9fafb",border:"none",padding:"9px 12px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-                        <div style={{textAlign:"left"}}>
-                          <p style={{margin:0,color:"#374151",fontSize:13,fontWeight:600}}>{tx.tenantName||"Tenant"}</p>
-                          <p style={{margin:"1px 0 0",color:"#9ca3af",fontSize:11}}>{tx.nota} • {tx.date} {tx.time}</p>
-                        </div>
-                        <div style={{display:"flex",alignItems:"center",gap:8}}>
-                          <p style={{margin:0,color:"#ea580c",fontWeight:800,fontSize:14}}>-{idr(tx.amount)}</p>
-                          <span style={{color:"#9ca3af",fontSize:12,transform:expandedTx===tx.id?"rotate(180deg)":"rotate(0)",transition:"transform .2s",display:"inline-block"}}>▼</span>
-                        </div>
-                      </button>
-                      {/* Detail item - muncul saat diklik */}
-                      {expandedTx===tx.id&&(
-                        <div style={{background:"#fff",padding:"10px 12px",borderTop:"1px dashed #f3f4f6"}}>
-                          {(()=>{
-                            const items=tx.items||(transactions||[]).find(t=>t.nota===tx.nota)?.items||[];
-                            return items.length>0?items.map((it,i)=>(
-                              <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12,borderBottom:i<items.length-1?"1px dashed #f9fafb":"none"}}>
-                                <span style={{color:"#374151"}}><span style={{color:"#9ca3af"}}>[{it.menuCode}]</span> {it.menuName} x{it.qty}</span>
-                                <span style={{fontWeight:700,color:"#1c0a00"}}>{idr(it.qty*it.price)}</span>
-                              </div>
-                            )):<p style={{color:"#9ca3af",fontSize:12,margin:0,textAlign:"center"}}>Detail tidak tersedia</p>;
-                          })()}
-                          <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:"2px solid #f3f4f6",fontWeight:800,fontSize:13}}>
-                            <span style={{color:"#374151"}}>TOTAL</span>
-                            <span style={{color:"#ea580c"}}>{idr(tx.amount)}</span>
+                  <div style={{maxHeight:showAllTx?320:"none",overflowY:showAllTx?"auto":"visible",WebkitOverflowScrolling:"touch",paddingRight:showAllTx?4:0}}>
+                    {visibleTx.map(tx=>(
+                      <div key={tx.id} style={{borderRadius:10,marginBottom:6,overflow:"hidden",border:"1px solid #f3f4f6"}}>
+                        {/* Header baris - bisa diklik */}
+                        <button onClick={()=>setExpandedTx(expandedTx===tx.id?null:tx.id)}
+                          style={{width:"100%",background:"#f9fafb",border:"none",padding:"9px 12px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                          <div style={{textAlign:"left"}}>
+                            <p style={{margin:0,color:"#374151",fontSize:13,fontWeight:600}}>{tx.tenantName||"Tenant"}</p>
+                            <p style={{margin:"1px 0 0",color:"#9ca3af",fontSize:11}}>{tx.nota} • {tx.date} {tx.time}</p>
                           </div>
-                          <p style={{color:"#9ca3af",fontSize:11,margin:"6px 0 0",textAlign:"center"}}>Sisa saldo: <strong style={{color:"#4c1d95"}}>{idr(tx.balanceAfter)}</strong></p>
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                          <div style={{display:"flex",alignItems:"center",gap:8}}>
+                            <p style={{margin:0,color:"#ea580c",fontWeight:800,fontSize:14}}>-{idr(tx.amount)}</p>
+                            <span style={{color:"#9ca3af",fontSize:12,transform:expandedTx===tx.id?"rotate(180deg)":"rotate(0)",transition:"transform .2s",display:"inline-block"}}>▼</span>
+                          </div>
+                        </button>
+                        {/* Detail item - muncul saat diklik */}
+                        {expandedTx===tx.id&&(
+                          <div style={{background:"#fff",padding:"10px 12px",borderTop:"1px dashed #f3f4f6"}}>
+                            {(()=>{
+                              const items=tx.items||[];
+                              return items.length>0?items.map((it,i)=>(
+                                <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12,borderBottom:i<items.length-1?"1px dashed #f9fafb":"none"}}>
+                                  <span style={{color:"#374151"}}><span style={{color:"#9ca3af"}}>[{it.menuCode}]</span> {it.menuName} x{it.qty}</span>
+                                  <span style={{fontWeight:700,color:"#1c0a00"}}>{idr(it.qty*it.price)}</span>
+                                </div>
+                              )):<p style={{color:"#9ca3af",fontSize:12,margin:0,textAlign:"center"}}>Detail tidak tersedia</p>;
+                            })()}
+                            <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:"2px solid #f3f4f6",fontWeight:800,fontSize:13}}>
+                              <span style={{color:"#374151"}}>TOTAL</span>
+                              <span style={{color:"#ea580c"}}>{idr(tx.amount)}</span>
+                            </div>
+                            <p style={{color:"#9ca3af",fontSize:11,margin:"6px 0 0",textAlign:"center"}}>Sisa saldo: <strong style={{color:"#4c1d95"}}>{idr(tx.balanceAfter)}</strong></p>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {allTx.length>5&&(
+                    <button onClick={()=>setShowAllTx(p=>!p)}
+                      style={{width:"100%",padding:"8px",background:"#f5f3ff",color:"#7c3aed",border:"1px solid #ddd6fe",borderRadius:10,cursor:"pointer",fontSize:12,fontWeight:700,marginTop:4,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                      {showAllTx?"▲ Tampilkan 5 Terbaru Saja":`▼ Lihat Semua Transaksi (${allTx.length})`}
+                    </button>
+                  )}
                 </div>
               ):null;
             })()}
@@ -4600,15 +5137,26 @@ function useBackConfirm(active=true){
 // SHARED COMPONENTS
 // ═════════════════════════════════════════════════════════════════════════════
 function Modal({title,onClose,children,accent="#ea580c"}){
+  const backdropRef=useRef(null);
   useEffect(()=>{
-    // Scroll ke atas otomatis saat modal muncul
+    // Reset scroll: window DAN scroll internal backdrop modal itu sendiri.
+    // Backdrop pakai overflowY:"scroll" sendiri (position:fixed), jadi window.scrollTo
+    // saja tidak cukup — backdrop bisa membawa posisi scroll dari modal sebelumnya,
+    // membuat bagian atas modal baru (judul/header) tidak terlihat sampai discroll manual.
     window.scrollTo({top:0,behavior:"instant"});
+    if(backdropRef.current) backdropRef.current.scrollTop=0;
   },[]);
-  return(
+  // Render lewat Portal langsung ke <body> — supaya position:fixed TIDAK terpengaruh
+  // oleh transform/overflow di elemen induk manapun (penyebab umum modal "terpotong"
+  // di sebagian device/browser mobile, dimana sebagian layar di bawah modal kosong
+  // menampilkan background halaman di belakangnya).
+  return createPortal(
     <div
+      ref={backdropRef}
       onClick={e=>{if(e.target===e.currentTarget&&onClose)onClose();}}
       style={{
         position:"fixed",top:0,left:0,right:0,bottom:0,
+        height:"100dvh",
         background:"rgba(0,0,0,.65)",
         zIndex:9999,
         overflowY:"scroll",
@@ -4631,7 +5179,8 @@ function Modal({title,onClose,children,accent="#ea580c"}){
         {title&&<h3 style={{margin:"0 0 14px",fontSize:17,fontWeight:800,color:"#1c0a00"}}>{title}</h3>}
         {children}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
