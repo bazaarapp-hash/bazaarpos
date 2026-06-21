@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────74
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────75
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -4267,7 +4267,7 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,customers,wal
     }catch(e){
       console.error("Checkout gagal:",e);
       setCheckoutLoading(false);
-      alert(`❌ GAGAL!\n\nTransaksi TIDAK tercatat dan saldo TIDAK terpotong. JANGAN beri tahu pelanggan transaksi berhasil.\nCek koneksi internet, lalu coba lagi.\n\nDetail: ${e.message}`);
+      alert("Transaksi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
       // Jangan kosongkan cart — biarkan kasir retry
     }
   };
