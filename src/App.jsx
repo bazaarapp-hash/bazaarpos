@@ -1,7 +1,8 @@
 import { useState, useEffect, useLayoutEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────73 Feature: card pelanggan ringan (non-realtime), session persist, tombol transaksi baru, fix scroll modal, hapus BT, audit save flow
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────74
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -111,6 +112,33 @@ const PAY = {
 function PayBadge({method}){
   const p=PAY[method]||PAY.cash;
   return <span style={{background:p.bg,color:p.color,border:`1px solid ${p.border}`,fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20}}>{p.label}</span>;
+}
+
+// ─── Network Badge — lampu status koneksi ke server di header ────────────────
+// Cek konektivitas berkala (bukan cuma navigator.onLine yang kadang tidak akurat —
+// device bisa "online" ke WiFi tapi WiFi-nya sendiri tidak benar-benar tersambung
+// internet/Firestore). Hijau = server terjangkau, Merah = bermasalah.
+function NetworkBadge({onCheckConnection}){
+  const [status,setStatus]=useState("checking"); // "good" | "bad" | "checking"
+  useEffect(()=>{
+    let cancelled=false;
+    const check=async()=>{
+      if(!onCheckConnection)return;
+      const ok=await onCheckConnection();
+      if(!cancelled) setStatus(ok?"good":"bad");
+    };
+    check();
+    const interval=setInterval(check,20000); // cek ulang tiap 20 detik
+    return()=>{cancelled=true;clearInterval(interval);};
+  },[onCheckConnection]);
+  const color=status==="good"?"#22c55e":status==="bad"?"#ef4444":"#9ca3af";
+  const label=status==="good"?"Jaringan Baik":status==="bad"?"Jaringan Buruk":"Mengecek...";
+  return(
+    <div title={label} style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",borderRadius:20,padding:"5px 10px"}}>
+      <span style={{width:9,height:9,borderRadius:"50%",background:color,boxShadow:status==="good"?"0 0 6px #22c55e":status==="bad"?"0 0 6px #ef4444":"none",flexShrink:0}}/>
+      <span style={{color:"#fff",fontSize:11,fontWeight:600,whiteSpace:"nowrap"}}>{label}</span>
+    </div>
+  );
 }
 
 // ─── Excel Export ─────────────────────────────────────────────────────────────
@@ -877,7 +905,7 @@ function AlertPopup({alerts,onDismiss}){
 // SUPER ADMIN DASHBOARD
 // ═════════════════════════════════════════════════════════════════════════════
 function SuperAdminDashboard(props){
-  const {tenants,transactions,settings,alerts,allAlerts,onSaveAlerts,onSaveSettings,onRefresh,refreshing,onLogout}=props;
+  const {tenants,transactions,settings,alerts,allAlerts,onSaveAlerts,onSaveSettings,onRefresh,refreshing,onLogout,onCheckConnection}=props;
   const [tab,setTab]=useState("tenants");
   const [filterDate,setFilterDate]=useState(todayStr());
   const [editBazaar,setEditBazaar]=useState(false);
@@ -925,6 +953,7 @@ function SuperAdminDashboard(props){
             </div>
           )}
           {alerts.length>0&&<button onClick={()=>setShowAlertPop(true)} className="pulse" style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontWeight:700,fontSize:13}}>🆘 {alerts.length}</button>}
+          <NetworkBadge onCheckConnection={onCheckConnection}/>
           <button onClick={onRefresh} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}} title="Refresh" className={refreshing?"spinning":""}>🔄</button>
           <button onClick={()=>{if(window.confirm("Yakin ingin keluar dari aplikasi?"))onLogout();}} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}}>Keluar</button>
         </div>
@@ -960,7 +989,7 @@ function SuperAdminDashboard(props){
 // ADMIN BIASA DASHBOARD
 // ═════════════════════════════════════════════════════════════════════════════
 function AdminDashboard(props){
-  const {tenants,transactions,settings,alerts,allAlerts,onSaveAlerts,adminData,onRefresh,refreshing,onLogout}=props;
+  const {tenants,transactions,settings,alerts,allAlerts,onSaveAlerts,adminData,onRefresh,refreshing,onLogout,onCheckConnection}=props;
   const [tab,setTab]=useState("tenants");
   const [filterDate,setFilterDate]=useState(todayStr());
   const {BackConfirmModal}=useBackConfirm(true);
@@ -987,6 +1016,7 @@ function AdminDashboard(props){
         <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
           <span style={{color:"#fff",fontSize:16,fontWeight:800}}>{settings.bazaarName}</span>
           {alerts.length>0&&<button onClick={()=>setShowAlertPop(true)} className="pulse" style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontWeight:700,fontSize:13}}>🆘 {alerts.length}</button>}
+          <NetworkBadge onCheckConnection={onCheckConnection}/>
           <button onClick={onRefresh} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}} title="Refresh" className={refreshing?"spinning":""}>🔄</button>
           <button onClick={()=>{if(window.confirm("Yakin ingin keluar dari aplikasi?"))onLogout();}} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontSize:13,fontWeight:600}}>Keluar</button>
         </div>
@@ -1882,7 +1912,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     if(c.balance>0){showMsg(`❌ Saldo ${c.name} masih ${idr(c.balance)}. Kosongkan saldo dulu sebelum hapus.`);return;}
     if(!window.confirm(`Hapus pelanggan "${c.name}" (${c.phone})?\nTindakan ini permanen.`))return;
     const online=await onCheckConnection();
-    if(!online){showMsg("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. Dibatalkan — coba lagi.",8000);return;}
+    if(!online){showMsg("Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.",8000);return;}
     try{
       await onSaveCustomers(customers.filter(x=>x.id!==c.id));
       showMsg(`✅ Pelanggan ${c.name} berhasil dihapus & TERSIMPAN.`);
@@ -1897,7 +1927,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     if(c.balance===0){showMsg(`ℹ️ Saldo ${c.name} sudah 0.`);return;}
     if(!window.confirm(`Kosongkan saldo ${c.name}?\nSaldo saat ini ${idr(c.balance)} akan diset ke Rp 0.\nTindakan ini tidak bisa dibatalkan.`))return;
     const online=await onCheckConnection();
-    if(!online){showMsg("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. Dibatalkan — coba lagi.",8000);return;}
+    if(!online){showMsg("Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.",8000);return;}
     try{
       const result=await onUpdateCustomerBalance(
         c.id,
@@ -1968,7 +1998,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     const online=await onCheckConnection();
     if(!online){
       setSending(false);
-      showMsg("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. Top up DIBATALKAN — cek koneksi lalu coba lagi.",8000);
+      showMsg("Top Up Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.",8000);
       return;
     }
 
@@ -2465,7 +2495,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
     const online=await onCheckConnection();
     if(!online){
       setProcessing(false);
-      setScanError("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. PO DIBATALKAN — cek koneksi lalu coba lagi. Keranjang tetap tersimpan.");
+      setScanError("PO Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
       return;
     }
 
@@ -2551,7 +2581,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
     // ── Cek koneksi server DULU. Kalau gagal, tolak cepat & data PO tetap utuh ──
     const online=await onCheckConnection();
     if(!online){
-      setVerifyError("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. Verifikasi DIBATALKAN — cek koneksi lalu coba lagi.");
+      setVerifyError("Verifikasi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
       return;
     }
 
@@ -2637,7 +2667,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
     const online=await onCheckConnection();
     if(!online){
       setPOActionLoading(false);
-      setSuccessMsg("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. Refund DIBATALKAN — cek koneksi lalu coba lagi.");
+      setSuccessMsg("Refund Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
       return;
     }
     try{
@@ -2672,7 +2702,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
     const online=await onCheckConnection();
     if(!online){
       setPOActionLoading(false);
-      setSuccessMsg("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. Pembatalan DIBATALKAN — cek koneksi lalu coba lagi.");
+      setSuccessMsg("Pembatalan Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
       return;
     }
     try{
@@ -3094,7 +3124,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                       if(!window.confirm(`Buat PO "Bayar Nanti" untuk ${selCust.name}?\nSaldo TIDAK dipotong sekarang, pelanggan bayar saat pengambilan.`))return;
                       const online=await onCheckConnection();
                       if(!online){
-                        alert("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. PO DIBATALKAN — cek koneksi lalu coba lagi. Keranjang tetap tersimpan.");
+                        alert("PO Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
                         return;
                       }
                       const todayOrders=(orders||[]).filter(o=>o.date===todayStr());
@@ -3394,7 +3424,7 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,onUpdate
     // ── Cek koneksi server DULU. Kalau gagal, tolak cepat & data PO tetap utuh ──
     const online=onCheckConnection?await onCheckConnection():true;
     if(!online){
-      setVerifyError("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. Verifikasi DIBATALKAN — cek koneksi lalu coba lagi.");
+      setVerifyError("Verifikasi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
       return;
     }
 
@@ -3559,8 +3589,9 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,onUpdate
         {poSearch&&<button onClick={()=>setPOSearch("")} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:"#9ca3af",fontSize:18}}>✕</button>}
       </div>
 
-      {pendingOrders.length===0&&!poSearch?<EmptyState icon="📦" text="Tidak ada PO untuk tenant ini."/>:
+      {pendingOrders.length===0&&completedOrders.length===0&&!poSearch?<EmptyState icon="📦" text="Tidak ada PO untuk tenant ini."/>:
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {pendingOrders.length===0&&poSearch&&<EmptyState icon="🔍" text="Tidak ada PO belum selesai yang cocok dengan pencarian."/>}
           {pendingOrders.map(order=>(
             <div key={order.id} style={{background:"#fff",border:"2px solid #fbbf24",borderRadius:16,padding:16}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8,marginBottom:10}}>
@@ -3636,7 +3667,7 @@ function AdminTransactions({tenants,transactions,settings,customers,walletLogs,o
     const online=await onCheckConnection();
     if(!online){
       setRefunding(null);
-      setRefundMsg("⚠️ JARINGAN TIDAK STABIL! Tidak bisa terhubung ke server. Refund DIBATALKAN — cek koneksi lalu coba lagi.");
+      setRefundMsg("Refund Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
       setTimeout(()=>setRefundMsg(""),6000);
       return;
     }
@@ -4070,6 +4101,7 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
           </div>
           <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
             <span style={{color:"#fff",fontSize:15,fontWeight:800}}>{settings?.bazaarName}</span>
+            <NetworkBadge onCheckConnection={onCheckConnection}/>
             <button onClick={()=>setShowEmerg(true)} className="pulse" style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>🆘</button>
             <button onClick={onRefresh} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}} title="Refresh" className={refreshing?"spinning":""}>🔄</button>
             <button onClick={()=>{if(window.confirm("Yakin ingin keluar dari aplikasi?"))onLogout();}} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}}>Keluar</button>
@@ -4175,7 +4207,9 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,customers,wal
     // Verifikasi PIN
     if(cust.pin&&pinInput!==cust.pin){setPinError("❌ PIN salah! Coba lagi.");setPinInput("");return;}
     if(cust.balance<total){setScanError(`Saldo tidak cukup! Saldo: ${idr(cust.balance)}, Perlu: ${idr(total)}`);return;}
-    closeScanner();
+    setScanError("");
+    // Modal scan/PIN TIDAK ditutup dulu — biar kasir lihat status proses & bisa retry
+    // tanpa scan ulang QR/PIN kalau gagal karena jaringan.
     await handleCheckout("wallet",cust);
   };
 
@@ -4184,12 +4218,13 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,customers,wal
     if(!cart.length){alert("Keranjang kosong!");return;}
     setCheckoutLoading(true);
 
-    // ── Cek koneksi server DULU sebelum apapun. Kalau gagal, tolak cepat & keranjang tetap utuh ──
+    // ── Cek koneksi server DULU sebelum apapun (1x ping cepat). Kalau gagal, tolak cepat & keranjang/scan tetap utuh ──
     const online=await onCheckConnection();
     if(!online){
       setCheckoutLoading(false);
-      alert("⚠️ JARINGAN TIDAK STABIL!\n\nTidak bisa terhubung ke server. Transaksi DIBATALKAN demi keamanan data.\n\nKeranjang belanja TETAP TERSIMPAN — cek koneksi internet, lalu tekan tombol bayar lagi.");
-      return; // STOP — cart tidak dikosongkan, kasir tinggal coba lagi
+      const msg="Transaksi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.";
+      if(paymentMethod==="wallet") setScanError(msg); else alert(msg);
+      return; // STOP — cart & data scan/PIN tidak hilang, kasir tinggal coba lagi
     }
 
     const nota=genNota(tenant.code,allTransactions);
@@ -4226,6 +4261,7 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,customers,wal
         return;
       }
 
+      if(paymentMethod==="wallet") closeScanner();
       setLastNota(tx);setPrinted(false);setCart([]);
       setCheckoutLoading(false);
     }catch(e){
@@ -4358,16 +4394,16 @@ ${waSignature(tenant.name)}`;
             );
           })()}
           <div style={{display:"flex",gap:10}}>
-            <button onClick={closeScanner} style={{...btnSec,flex:1}}>Batal</button>
+            <button onClick={closeScanner} disabled={checkoutLoading} style={{...btnSec,flex:1,opacity:checkoutLoading?0.5:1,cursor:checkoutLoading?"not-allowed":"pointer"}}>Batal</button>
             {scanPhone&&(customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone))&&(customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone)).balance>=total&&(pinInput.length===4||!(customers.find(c=>c.id===scanPhone)||customers.find(c=>c.phone===scanPhone)).pin)?(
-              <button onClick={handleWalletPay}
-                style={{flex:2,padding:"13px",background:"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
-                onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
-                ✅ Bayar {idr(total)}
+              <button onClick={handleWalletPay} disabled={checkoutLoading}
+                style={{flex:2,padding:"13px",background:checkoutLoading?"#86efac":"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:checkoutLoading?"not-allowed":"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}
+                onMouseOver={e=>{if(!checkoutLoading)e.currentTarget.style.background="#15803d";}} onMouseOut={e=>{if(!checkoutLoading)e.currentTarget.style.background="#16a34a";}}>
+                {checkoutLoading?(<><span style={{display:"inline-block",animation:"spin 1s linear infinite"}}>⏳</span> Memproses...</>):`✅ Bayar ${idr(total)}`}
               </button>
             ):(
-              <button onClick={()=>{setScanPhone("");setScanError("");startScanner();}}
-                style={{flex:2,padding:"13px",background:"#ea580c",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+              <button onClick={()=>{setScanPhone("");setScanError("");startScanner();}} disabled={checkoutLoading}
+                style={{flex:2,padding:"13px",background:"#ea580c",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:checkoutLoading?"not-allowed":"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
                 onMouseOver={e=>e.currentTarget.style.background="#c2410c"} onMouseOut={e=>e.currentTarget.style.background="#ea580c"}>
                 🔄 Scan Ulang
               </button>
@@ -4692,6 +4728,8 @@ function CustomerCardPageLoader({phone}){
   const [fetchError,setFetchError]=useState("");
   const [refreshKey,setRefreshKey]=useState(0);
   const [refreshing,setRefreshing]=useState(false);
+  const [lastUpdated,setLastUpdated]=useState(null);
+  const [justRefreshed,setJustRefreshed]=useState(false);
 
   useEffect(()=>{
     let cancelled=false;
@@ -4707,6 +4745,8 @@ function CustomerCardPageLoader({phone}){
         ]);
         if(cancelled)return;
         setData({customers:customers||[],walletLogs:walletLogs||[],settings:{...DEF,...(settings||{})}});
+        setLastUpdated(new Date());
+        if(refreshKey>0){ setJustRefreshed(true); setTimeout(()=>setJustRefreshed(false),2000); }
       }catch(e){
         if(!cancelled) setFetchError("Gagal memuat data. Cek koneksi internet lalu coba refresh lagi.");
       }
@@ -4736,13 +4776,13 @@ function CustomerCardPageLoader({phone}){
   );
 
   return <CustomerCardPage phone={phone} settings={data.settings} customers={data.customers} walletLogs={data.walletLogs}
-    onRefresh={()=>setRefreshKey(k=>k+1)} refreshing={refreshing}/>;
+    onRefresh={()=>setRefreshKey(k=>k+1)} refreshing={refreshing} lastUpdated={lastUpdated} justRefreshed={justRefreshed}/>;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
 // CUSTOMER CARD PAGE — halaman publik ?card=PHONE
 // ═════════════════════════════════════════════════════════════════════════════
-function CustomerCardPage({phone,settings,customers,walletLogs,onRefresh,refreshing}){
+function CustomerCardPage({phone,settings,customers,walletLogs,onRefresh,refreshing,lastUpdated,justRefreshed}){
   // Cari customer by ID (format baru, aman) atau phone (backward compat QR lama)
   const param=(phone||"").trim();
   const customer=customers.find(c=>c.id===param)||customers.find(c=>c.phone===param)||customers.find(c=>c.phone===param.replace(/\D/g,""));
@@ -4783,9 +4823,12 @@ function CustomerCardPage({phone,settings,customers,walletLogs,onRefresh,refresh
           <p style={{color:"rgba(255,255,255,.6)",fontSize:12,margin:"4px 0 0"}}>Kartu Saldo Pelanggan</p>
           {onRefresh&&(
             <button onClick={onRefresh} disabled={refreshing}
-              style={{marginTop:10,padding:"6px 16px",background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:20,cursor:refreshing?"not-allowed":"pointer",fontSize:12,fontWeight:600,display:"inline-flex",alignItems:"center",gap:6}}>
-              <span style={{display:"inline-block",animation:refreshing?"spin 1s linear infinite":"none"}}>🔄</span> {refreshing?"Memuat...":"Refresh Data"}
+              style={{marginTop:10,padding:"6px 16px",background:justRefreshed?"#16a34a":"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:20,cursor:refreshing?"not-allowed":"pointer",fontSize:12,fontWeight:600,display:"inline-flex",alignItems:"center",gap:6,transition:"background .3s"}}>
+              <span style={{display:"inline-block",animation:refreshing?"spin 1s linear infinite":"none"}}>{justRefreshed?"✅":"🔄"}</span> {refreshing?"Memuat...":justRefreshed?"Data Terbaru!":"Refresh Data"}
             </button>
+          )}
+          {lastUpdated&&!refreshing&&(
+            <p style={{color:"rgba(255,255,255,.5)",fontSize:11,margin:"6px 0 0"}}>Terakhir diperbarui: {lastUpdated.toLocaleTimeString("id-ID")}</p>
           )}
         </div>
 
@@ -4811,7 +4854,7 @@ function CustomerCardPage({phone,settings,customers,walletLogs,onRefresh,refresh
             </p>
             <div style={{display:"flex",alignItems:"center",gap:6,marginTop:8}}>
               <div style={{width:8,height:8,borderRadius:"50%",background:"#9ca3af"}}/>
-              <p style={{color:"#9ca3af",fontSize:12,margin:0}}>Data saat halaman dibuka — tekan "Refresh Data" untuk update terbaru</p>
+              <p style={{color:"#9ca3af",fontSize:12,margin:0}}>Data per {lastUpdated?lastUpdated.toLocaleTimeString("id-ID"):"-"} — tekan "Refresh Data" untuk update terbaru</p>
             </div>
             {customer.balance<=0&&(
               <div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:10,padding:"8px 12px",marginTop:12}}>
@@ -4985,12 +5028,17 @@ function Modal({title,onClose,children,accent="#ea580c"}){
     window.scrollTo({top:0,behavior:"instant"});
     if(backdropRef.current) backdropRef.current.scrollTop=0;
   },[]);
-  return(
+  // Render lewat Portal langsung ke <body> — supaya position:fixed TIDAK terpengaruh
+  // oleh transform/overflow di elemen induk manapun (penyebab umum modal "terpotong"
+  // di sebagian device/browser mobile, dimana sebagian layar di bawah modal kosong
+  // menampilkan background halaman di belakangnya).
+  return createPortal(
     <div
       ref={backdropRef}
       onClick={e=>{if(e.target===e.currentTarget&&onClose)onClose();}}
       style={{
         position:"fixed",top:0,left:0,right:0,bottom:0,
+        height:"100dvh",
         background:"rgba(0,0,0,.65)",
         zIndex:9999,
         overflowY:"scroll",
@@ -5013,7 +5061,8 @@ function Modal({title,onClose,children,accent="#ea580c"}){
         {title&&<h3 style={{margin:"0 0 14px",fontSize:17,fontWeight:800,color:"#1c0a00"}}>{title}</h3>}
         {children}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

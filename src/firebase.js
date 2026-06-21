@@ -1,4 +1,4 @@
-// ─── GANTI nilai firebaseConfig dengan punya kamu dari Firebase Console ───────
+// ─── GANTI nilai firebaseConfig dengan punya kamu dari Firebase Console 74───────
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, getDoc, setDoc, onSnapshot, runTransaction } from "firebase/firestore";
 
@@ -10,7 +10,6 @@ const firebaseConfig = {
   messagingSenderId: "253411988957",
   appId: "1:253411988957:web:3cea911f6112df072cd234"
 };
-
 
 const app = initializeApp(firebaseConfig);
 const firestore = getFirestore(app);
@@ -63,11 +62,11 @@ export const db = {
     });
   },
 
-  // ── Cek konektivitas cepat ke server (max ~4 detik) ──────────────────────────
-  // Dipakai SEBELUM transaksi apapun dimulai — kalau server tidak terjangkau,
-  // tolak transaksi LANGSUNG dengan pesan jelas, tanpa menunggu retry panjang
-  // dan tanpa menghapus data orderan/keranjang yang sudah diisi kasir.
-  async ping(timeoutMs = 4000) {
+  // ── Cek konektivitas cepat ke server — SATU KALI ping saja (tidak retry) ────
+  // Dipakai SEBELUM transaksi apapun dimulai — kalau server tidak terjangkau dalam
+  // 2.5 detik, langsung dianggap gagal, tanpa menunggu lama dan tanpa menghapus
+  // data orderan/keranjang yang sudah diisi kasir.
+  async ping(timeoutMs = 2500) {
     try {
       await Promise.race([
         getDoc(doc(firestore, "bazaarpos", "bzr_settings")),
