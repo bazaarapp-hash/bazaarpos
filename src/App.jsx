@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────71
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────73 Feature: card pelanggan ringan (non-realtime), session persist, tombol transaksi baru, fix scroll modal, hapus BT, audit save flow
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -479,7 +479,8 @@ async function connectBTPrinter(){
 // ═════════════════════════════════════════════════════════════════════════════
 // MAIN APP
 // ═════════════════════════════════════════════════════════════════════════════
-export default function App(){
+// ─── MainApp: aplikasi utama (superadmin/admin/tenant) dengan realtime subscriptions ──
+function MainApp(){
   const [screen,setScreen]=useState("login");
   const [session,setSession]=useState(null);
   const [tenants,setTenants]=useState([]);
@@ -493,6 +494,43 @@ export default function App(){
   const [orders,setOrders]=useState([]);
   const [loaded,setLoaded]=useState(false);
   const bkRef=useRef(null);
+
+  // ── Session persistence: hindari ter-logout saat refresh tidak sengaja ──────
+  // Pakai sessionStorage (bukan localStorage) supaya tetap aman: sesi hilang
+  // otomatis kalau tab/browser benar-benar ditutup, tapi BERTAHAN saat refresh.
+  const SESSION_KEY="bzr_session";
+  const saveSessionToStorage=(type,data)=>{
+    try{
+      const ref=type==="superadmin"?{type,username:data.username}:{type,id:data.id};
+      sessionStorage.setItem(SESSION_KEY,JSON.stringify(ref));
+    }catch(e){ console.error("Gagal simpan sesi:",e); }
+  };
+  const clearSessionStorage=()=>{ try{ sessionStorage.removeItem(SESSION_KEY); }catch(e){} };
+
+  // Pulihkan sesi setelah data fresh dari server selesai dimuat (supaya validasi
+  // admin/tenant pakai data TERBARU, bukan data lama yang mungkin sudah berubah/dihapus)
+  const sessionRestoredRef=useRef(false);
+  useLayoutEffect(()=>{
+    if(!loaded||sessionRestoredRef.current)return;
+    sessionRestoredRef.current=true;
+    try{
+      const raw=sessionStorage.getItem(SESSION_KEY);
+      if(!raw)return;
+      const ref=JSON.parse(raw);
+      if(ref.type==="superadmin"){
+        if(ref.username===settings.saUser){ setSession({type:"superadmin",data:{username:ref.username}}); setScreen("superadmin"); }
+        else clearSessionStorage(); // username SuperAdmin sudah diubah — minta login ulang
+      } else if(ref.type==="admin"){
+        const a=admins.find(x=>x.id===ref.id);
+        if(a){ setSession({type:"admin",data:a}); setScreen("admin"); }
+        else clearSessionStorage(); // admin sudah dihapus
+      } else if(ref.type==="tenant"){
+        const t=tenants.find(x=>x.id===ref.id);
+        if(t){ setSession({type:"tenant",data:t}); setScreen("tenant"); }
+        else clearSessionStorage(); // tenant sudah dihapus
+      }
+    }catch(e){ console.error("Gagal pulihkan sesi:",e); clearSessionStorage(); }
+  },[loaded]);
 
   useEffect(()=>{
     // Real-time subscriptions — semua panel update otomatis saat ada perubahan
@@ -588,7 +626,7 @@ export default function App(){
     setTimeout(()=>setRefreshing(false),800);
   };
 
-  const logout=()=>{setSession(null);setScreen("login");};
+  const logout=()=>{setSession(null);setScreen("login");clearSessionStorage();};
 
   const restoreBackup=async(bk)=>{
     const newTenants     = Array.isArray(bk.tenants)     ? bk.tenants     : tenants;
@@ -627,11 +665,6 @@ export default function App(){
         <p style={{color:"#ea580c",fontWeight:700,fontSize:18}}>Memuat BazaarPOS…</p></div>
     </div>);
 
-  // Deteksi URL ?card=PHONE untuk halaman kartu pelanggan publik
-  const urlParams=new URLSearchParams(window.location.search);
-  const cardPhone=urlParams.get("card");
-  if(cardPhone) return <CustomerCardPage phone={cardPhone} settings={settings} customers={customers} walletLogs={walletLogs} transactions={transactions} loaded={loaded}/>;
-
   if(screen==="superadmin") return <SuperAdminDashboard {...commonProps}/>;
   if(screen==="admin") return <AdminDashboard {...commonProps} adminData={session?.data}/>;
   if(screen==="tenant"&&session) return(
@@ -649,8 +682,19 @@ export default function App(){
       onLogout={logout}/>);
 
   return <LoginScreen tenants={tenants} admins={admins} settings={settings}
-    onLogin={(type,data)=>{setSession({type,data});setScreen(type);}}/>;
+    onLogin={(type,data)=>{setSession({type,data});setScreen(type);saveSessionToStorage(type,data);}}/>;
 }
+
+// ─── App: titik masuk utama — cek dulu apakah ini link kartu pelanggan publik ──
+// Kalau ya, JANGAN mount MainApp (yang subscribe realtime ke 9 koleksi sekaligus)
+// — cukup load halaman kartu yang ringan, sekali fetch saat dibuka/refresh saja.
+export default function App(){
+  const urlParams=new URLSearchParams(window.location.search);
+  const cardParam=urlParams.get("card");
+  if(cardParam) return <CustomerCardPageLoader phone={cardParam}/>;
+  return <MainApp/>;
+}
+
 
 // ═════════════════════════════════════════════════════════════════════════════
 // LOGIN
@@ -850,7 +894,10 @@ function SuperAdminDashboard(props){
     {k:"backup",i:"💾",l:"Backup"},{k:"reset",i:"🗑️",l:"Reset Data"},
   ];
 
-  const saveBazaar=()=>{onSaveSettings({...settings,bazaarName:bazaarInput});setEditBazaar(false);};
+  const saveBazaar=async()=>{
+    try{ await onSaveSettings({...settings,bazaarName:bazaarInput}); setEditBazaar(false); }
+    catch(e){ alert("❌ GAGAL MENYIMPAN! "+e.message); }
+  };
   const dismissAlerts=async()=>{await onSaveAlerts(allAlerts.map(a=>({...a,read:true})));setShowAlertPop(false);};
 
   return(
@@ -1050,15 +1097,21 @@ function AdminTenants({tenants,transactions,menus,onSaveTenants}){
 
   const openAdd=()=>{setForm({code:"",name:"",password:""});setEditing(null);setShowForm(true);};
   const openEdit=t=>{setForm({code:t.code,name:t.name,password:t.password});setEditing(t.id);setShowForm(true);};
-  const save=()=>{
+  const save=async()=>{
     if(!form.code||!form.name||!form.password){alert("Semua field harus diisi!");return;}
     if(!editing&&tenants.find(t=>t.code===form.code)){alert("Kode tenant sudah ada!");return;}
-    onSaveTenants(editing?tenants.map(t=>t.id===editing?{...t,...form}:t):[...tenants,{id:uid(),...form}]);
-    setShowForm(false);
+    try{
+      await onSaveTenants(editing?tenants.map(t=>t.id===editing?{...t,...form}:t):[...tenants,{id:uid(),...form}]);
+      setShowForm(false);
+    }catch(e){
+      alert(`❌ GAGAL MENYIMPAN! Data tenant tidak tersimpan. Cek koneksi, lalu coba lagi.\n(${e.message})`);
+    }
   };
-  const del=id=>{
+  const del=async id=>{
     if(transactions.some(t=>t.tenantId===id)){alert("❌ Tenant tidak bisa dihapus karena sudah memiliki data transaksi!");return;}
-    if(window.confirm("Hapus tenant ini?")) onSaveTenants(tenants.filter(t=>t.id!==id));
+    if(!window.confirm("Hapus tenant ini?"))return;
+    try{ await onSaveTenants(tenants.filter(t=>t.id!==id)); }
+    catch(e){ alert("❌ GAGAL HAPUS! "+e.message); }
   };
 
   return(
@@ -1315,7 +1368,7 @@ function BackupPanel({tenants,menus,transactions,settings,admins,onSaveSettings,
             <p style={{margin:0,fontWeight:600,color:"#374151"}}>Auto Backup ke Browser</p>
             <p style={{margin:"2px 0 0",color:"#9ca3af",fontSize:12}}>Simpan otomatis ke localStorage browser</p>
           </div>
-          <button onClick={()=>onSaveSettings({...settings,autoBackup:!settings.autoBackup})}
+          <button onClick={async()=>{try{await onSaveSettings({...settings,autoBackup:!settings.autoBackup});}catch(e){alert("❌ Gagal simpan: "+e.message);}}}
             style={{padding:"8px 18px",background:settings.autoBackup?"#16a34a":"#f3f4f6",color:settings.autoBackup?"#fff":"#6b7280",border:"none",borderRadius:20,fontWeight:700,cursor:"pointer",fontSize:13,transition:"all .2s"}}>
             {settings.autoBackup?"🟢 Aktif":"⚫ Nonaktif"}
           </button>
@@ -1323,7 +1376,7 @@ function BackupPanel({tenants,menus,transactions,settings,admins,onSaveSettings,
         {settings.autoBackup&&(
           <div style={{display:"flex",alignItems:"center",gap:12}}>
             <label style={{fontSize:13,color:"#374151",fontWeight:600}}>Interval</label>
-            <select value={settings.backupInterval||30} onChange={e=>onSaveSettings({...settings,backupInterval:parseInt(e.target.value)})}
+            <select value={settings.backupInterval||30} onChange={async e=>{try{await onSaveSettings({...settings,backupInterval:parseInt(e.target.value)});}catch(err){alert("❌ Gagal simpan: "+err.message);}}}
               style={{border:"2px solid #e5e7eb",borderRadius:10,padding:"8px 12px",fontSize:14,color:"#111",outline:"none",cursor:"pointer"}}>
               {[5,10,15,30,60].map(v=><option key={v} value={v}>{v} menit</option>)}
             </select>
@@ -2941,10 +2994,11 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                           <label style={{display:"flex",alignItems:"center",gap:6,cursor:hasUsage?"not-allowed":"pointer",userSelect:"none"}}
                             title={hasUsage?`Sudah ada ${usedQty} PO untuk menu ini — tidak bisa nonaktifkan kuota`:""}>
                             <input type="checkbox" checked={!!m.poLimit} disabled={hasUsage}
-                              onChange={()=>{
+                              onChange={async()=>{
                                 if(hasUsage)return;
                                 const newLimit=m.poLimit?null:Math.max(100,usedQty+10);
-                                onSaveMenus(menus.map(x=>x.id===m.id?{...x,poLimit:newLimit}:x));
+                                try{ await onSaveMenus(menus.map(x=>x.id===m.id?{...x,poLimit:newLimit}:x)); }
+                                catch(e){ alert("❌ Gagal simpan kuota: "+e.message); }
                               }}
                               style={{width:14,height:14,cursor:hasUsage?"not-allowed":"pointer",accentColor:"#ea580c",opacity:hasUsage?0.5:1}}/>
                             <span style={{fontSize:11,color:hasUsage?"#9ca3af":"#6b7280",fontWeight:600}}>Batas Kuota</span>
@@ -2953,7 +3007,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                           {m.poLimit&&(
                             <div style={{display:"flex",alignItems:"center",gap:6,marginTop:5}}>
                               <input type="number" key={m.poLimit} defaultValue={m.poLimit} min="1"
-                                onBlur={e=>{
+                                onBlur={async e=>{
                                   const n=parseInt(e.target.value)||0;
                                   if(n===m.poLimit)return; // tidak berubah
                                   if(n<=usedQty){
@@ -2962,7 +3016,8 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                                     return;
                                   }
                                   if(window.confirm(`Anda yakin mengubah jumlah kuota PO dari ${m.poLimit} menjadi ${n}?`)){
-                                    onSaveMenus(menus.map(x=>x.id===m.id?{...x,poLimit:n}:x));
+                                    try{ await onSaveMenus(menus.map(x=>x.id===m.id?{...x,poLimit:n}:x)); }
+                                    catch(err){ alert("❌ Gagal simpan kuota: "+err.message); e.target.value=m.poLimit; }
                                   } else {
                                     e.target.value=m.poLimit;
                                   }
@@ -3959,8 +4014,6 @@ function AdminSummary({tenants,transactions,settings,filterDate,setFilterDate}){
 function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,customers,walletLogs,orders,onSaveMenus,onSaveTx,onSaveCustomers,onSaveWalletLogs,onSaveOrders,onUpdateCustomerBalance,onCheckConnection,onSaveAlerts,alerts,onRefresh,refreshing,onLogout}){
   const [tab,setTab]=useState("pos");
   const {BackConfirmModal}=useBackConfirm(true);
-  const [btPrinter,setBtPrinter]=useState(null);
-  const [btConnecting,setBtConnecting]=useState(false);
   const [isOnline,setIsOnline]=useState(navigator.onLine);
   const [showEmerg,setShowEmerg]=useState(false);
   const [emergMsg,setEmergMsg]=useState("");
@@ -3970,8 +4023,6 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
     window.addEventListener("online",on); window.addEventListener("offline",off);
     return()=>{window.removeEventListener("online",on);window.removeEventListener("offline",off);};
   },[]);
-
-  const connectBT=async()=>{setBtConnecting(true);const p=await connectBTPrinter();if(p){setBtPrinter(p);alert(`✅ Terhubung ke: ${p.name}`);}setBtConnecting(false);};
 
   const sendEmergency=async()=>{
     if(!emergMsg.trim()){alert("Tulis pesan darurat terlebih dahulu!");return;}
@@ -4000,7 +4051,6 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
           <div>
             <div style={{display:"flex",gap:8,marginBottom:4}}>
               <span style={{background:"rgba(255,255,255,.2)",color:"#fff",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20}}>{tenant.code}</span>
-              {btPrinter&&<span style={{background:"rgba(255,255,255,.2)",color:"#fff",fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>🖨️ {btPrinter.name}</span>}
             </div>
             <h1 style={{color:"#fff",fontSize:18,fontWeight:800,margin:0}}>{tenant.name}</h1>
             <p style={{color:"#bbf7d0",fontSize:11,margin:"2px 0 0"}}>Tenant App • {todayStr()}</p>
@@ -4021,9 +4071,6 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
           <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
             <span style={{color:"#fff",fontSize:15,fontWeight:800}}>{settings?.bazaarName}</span>
             <button onClick={()=>setShowEmerg(true)} className="pulse" style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>🆘</button>
-            <button onClick={connectBT} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}} disabled={btConnecting}>
-              {btConnecting?"⏳":"🖨️"} {btPrinter?"Ganti BT":"Koneksi BT"}
-            </button>
             <button onClick={onRefresh} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}} title="Refresh" className={refreshing?"spinning":""}>🔄</button>
             <button onClick={()=>{if(window.confirm("Yakin ingin keluar dari aplikasi?"))onLogout();}} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:8,padding:"6px 10px",cursor:"pointer",fontSize:12,fontWeight:600}}>Keluar</button>
           </div>
@@ -4222,6 +4269,7 @@ ${waSignature(tenant.name)}`;
         if(sent){
           setSendStatus("✅ Struk terkirim ke WhatsApp pelanggan!");
           setPrinted(true);
+          setTimeout(()=>{setLastNota(null);setPrinted(false);setSendStatus("");},1500);
           return;
         }
       }
@@ -4236,9 +4284,10 @@ ${waSignature(tenant.name)}`;
         setSendStatus("✅ WhatsApp dibuka dengan struk.");
       }
       setPrinted(true);
+      setTimeout(()=>{setLastNota(null);setPrinted(false);setSendStatus("");},1500);
     }catch(e){
       console.error("doPrint error:",e);
-      setSendStatus("⚠️ Error: "+e.message);
+      setSendStatus("⚠️ Gagal kirim: "+e.message+" — coba lagi atau pilih Transaksi Baru.");
       setPrinted(true);
     }
   };
@@ -4332,11 +4381,11 @@ ${waSignature(tenant.name)}`;
         <Modal title="" onClose={()=>{}}>
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,background:"#f0fdf4",borderRadius:12,padding:"10px 14px"}}>
             <div style={{fontSize:28}}>
-              {"🪙"}
+              {"✅"}
             </div>
             <div style={{flex:1}}>
-              <p style={{margin:0,fontWeight:800,fontSize:15,color:"#14532d"}}>Transaksi Berhasil!</p>
-              <p style={{margin:"2px 0 0",fontSize:12,color:"#6b7280"}}>Nota: <strong style={{color:"#1c0a00"}}>{lastNota.nota}</strong></p>
+              <p style={{margin:0,fontWeight:800,fontSize:15,color:"#14532d"}}>Transaksi Selesai</p>
+              <p style={{margin:"2px 0 0",fontSize:11,color:"#16a34a",fontWeight:600}}>Tersimpan di server • Nota: <strong style={{color:"#1c0a00"}}>{lastNota.nota}</strong></p>
             </div>
             <PayBadge method={lastNota.paymentMethod}/>
           </div>
@@ -4364,17 +4413,23 @@ ${waSignature(tenant.name)}`;
           </div>
 
           {sendStatus&&<div style={{background:sendStatus.startsWith("✅")?"#f0fdf4":sendStatus.startsWith("📥")?"#eff6ff":"#fef3c7",border:`1px solid ${sendStatus.startsWith("✅")?"#bbf7d0":sendStatus.startsWith("📥")?"#bae6fd":"#fbbf24"}`,borderRadius:10,padding:"8px 12px",marginBottom:8,fontSize:12,fontWeight:600,color:sendStatus.startsWith("✅")?"#16a34a":sendStatus.startsWith("📥")?"#0284c7":"#92400e",textAlign:"center"}}>{sendStatus}</div>}
-          <button onClick={doPrint}
-            style={{width:"100%",padding:"12px",background:"#16a34a",color:"#fff",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:"pointer",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+
+          <p style={{textAlign:"center",color:"#9ca3af",fontSize:11,margin:"0 0 8px"}}>Pilih salah satu untuk melanjutkan:</p>
+
+          {/* Pilihan utama (default, lebih besar): lanjut tanpa kirim WA — pelanggan cek riwayat di link kartunya sendiri */}
+          <button onClick={()=>{setLastNota(null);setPrinted(false);setSendStatus("");}}
+            style={{width:"100%",padding:"16px",background:"#16a34a",color:"#fff",border:"none",borderRadius:13,fontSize:16,fontWeight:800,cursor:"pointer",marginBottom:10,display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontFamily:"'Plus Jakarta Sans',sans-serif",boxShadow:"0 4px 14px rgba(22,163,74,.35)"}}
             onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
-            {sendStatus.includes("⏳")?"⏳ Memproses...":printed?"🔄 Kirim Ulang Struk":"💬 Kirim Struk via WhatsApp"}
+            ➕ Transaksi Baru
           </button>
-          <button onClick={()=>{setLastNota(null);setPrinted(false);setSendStatus("");}} disabled={!printed}
-            style={{width:"100%",padding:"12px",background:printed?"#16a34a":"#e5e7eb",color:printed?"#fff":"#9ca3af",border:"none",borderRadius:11,fontSize:14,fontWeight:700,cursor:printed?"pointer":"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif",transition:"all .2s"}}
-            onMouseOver={e=>{if(printed)e.currentTarget.style.background="#15803d";}} onMouseOut={e=>{if(printed)e.currentTarget.style.background="#16a34a";}}>
-            {printed?"➕ Transaksi Baru":"🔒 Cetak Struk Dulu"}
+          <p style={{textAlign:"center",color:"#9ca3af",fontSize:11,margin:"-4px 0 10px"}}>Pelanggan bisa cek struk di link kartu saldonya</p>
+
+          {/* Pilihan kedua: kirim struk WA, lalu otomatis lanjut transaksi baru */}
+          <button onClick={doPrint} disabled={sendStatus.includes("⏳")}
+            style={{width:"100%",padding:"11px",background:"#fff",color:"#16a34a",border:"2px solid #bbf7d0",borderRadius:11,fontSize:13,fontWeight:700,cursor:sendStatus.includes("⏳")?"not-allowed":"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+            onMouseOver={e=>{if(!sendStatus.includes("⏳"))e.currentTarget.style.background="#f0fdf4";}} onMouseOut={e=>e.currentTarget.style.background="#fff"}>
+            {sendStatus.includes("⏳")?"⏳ Mengirim...":printed?"🔄 Kirim Ulang Struk":"💬 Kirim Struk via WhatsApp"}
           </button>
-          {!printed&&<p style={{textAlign:"center",color:"#9ca3af",fontSize:11,margin:"5px 0 0"}}>Cetak struk terlebih dahulu</p>}
         </Modal>
       )}
 
@@ -4626,19 +4681,39 @@ ${waSignature(tenant.name)}`;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// CUSTOMER CARD PAGE — halaman publik ?card=PHONE
+// CUSTOMER CARD PAGE LOADER — fetch SEKALI SAJA (bukan realtime) saat halaman
+// dibuka atau di-refresh, untuk meringankan beban koneksi ke database. Halaman
+// publik ini TIDAK subscribe ke 9 koleksi sekaligus seperti aplikasi utama —
+// hanya ambil 3 dokumen yang benar-benar dibutuhkan untuk kartu pelanggan.
 // ═════════════════════════════════════════════════════════════════════════════
-function CustomerCardPage({phone,settings,customers,walletLogs,transactions,loaded}){
-  // Cari customer by ID (format baru, aman) atau phone (backward compat QR lama)
-  const param=(phone||"").trim();
-  const customer=customers.find(c=>c.id===param)||customers.find(c=>c.phone===param)||customers.find(c=>c.phone===param.replace(/\D/g,""));
-  const bazaarName=settings?.bazaarName||"BazaarPOS";
-  // Share link selalu pakai customer ID — tidak expose nomor HP
-  const shareUrl=customer?`${window.location.origin}${window.location.pathname}?card=${customer.id}`:window.location.href;
-  const waShare=`https://wa.me/?text=${encodeURIComponent(`Cek saldo kamu di ${bazaarName}:\n${shareUrl}`)}`;
-  const [expandedTx,setExpandedTx]=useState(null);
+function CustomerCardPageLoader({phone}){
+  const [data,setData]=useState(null);
+  const [loaded,setLoaded]=useState(false);
+  const [fetchError,setFetchError]=useState("");
+  const [refreshKey,setRefreshKey]=useState(0);
+  const [refreshing,setRefreshing]=useState(false);
 
-  const idr2=n=>new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n||0);
+  useEffect(()=>{
+    let cancelled=false;
+    (async()=>{
+      if(refreshKey>0) setRefreshing(true); else setLoaded(false);
+      setFetchError("");
+      try{
+        // Fetch sekali — hanya 3 dokumen yang dipakai kartu pelanggan (bukan 9 realtime listener)
+        const [customers,walletLogs,settings]=await Promise.all([
+          db.get("bzr_customers"),
+          db.get("bzr_wallet_logs"),
+          db.get("bzr_settings"),
+        ]);
+        if(cancelled)return;
+        setData({customers:customers||[],walletLogs:walletLogs||[],settings:{...DEF,...(settings||{})}});
+      }catch(e){
+        if(!cancelled) setFetchError("Gagal memuat data. Cek koneksi internet lalu coba refresh lagi.");
+      }
+      if(!cancelled){ setLoaded(true); setRefreshing(false); }
+    })();
+    return()=>{cancelled=true;};
+  },[refreshKey]);
 
   if(!loaded) return(
     <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -4648,6 +4723,37 @@ function CustomerCardPage({phone,settings,customers,walletLogs,transactions,load
       </div>
     </div>
   );
+
+  if(fetchError) return(
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{background:"#fff",borderRadius:24,padding:40,maxWidth:380,width:"100%",textAlign:"center"}}>
+        <div style={{fontSize:52,marginBottom:12}}>📡</div>
+        <h2 style={{color:"#dc2626",margin:"0 0 8px"}}>Gagal Memuat Data</h2>
+        <p style={{color:"#6b7280",fontSize:14,marginBottom:16}}>{fetchError}</p>
+        <button onClick={()=>setRefreshKey(k=>k+1)} style={{padding:"10px 20px",background:"#4c1d95",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14}}>🔄 Coba Lagi</button>
+      </div>
+    </div>
+  );
+
+  return <CustomerCardPage phone={phone} settings={data.settings} customers={data.customers} walletLogs={data.walletLogs}
+    onRefresh={()=>setRefreshKey(k=>k+1)} refreshing={refreshing}/>;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// CUSTOMER CARD PAGE — halaman publik ?card=PHONE
+// ═════════════════════════════════════════════════════════════════════════════
+function CustomerCardPage({phone,settings,customers,walletLogs,onRefresh,refreshing}){
+  // Cari customer by ID (format baru, aman) atau phone (backward compat QR lama)
+  const param=(phone||"").trim();
+  const customer=customers.find(c=>c.id===param)||customers.find(c=>c.phone===param)||customers.find(c=>c.phone===param.replace(/\D/g,""));
+  const bazaarName=settings?.bazaarName||"BazaarPOS";
+  // Share link selalu pakai customer ID — tidak expose nomor HP
+  const shareUrl=customer?`${window.location.origin}${window.location.pathname}?card=${customer.id}`:window.location.href;
+  const waShare=`https://wa.me/?text=${encodeURIComponent(`Cek saldo kamu di ${bazaarName}:\n${shareUrl}`)}`;
+  const [expandedTx,setExpandedTx]=useState(null);
+  const [showAllTx,setShowAllTx]=useState(false);
+
+  const idr2=n=>new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n||0);
 
   if(!customer) return(
     <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
@@ -4675,6 +4781,12 @@ function CustomerCardPage({phone,settings,customers,walletLogs,transactions,load
         <div style={{textAlign:"center",marginBottom:20}}>
           <p style={{color:"rgba(255,255,255,.8)",fontSize:14,margin:0,fontWeight:600}}>🏪 {bazaarName}</p>
           <p style={{color:"rgba(255,255,255,.6)",fontSize:12,margin:"4px 0 0"}}>Kartu Saldo Pelanggan</p>
+          {onRefresh&&(
+            <button onClick={onRefresh} disabled={refreshing}
+              style={{marginTop:10,padding:"6px 16px",background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:20,cursor:refreshing?"not-allowed":"pointer",fontSize:12,fontWeight:600,display:"inline-flex",alignItems:"center",gap:6}}>
+              <span style={{display:"inline-block",animation:refreshing?"spin 1s linear infinite":"none"}}>🔄</span> {refreshing?"Memuat...":"Refresh Data"}
+            </button>
+          )}
         </div>
 
         {/* Card utama */}
@@ -4698,8 +4810,8 @@ function CustomerCardPage({phone,settings,customers,walletLogs,transactions,load
               {idr2(customer.balance)}
             </p>
             <div style={{display:"flex",alignItems:"center",gap:6,marginTop:8}}>
-              <div style={{width:8,height:8,borderRadius:"50%",background:"#16a34a",animation:"pulse 2s infinite"}}/>
-              <p style={{color:"#9ca3af",fontSize:12,margin:0}}>Saldo diperbarui secara real-time</p>
+              <div style={{width:8,height:8,borderRadius:"50%",background:"#9ca3af"}}/>
+              <p style={{color:"#9ca3af",fontSize:12,margin:0}}>Data saat halaman dibuka — tekan "Refresh Data" untuk update terbaru</p>
             </div>
             {customer.balance<=0&&(
               <div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:10,padding:"8px 12px",marginTop:12}}>
@@ -4733,45 +4845,54 @@ function CustomerCardPage({phone,settings,customers,walletLogs,transactions,load
 
             {/* Recent transactions */}
             {(()=>{
-              const recentTx=(walletLogs||[]).filter(l=>l.customerId===customer.id&&l.type==="payment").sort((a,b)=>b.timestamp?.localeCompare(a.timestamp)||0).slice(0,5);
-              return recentTx.length>0?(
+              const allTx=(walletLogs||[]).filter(l=>l.customerId===customer.id&&l.type==="payment").sort((a,b)=>b.timestamp?.localeCompare(a.timestamp)||0);
+              const visibleTx=showAllTx?allTx:allTx.slice(0,5);
+              return allTx.length>0?(
                 <div style={{marginBottom:14}}>
                   <p style={{color:"#374151",fontSize:13,fontWeight:700,margin:"0 0 8px"}}>🛒 Transaksi Terakhir <span style={{color:"#9ca3af",fontWeight:400,fontSize:12}}>(tap untuk detail)</span></p>
-                  {recentTx.map(tx=>(
-                    <div key={tx.id} style={{borderRadius:10,marginBottom:6,overflow:"hidden",border:"1px solid #f3f4f6"}}>
-                      {/* Header baris - bisa diklik */}
-                      <button onClick={()=>setExpandedTx(expandedTx===tx.id?null:tx.id)}
-                        style={{width:"100%",background:"#f9fafb",border:"none",padding:"9px 12px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-                        <div style={{textAlign:"left"}}>
-                          <p style={{margin:0,color:"#374151",fontSize:13,fontWeight:600}}>{tx.tenantName||"Tenant"}</p>
-                          <p style={{margin:"1px 0 0",color:"#9ca3af",fontSize:11}}>{tx.nota} • {tx.date} {tx.time}</p>
-                        </div>
-                        <div style={{display:"flex",alignItems:"center",gap:8}}>
-                          <p style={{margin:0,color:"#ea580c",fontWeight:800,fontSize:14}}>-{idr(tx.amount)}</p>
-                          <span style={{color:"#9ca3af",fontSize:12,transform:expandedTx===tx.id?"rotate(180deg)":"rotate(0)",transition:"transform .2s",display:"inline-block"}}>▼</span>
-                        </div>
-                      </button>
-                      {/* Detail item - muncul saat diklik */}
-                      {expandedTx===tx.id&&(
-                        <div style={{background:"#fff",padding:"10px 12px",borderTop:"1px dashed #f3f4f6"}}>
-                          {(()=>{
-                            const items=tx.items||(transactions||[]).find(t=>t.nota===tx.nota)?.items||[];
-                            return items.length>0?items.map((it,i)=>(
-                              <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12,borderBottom:i<items.length-1?"1px dashed #f9fafb":"none"}}>
-                                <span style={{color:"#374151"}}><span style={{color:"#9ca3af"}}>[{it.menuCode}]</span> {it.menuName} x{it.qty}</span>
-                                <span style={{fontWeight:700,color:"#1c0a00"}}>{idr(it.qty*it.price)}</span>
-                              </div>
-                            )):<p style={{color:"#9ca3af",fontSize:12,margin:0,textAlign:"center"}}>Detail tidak tersedia</p>;
-                          })()}
-                          <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:"2px solid #f3f4f6",fontWeight:800,fontSize:13}}>
-                            <span style={{color:"#374151"}}>TOTAL</span>
-                            <span style={{color:"#ea580c"}}>{idr(tx.amount)}</span>
+                  <div style={{maxHeight:showAllTx?320:"none",overflowY:showAllTx?"auto":"visible",WebkitOverflowScrolling:"touch",paddingRight:showAllTx?4:0}}>
+                    {visibleTx.map(tx=>(
+                      <div key={tx.id} style={{borderRadius:10,marginBottom:6,overflow:"hidden",border:"1px solid #f3f4f6"}}>
+                        {/* Header baris - bisa diklik */}
+                        <button onClick={()=>setExpandedTx(expandedTx===tx.id?null:tx.id)}
+                          style={{width:"100%",background:"#f9fafb",border:"none",padding:"9px 12px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                          <div style={{textAlign:"left"}}>
+                            <p style={{margin:0,color:"#374151",fontSize:13,fontWeight:600}}>{tx.tenantName||"Tenant"}</p>
+                            <p style={{margin:"1px 0 0",color:"#9ca3af",fontSize:11}}>{tx.nota} • {tx.date} {tx.time}</p>
                           </div>
-                          <p style={{color:"#9ca3af",fontSize:11,margin:"6px 0 0",textAlign:"center"}}>Sisa saldo: <strong style={{color:"#4c1d95"}}>{idr(tx.balanceAfter)}</strong></p>
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                          <div style={{display:"flex",alignItems:"center",gap:8}}>
+                            <p style={{margin:0,color:"#ea580c",fontWeight:800,fontSize:14}}>-{idr(tx.amount)}</p>
+                            <span style={{color:"#9ca3af",fontSize:12,transform:expandedTx===tx.id?"rotate(180deg)":"rotate(0)",transition:"transform .2s",display:"inline-block"}}>▼</span>
+                          </div>
+                        </button>
+                        {/* Detail item - muncul saat diklik */}
+                        {expandedTx===tx.id&&(
+                          <div style={{background:"#fff",padding:"10px 12px",borderTop:"1px dashed #f3f4f6"}}>
+                            {(()=>{
+                              const items=tx.items||[];
+                              return items.length>0?items.map((it,i)=>(
+                                <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12,borderBottom:i<items.length-1?"1px dashed #f9fafb":"none"}}>
+                                  <span style={{color:"#374151"}}><span style={{color:"#9ca3af"}}>[{it.menuCode}]</span> {it.menuName} x{it.qty}</span>
+                                  <span style={{fontWeight:700,color:"#1c0a00"}}>{idr(it.qty*it.price)}</span>
+                                </div>
+                              )):<p style={{color:"#9ca3af",fontSize:12,margin:0,textAlign:"center"}}>Detail tidak tersedia</p>;
+                            })()}
+                            <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:"2px solid #f3f4f6",fontWeight:800,fontSize:13}}>
+                              <span style={{color:"#374151"}}>TOTAL</span>
+                              <span style={{color:"#ea580c"}}>{idr(tx.amount)}</span>
+                            </div>
+                            <p style={{color:"#9ca3af",fontSize:11,margin:"6px 0 0",textAlign:"center"}}>Sisa saldo: <strong style={{color:"#4c1d95"}}>{idr(tx.balanceAfter)}</strong></p>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {allTx.length>5&&(
+                    <button onClick={()=>setShowAllTx(p=>!p)}
+                      style={{width:"100%",padding:"8px",background:"#f5f3ff",color:"#7c3aed",border:"1px solid #ddd6fe",borderRadius:10,cursor:"pointer",fontSize:12,fontWeight:700,marginTop:4,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                      {showAllTx?"▲ Tampilkan 5 Terbaru Saja":`▼ Lihat Semua Transaksi (${allTx.length})`}
+                    </button>
+                  )}
                 </div>
               ):null;
             })()}
@@ -4855,12 +4976,18 @@ function useBackConfirm(active=true){
 // SHARED COMPONENTS
 // ═════════════════════════════════════════════════════════════════════════════
 function Modal({title,onClose,children,accent="#ea580c"}){
+  const backdropRef=useRef(null);
   useEffect(()=>{
-    // Scroll ke atas otomatis saat modal muncul
+    // Reset scroll: window DAN scroll internal backdrop modal itu sendiri.
+    // Backdrop pakai overflowY:"scroll" sendiri (position:fixed), jadi window.scrollTo
+    // saja tidak cukup — backdrop bisa membawa posisi scroll dari modal sebelumnya,
+    // membuat bagian atas modal baru (judul/header) tidak terlihat sampai discroll manual.
     window.scrollTo({top:0,behavior:"instant"});
+    if(backdropRef.current) backdropRef.current.scrollTop=0;
   },[]);
   return(
     <div
+      ref={backdropRef}
       onClick={e=>{if(e.target===e.currentTarget&&onClose)onClose();}}
       style={{
         position:"fixed",top:0,left:0,right:0,bottom:0,
