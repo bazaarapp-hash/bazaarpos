@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────83
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────84
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -606,7 +606,7 @@ function MainApp(){
   useEffect(()=>{
     clearInterval(bkRef.current);
     if(!settings.autoBackup)return;
-    bkRef.current=setInterval(()=>doLocalBackup({tenants,menus,transactions,settings,admins}),(settings.backupInterval||30)*60*1000);
+    bkRef.current=setInterval(()=>doLocalBackup({tenants,menus,transactions,settings,admins,customers,walletLogs,orders}),(settings.backupInterval||30)*60*1000);
     return()=>clearInterval(bkRef.current);
   },[settings.autoBackup,settings.backupInterval,tenants,menus,transactions,admins]);
 
@@ -682,20 +682,29 @@ function MainApp(){
   const logout=()=>{setSession(null);setScreen("login");clearSessionStorage();};
 
   const restoreBackup=async(bk)=>{
-    const newTenants     = Array.isArray(bk.tenants)     ? bk.tenants     : tenants;
-    const newMenus       = Array.isArray(bk.menus)       ? bk.menus       : menus;
-    const newTx          = Array.isArray(bk.transactions) ? bk.transactions : transactions;
-    const newAdmins      = Array.isArray(bk.admins)      ? bk.admins      : admins;
-    const newSettings    = bk.settings ? {...DEF,...bk.settings} : settings;
-    const newCustomers   = Array.isArray(bk.customers)   ? bk.customers   : customers;
-    const newWalletLogs  = Array.isArray(bk.walletLogs)  ? bk.walletLogs  : walletLogs;
+    const newTenants    = Array.isArray(bk.tenants)      ? bk.tenants      : tenants;
+    const newMenus      = Array.isArray(bk.menus)        ? bk.menus        : menus;
+    const newTx         = Array.isArray(bk.transactions) ? bk.transactions  : transactions;
+    const newAdmins     = Array.isArray(bk.admins)       ? bk.admins       : admins;
+    const newSettings   = bk.settings ? {...DEF,...bk.settings} : settings;
+    const newCustomers  = Array.isArray(bk.customers)    ? bk.customers    : customers;
+    const newWalletLogs = Array.isArray(bk.walletLogs)   ? bk.walletLogs   : walletLogs;
+    const newOrders     = Array.isArray(bk.orders)       ? bk.orders       : orders;
+
+    // Update state lokal dulu (UI langsung responsif)
     setTenants(newTenants); setMenus(newMenus); setTransactions(newTx);
     setAdmins(newAdmins);   setSettings(newSettings);
-    setCustomers(newCustomers); setWalletLogs(newWalletLogs);
-    await db.set("bzr_tenants",newTenants); await db.set("bzr_menus",newMenus);
-    await db.set("bzr_transactions",newTx); await db.set("bzr_admins",newAdmins);
-    await db.set("bzr_settings",newSettings);
-    await db.set("bzr_customers",newCustomers); await db.set("bzr_wallet_logs",newWalletLogs);
+    setCustomers(newCustomers); setWalletLogs(newWalletLogs); setOrders(newOrders);
+
+    // Simpan semua ke Firestore
+    await db.set("bzr_tenants",     newTenants);
+    await db.set("bzr_menus",       newMenus);
+    await db.set("bzr_transactions",newTx);
+    await db.set("bzr_admins",      newAdmins);
+    await db.set("bzr_settings",    newSettings);
+    await db.set("bzr_customers",   newCustomers);
+    await db.set("bzr_wallet_logs", newWalletLogs);
+    await db.set("bzr_orders",      newOrders);
   };
 
   const unreadAlerts=alerts.filter(a=>!a.read);
@@ -1335,7 +1344,7 @@ function SettingsPanel({settings,onSaveSettings}){
 }
 
 // ─── Backup Panel ─────────────────────────────────────────────────────────────
-function BackupPanel({tenants,menus,transactions,settings,admins,onSaveSettings,onRestoreBackup,isSuperAdmin}){
+function BackupPanel({tenants,menus,transactions,settings,admins,customers,walletLogs,orders,onSaveSettings,onRestoreBackup,isSuperAdmin}){
   const [backups,setBackups]=useState(getLocalBackups());
   const [restoring,setRestoring]=useState(false);
   const [previewData,setPreviewData]=useState(null);
@@ -1345,7 +1354,8 @@ function BackupPanel({tenants,menus,transactions,settings,admins,onSaveSettings,
   const [restoredSummary,setRestoredSummary]=useState(null);
   const [backupMsg,setBackupMsg]=useState("");
   const fileRef=useRef(null);
-  const data={tenants,menus,transactions,settings,admins};
+  // Semua koleksi ikut di-backup
+  const data={tenants,menus,transactions,settings,admins,customers,walletLogs,orders};
 
   // ── Backup manual ──────────────────────────────────────────────────────────
   const manual=()=>{
@@ -1396,6 +1406,9 @@ function BackupPanel({tenants,menus,transactions,settings,admins,onSaveSettings,
         menus:(previewData.menus||[]).length,
         transactions:(previewData.transactions||[]).length,
         admins:(previewData.admins||[]).length,
+        customers:(previewData.customers||[]).length,
+        walletLogs:(previewData.walletLogs||[]).length,
+        orders:(previewData.orders||[]).length,
         backupTime:previewData.backupTime,
       });
       setRestoreStep(2);
@@ -1519,11 +1532,15 @@ function BackupPanel({tenants,menus,transactions,settings,admins,onSaveSettings,
           {/* Statistik isi backup */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:16}}>
             {[
-              {l:"Tenant",v:(previewData.tenants||[]).length,c:"#ea580c",i:"🏪"},
-              {l:"Menu",  v:(previewData.menus||[]).length,  c:"#16a34a",i:"🍽️"},
-              {l:"Transaksi",v:(previewData.transactions||[]).length,c:"#0284c7",i:"📋"},
-              {l:"Admin", v:(previewData.admins||[]).length,  c:"#7c3aed",i:"🔑"},
-            ].map(s=>(
+              {l:"Tenant",     v:(previewData.tenants||[]).length,      c:"#ea580c",i:"🏪"},
+              {l:"Menu",       v:(previewData.menus||[]).length,        c:"#16a34a",i:"🍽️"},
+              {l:"Transaksi",  v:(previewData.transactions||[]).length, c:"#0284c7",i:"📋"},
+              {l:"Admin",      v:(previewData.admins||[]).length,       c:"#7c3aed",i:"🔑"},
+              {l:"Pelanggan",  v:(previewData.customers||[]).length,    c:"#ea580c",i:"👥"},
+              {l:"Log Saldo",  v:(previewData.walletLogs||[]).length,   c:"#16a34a",i:"🪙"},
+              {l:"Pre-Order",  v:(previewData.orders||[]).length,       c:"#0284c7",i:"📦"},
+              {l:"",v:"",c:"",i:""},
+            ].filter(s=>s.l).map(s=>(
               <div key={s.l} style={{background:"#f9fafb",borderRadius:12,padding:"10px 8px",textAlign:"center"}}>
                 <div style={{fontSize:18,marginBottom:4}}>{s.i}</div>
                 <p style={{margin:0,fontWeight:800,color:s.c,fontSize:17}}>{s.v}</p>
@@ -1593,10 +1610,13 @@ function BackupPanel({tenants,menus,transactions,settings,admins,onSaveSettings,
           {restoredSummary.backupTime&&<p style={{color:"#9ca3af",fontSize:13,margin:"0 0 16px"}}>Dari backup: <strong>{new Date(restoredSummary.backupTime).toLocaleString("id-ID")}</strong></p>}
           <div style={{background:"#f0fdf4",borderRadius:12,padding:"12px 16px",marginBottom:20,textAlign:"left"}}>
             {[
-              {l:"Tenant",    v:restoredSummary.tenants,    i:"🏪"},
-              {l:"Menu",      v:restoredSummary.menus,      i:"🍽️"},
-              {l:"Transaksi", v:restoredSummary.transactions,i:"📋"},
-              {l:"Admin",     v:restoredSummary.admins,     i:"🔑"},
+              {l:"Tenant",     v:restoredSummary.tenants,      i:"🏪"},
+              {l:"Menu",       v:restoredSummary.menus,        i:"🍽️"},
+              {l:"Transaksi",  v:restoredSummary.transactions,  i:"📋"},
+              {l:"Admin",      v:restoredSummary.admins,       i:"🔑"},
+              {l:"Pelanggan",  v:restoredSummary.customers,    i:"👥"},
+              {l:"Log Saldo",  v:restoredSummary.walletLogs,   i:"🪙"},
+              {l:"Pre-Order",  v:restoredSummary.orders,       i:"📦"},
             ].map(s=>(
               <div key={s.l} style={{display:"flex",justifyContent:"space-between",padding:"5px 0",fontSize:13,borderBottom:"1px dashed #dcfce7"}}>
                 <span style={{color:"#374151"}}>{s.i} {s.l}</span>
