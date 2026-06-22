@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────77
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────78
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -1933,6 +1933,9 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
   const [payMethod,setPayMethod]=useState("cash"); // "cash" | "transfer"
   const [photoCapture,setPhotoCapture]=useState(null); // base64 gambar bukti transfer (lokal device)
   const photoInputRef=useRef(null);
+  const videoCamRef=useRef(null);   // live camera preview
+  const streamRef=useRef(null);     // MediaStream reference
+  const [showCamera,setShowCamera]=useState(false);
   const [search,setSearch]=useState("");
   const [sending,setSending]=useState(false);
   const submittingRef=useRef(false);
@@ -1980,6 +1983,44 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
   const savePhoto=(logId,photo)=>{try{localStorage.setItem(`bzr_photo_${logId}`,photo);}catch(e){console.warn("Gagal simpan foto:",e);}};
   const getPhoto=(logId)=>{try{return localStorage.getItem(`bzr_photo_${logId}`);}catch(e){return null;}};
   const deletePhoto=(logId)=>{try{localStorage.removeItem(`bzr_photo_${logId}`);}catch(e){}};
+
+  // ─ Kamera langsung (getUserMedia) — bekerja di HP DAN laptop/PC berkamera ─────
+  const openCamera=async()=>{
+    setShowCamera(true);
+    try{
+      // Coba kamera belakang dulu (HP), otomatis fallback ke webcam (laptop/PC)
+      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"},audio:false});
+      streamRef.current=stream;
+      if(videoCamRef.current){videoCamRef.current.srcObject=stream;videoCamRef.current.play();}
+    }catch(e1){
+      try{
+        // Fallback: kamera manapun yang tersedia (webcam laptop/PC)
+        const stream=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
+        streamRef.current=stream;
+        if(videoCamRef.current){videoCamRef.current.srcObject=stream;videoCamRef.current.play();}
+      }catch(e2){
+        setShowCamera(false);
+        showMsg("❌ Gagal akses kamera: "+e2.message+". Gunakan tombol 'Pilih File' sebagai alternatif.",6000);
+      }
+    }
+  };
+  const closeCamera=()=>{
+    if(streamRef.current){streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;}
+    setShowCamera(false);
+  };
+  const captureFromCamera=()=>{
+    const video=videoCamRef.current; if(!video)return;
+    // Ambil frame dari video, kompres, simpan ke state
+    const raw=document.createElement("canvas");
+    raw.width=video.videoWidth; raw.height=video.videoHeight;
+    raw.getContext("2d").drawImage(video,0,0);
+    const MAX=640; let w=raw.width,h=raw.height;
+    if(w>MAX){h=Math.round(h*MAX/w);w=MAX;} else if(h>MAX){w=Math.round(w*MAX/h);h=MAX;}
+    const final=document.createElement("canvas"); final.width=w; final.height=h;
+    final.getContext("2d").drawImage(raw,0,0,w,h);
+    setPhotoCapture(final.toDataURL("image/jpeg",0.65));
+    closeCamera();
+  };
 
   // ─ Export CSV/Excel riwayat top up ───────────────────────────────────────────
   const exportCsv=(logs,filename)=>{
@@ -2150,8 +2191,16 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
   const adminName=adminData?.name||adminData?.username||"Super Admin";
 
   // Header stats
-  const myTopUpToday=(walletLogs||[]).filter(l=>l.type==="topup"&&l.date===todayStr()&&l.adminName===adminName).reduce((s,l)=>s+l.amount,0);
-  const globalTopUpToday=(walletLogs||[]).filter(l=>l.type==="topup"&&l.date===todayStr()).reduce((s,l)=>s+l.amount,0);
+  const myLogsToday=(walletLogs||[]).filter(l=>l.type==="topup"&&l.date===todayStr()&&l.adminName===adminName);
+  const myTopUpToday=myLogsToday.reduce((s,l)=>s+l.amount,0);
+  const myCashToday=myLogsToday.filter(l=>!l.payMethod||l.payMethod==="cash").reduce((s,l)=>s+l.amount,0);
+  const myTransferToday=myLogsToday.filter(l=>l.payMethod==="transfer").reduce((s,l)=>s+l.amount,0);
+  const myCashCount=myLogsToday.filter(l=>!l.payMethod||l.payMethod==="cash").length;
+  const myTransferCount=myLogsToday.filter(l=>l.payMethod==="transfer").length;
+  const globalLogsToday=(walletLogs||[]).filter(l=>l.type==="topup"&&l.date===todayStr());
+  const globalTopUpToday=globalLogsToday.reduce((s,l)=>s+l.amount,0);
+  const globalCashToday=globalLogsToday.filter(l=>!l.payMethod||l.payMethod==="cash").reduce((s,l)=>s+l.amount,0);
+  const globalTransferToday=globalLogsToday.filter(l=>l.payMethod==="transfer").reduce((s,l)=>s+l.amount,0);
 
   // History filter
   const allTopUpLogs=(walletLogs||[]).filter(l=>l.type==="topup");
@@ -2199,6 +2248,27 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
         </Modal>
       )}
 
+      {/* ── Modal Kamera Langsung (HP & Laptop/PC berkamera) ── */}
+      {showCamera&&(
+        <Modal title="📷 Foto Bukti Transfer/QRIS" onClose={closeCamera} accent="#0284c7">
+          <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>Arahkan kamera ke bukti transfer/QRIS, lalu tekan ambil foto.</p>
+          <div style={{position:"relative",borderRadius:14,overflow:"hidden",background:"#000",marginBottom:12,aspectRatio:"4/3"}}>
+            <video ref={videoCamRef} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} playsInline muted/>
+          </div>
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={captureFromCamera}
+              style={{flex:2,padding:"13px",background:"#0284c7",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}
+              onMouseOver={e=>e.currentTarget.style.background="#0369a1"} onMouseOut={e=>e.currentTarget.style.background="#0284c7"}>
+              📸 Ambil Foto
+            </button>
+            <button onClick={closeCamera}
+              style={{flex:1,padding:"13px",background:"#f3f4f6",color:"#374151",border:"1px solid #e5e7eb",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+              Batal
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {/* ── Header dengan stats ── */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,flexWrap:"wrap",gap:12}}>
         <div>
@@ -2206,16 +2276,36 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
           <p style={{color:"#9ca3af",margin:"4px 0 0",fontSize:13}}>{customers.length} pelanggan terdaftar</p>
         </div>
         <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-          {/* Total top up admin ini hari ini */}
-          <div style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:12,padding:"8px 16px",textAlign:"center",minWidth:110}}>
-            <p style={{margin:0,color:"#16a34a",fontSize:11,fontWeight:600}}>Top Up Saya Hari Ini</p>
-            <p style={{margin:"3px 0 0",color:"#14532d",fontSize:15,fontWeight:900}}>{idr(myTopUpToday)}</p>
+          {/* Top Up admin ini hari ini — dengan breakdown Tunai/Transfer */}
+          <div style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:14,padding:"10px 16px",minWidth:180}}>
+            <p style={{margin:"0 0 4px",color:"#16a34a",fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px"}}>Top Up Saya Hari Ini</p>
+            <p style={{margin:"0 0 8px",color:"#14532d",fontSize:17,fontWeight:900,lineHeight:1}}>{idr(myTopUpToday)}</p>
+            <div style={{display:"flex",gap:6}}>
+              <div style={{flex:1,background:"#fff",borderRadius:8,padding:"5px 8px",border:"1px solid #dcfce7"}}>
+                <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600}}>💵 Tunai ({myCashCount}x)</p>
+                <p style={{margin:"2px 0 0",color:"#16a34a",fontSize:12,fontWeight:800}}>{idr(myCashToday)}</p>
+              </div>
+              <div style={{flex:1,background:"#fff",borderRadius:8,padding:"5px 8px",border:"1px solid #dcfce7"}}>
+                <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600}}>💳 Transfer ({myTransferCount}x)</p>
+                <p style={{margin:"2px 0 0",color:"#0284c7",fontSize:12,fontWeight:800}}>{idr(myTransferToday)}</p>
+              </div>
+            </div>
           </div>
-          {/* Total global hari ini — hanya SuperAdmin */}
+          {/* Total global hari ini — hanya SuperAdmin, juga dengan breakdown */}
           {isSuperAdmin&&(
-            <div style={{background:"#eff6ff",border:"1px solid #bae6fd",borderRadius:12,padding:"8px 16px",textAlign:"center",minWidth:110}}>
-              <p style={{margin:0,color:"#0284c7",fontSize:11,fontWeight:600}}>Total Global Hari Ini</p>
-              <p style={{margin:"3px 0 0",color:"#0c4a6e",fontSize:15,fontWeight:900}}>{idr(globalTopUpToday)}</p>
+            <div style={{background:"#eff6ff",border:"1px solid #bae6fd",borderRadius:14,padding:"10px 16px",minWidth:180}}>
+              <p style={{margin:"0 0 4px",color:"#0284c7",fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px"}}>Total Global Hari Ini</p>
+              <p style={{margin:"0 0 8px",color:"#0c4a6e",fontSize:17,fontWeight:900,lineHeight:1}}>{idr(globalTopUpToday)}</p>
+              <div style={{display:"flex",gap:6}}>
+                <div style={{flex:1,background:"#fff",borderRadius:8,padding:"5px 8px",border:"1px solid #dbeafe"}}>
+                  <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600}}>💵 Tunai</p>
+                  <p style={{margin:"2px 0 0",color:"#16a34a",fontSize:12,fontWeight:800}}>{idr(globalCashToday)}</p>
+                </div>
+                <div style={{flex:1,background:"#fff",borderRadius:8,padding:"5px 8px",border:"1px solid #dbeafe"}}>
+                  <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600}}>💳 Transfer</p>
+                  <p style={{margin:"2px 0 0",color:"#0284c7",fontSize:12,fontWeight:800}}>{idr(globalTransferToday)}</p>
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -2363,28 +2453,45 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
             {/* ── Foto bukti Transfer/QRIS ── */}
             {payMethod==="transfer"&&(
               <div style={{marginBottom:16}}>
-                <input ref={photoInputRef} type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={capturePhoto}/>
+                {/* Hidden file input — untuk opsi pilih dari folder */}
+                <input ref={photoInputRef} type="file" accept="image/*" style={{display:"none"}} onChange={capturePhoto}/>
                 {photoCapture?(
                   <div>
                     <p style={{fontSize:12,color:"#16a34a",fontWeight:600,margin:"0 0 8px"}}>✅ Foto bukti tersimpan (lokal device)</p>
                     <img src={photoCapture} alt="Bukti Transfer" style={{width:"100%",maxHeight:200,objectFit:"contain",borderRadius:12,border:"1px solid #e5e7eb",marginBottom:8}}/>
                     <div style={{display:"flex",gap:8}}>
+                      <button onClick={openCamera}
+                        style={{flex:1,padding:"9px",background:"#f0f9ff",color:"#0284c7",border:"1px solid #bae6fd",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:12,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                        📷 Foto Ulang
+                      </button>
                       <button onClick={()=>photoInputRef.current?.click()}
-                        style={{flex:1,padding:"9px",background:"#f0f9ff",color:"#0284c7",border:"1px solid #bae6fd",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-                        📷 Ganti Foto
+                        style={{flex:1,padding:"9px",background:"#f5f3ff",color:"#7c3aed",border:"1px solid #c4b5fd",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:12,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                        📁 Ganti File
                       </button>
                       <button onClick={()=>setPhotoCapture(null)}
-                        style={{padding:"9px 14px",background:"#fef2f2",color:"#dc2626",border:"1px solid #fca5a5",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-                        🗑️ Hapus
+                        style={{padding:"9px 12px",background:"#fef2f2",color:"#dc2626",border:"1px solid #fca5a5",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:12,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                        🗑️
                       </button>
                     </div>
                   </div>
                 ):(
-                  <button onClick={()=>photoInputRef.current?.click()}
-                    style={{width:"100%",padding:"14px",background:"#f0f9ff",color:"#0284c7",border:"2px dashed #bae6fd",borderRadius:14,cursor:"pointer",fontWeight:700,fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:10}}
-                    onMouseOver={e=>e.currentTarget.style.background="#e0f2fe"} onMouseOut={e=>e.currentTarget.style.background="#f0f9ff"}>
-                    📷 Foto Bukti Transfer / QRIS (Opsional)
-                  </button>
+                  <div>
+                    <p style={{fontSize:12,color:"#6b7280",fontWeight:600,margin:"0 0 8px"}}>Bukti Transfer/QRIS (Opsional)</p>
+                    <div style={{display:"flex",gap:10}}>
+                      {/* Tombol utama: kamera langsung — bekerja di HP dan laptop berkamera */}
+                      <button onClick={openCamera}
+                        style={{flex:1,padding:"13px",background:"#f0f9ff",color:"#0284c7",border:"2px solid #bae6fd",borderRadius:12,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}
+                        onMouseOver={e=>e.currentTarget.style.background="#e0f2fe"} onMouseOut={e=>e.currentTarget.style.background="#f0f9ff"}>
+                        📷 Buka Kamera
+                      </button>
+                      {/* Alternatif: pilih dari galeri / folder */}
+                      <button onClick={()=>photoInputRef.current?.click()}
+                        style={{flex:1,padding:"13px",background:"#f5f3ff",color:"#7c3aed",border:"2px solid #c4b5fd",borderRadius:12,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}
+                        onMouseOver={e=>e.currentTarget.style.background="#ede9fe"} onMouseOut={e=>e.currentTarget.style.background="#f5f3ff"}>
+                        📁 Pilih File
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
             )}
