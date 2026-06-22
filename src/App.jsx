@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────80
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────81
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -2079,6 +2079,46 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     }catch(e){showMsg(`❌ GAGAL MENYIMPAN! Saldo TIDAK dikosongkan. Cek koneksi, lalu coba lagi. (${e.message})`,8000);}
   };
 
+  // ── Kurangi Saldo (SuperAdmin only) — untuk koreksi error top up ganda ────────
+  const [kurangiModal,setKurangiModal]=useState(null); // customer object yang sedang diproses
+  const [kurangiAmount,setKurangiAmount]=useState("");
+  const [kurangiAlasan,setKurangiAlasan]=useState("");
+  const [kurangiLoading,setKurangiLoading]=useState(false);
+
+  const doKurangiSaldo=async()=>{
+    if(!kurangiModal)return;
+    const amount=parseInt(kurangiAmount.replace(/\./g,"").replace(/\D/g,""));
+    if(isNaN(amount)||amount<=0){showMsg("❌ Nominal pengurangan tidak valid!");return;}
+    if(amount>kurangiModal.balance){showMsg(`❌ Tidak bisa kurangi ${idr(amount)} — saldo hanya ${idr(kurangiModal.balance)}.`);return;}
+    if(!kurangiAlasan.trim()){showMsg("❌ Alasan pengurangan wajib diisi!");return;}
+    const alasan=kurangiAlasan.trim();
+    if(!window.confirm(
+      `Kurangi saldo ${kurangiModal.name}?\n\n• Dikurangi  : ${idr(amount)}\n• Saldo saat ini : ${idr(kurangiModal.balance)}\n• Saldo setelah  : ${idr(kurangiModal.balance-amount)}\n• Alasan     : ${alasan}\n\nTindakan ini dicatat di riwayat transaksi dan tidak bisa dibatalkan.`
+    ))return;
+    const online=await onCheckConnection();
+    if(!online){showMsg("Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.",8000);return;}
+    setKurangiLoading(true);
+    try{
+      await onUpdateCustomerBalance(
+        kurangiModal.id,
+        -amount,
+        (balBefore,balAfter)=>({
+          id:uid(),customerId:kurangiModal.id,customerPhone:kurangiModal.phone,customerName:kurangiModal.name,
+          type:"adjustment",amount,balanceBefore:balBefore,balanceAfter:balAfter,
+          nota:"KOREKSI-"+todayStr(),tenantId:"",tenantName:"",
+          adminName:adminData?.name||"Super Admin",
+          note:alasan,
+          timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
+        })
+      );
+      showMsg(`✅ Saldo ${kurangiModal.name} berhasil dikurangi ${idr(amount)} & TERSIMPAN.`);
+      setKurangiModal(null);setKurangiAmount("");setKurangiAlasan("");
+    }catch(e){
+      showMsg(`❌ GAGAL! Saldo TIDAK berubah. Cek koneksi, lalu coba lagi. (${e.message})`,8000);
+    }
+    setKurangiLoading(false);
+  };
+
   // ─ QR scanner untuk cari pelanggan ───────────────────────────────────────────
   const startScanSearch=async()=>{
     setScanSearchErr("");setShowScanSearch(true);
@@ -2260,6 +2300,77 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
         </Modal>
       )}
 
+      {/* ── Modal Kurangi Saldo (SuperAdmin only) ── */}
+      {kurangiModal&&(
+        <Modal title="✂️ Kurangi Saldo" onClose={()=>{if(!kurangiLoading){setKurangiModal(null);setKurangiAmount("");setKurangiAlasan("");}}} accent="#dc2626">
+          {/* Info pelanggan */}
+          <div style={{background:"#f9fafb",borderRadius:12,padding:"12px 16px",marginBottom:16}}>
+            <p style={{margin:0,fontWeight:800,fontSize:15,color:"#1c0a00"}}>{kurangiModal.name}</p>
+            <p style={{margin:"2px 0 0",color:"#6b7280",fontSize:13}}>📱 {kurangiModal.phone}</p>
+            <p style={{margin:"6px 0 0",color:"#374151",fontSize:13,fontWeight:600}}>
+              Saldo saat ini: <strong style={{color:"#16a34a",fontSize:15}}>{idr(kurangiModal.balance)}</strong>
+            </p>
+          </div>
+
+          {/* Peringatan konteks */}
+          <div style={{background:"#fef3c7",border:"1px solid #fbbf24",borderRadius:10,padding:"10px 14px",marginBottom:16}}>
+            <p style={{margin:0,fontSize:12,color:"#92400e",fontWeight:700}}>⚠️ Gunakan untuk koreksi saldo akibat error transaksi (misal: top up masuk 2× karena jaringan tidak stabil). Perubahan tercatat di riwayat sebagai "KOREKSI" dan tidak bisa diurungkan.</p>
+          </div>
+
+          {/* Input nominal */}
+          <div style={{marginBottom:14}}>
+            <label style={{display:"block",fontWeight:700,color:"#374151",fontSize:13,marginBottom:6}}>Nominal yang Dikurangi (Rp)</label>
+            <div style={{position:"relative"}}>
+              <input
+                inputMode="numeric" autoComplete="off"
+                placeholder="50.000"
+                value={(()=>{const d=kurangiAmount.replace(/\D/g,"");return d?d.replace(/\B(?=(\d{3})+(?!\d))/g,"."):""})()}
+                onChange={e=>setKurangiAmount(e.target.value.replace(/\./g,"").replace(/\D/g,""))}
+                style={{width:"100%",border:"2px solid #fca5a5",borderRadius:11,padding:"11px 46px 11px 14px",fontSize:14,outline:"none",fontFamily:"'Plus Jakarta Sans',sans-serif",color:"#111",boxSizing:"border-box"}}
+                onFocus={e=>e.target.style.borderColor="#dc2626"} onBlur={e=>e.target.style.borderColor="#fca5a5"}
+                disabled={kurangiLoading}
+              />
+              <span style={{position:"absolute",right:13,top:"50%",transform:"translateY(-50%)",fontSize:12,fontWeight:700,color:"#9ca3af",pointerEvents:"none"}}>Rp</span>
+            </div>
+            {/* Preview saldo setelah dikurangi */}
+            {kurangiAmount&&!isNaN(parseInt(kurangiAmount))&&(()=>{
+              const amt=parseInt(kurangiAmount);
+              const after=kurangiModal.balance-amt;
+              return(
+                <div style={{marginTop:8,background:after<0?"#fef2f2":"#f0fdf4",borderRadius:10,padding:"8px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{fontSize:13,color:"#6b7280",fontWeight:600}}>Saldo setelah dikurangi</span>
+                  <span style={{fontSize:14,fontWeight:900,color:after<0?"#dc2626":"#14532d"}}>{after<0?"❌ Melebihi saldo!":idr(after)}</span>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Alasan (wajib) */}
+          <div style={{marginBottom:18}}>
+            <label style={{display:"block",fontWeight:700,color:"#374151",fontSize:13,marginBottom:6}}>Alasan Pengurangan <span style={{color:"#dc2626"}}>*</span></label>
+            <textarea
+              placeholder="Contoh: Koreksi top up 2× akibat jaringan error tanggal 22/6 pukul 23:05"
+              value={kurangiAlasan} onChange={e=>setKurangiAlasan(e.target.value)}
+              rows={3} disabled={kurangiLoading}
+              style={{width:"100%",border:"2px solid #e5e7eb",borderRadius:11,padding:"11px 14px",fontSize:13,outline:"none",fontFamily:"'Plus Jakarta Sans',sans-serif",color:"#111",boxSizing:"border-box",resize:"vertical"}}
+              onFocus={e=>e.target.style.borderColor="#dc2626"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}
+            />
+          </div>
+
+          <div style={{display:"flex",gap:10}}>
+            <button onClick={()=>{if(!kurangiLoading){setKurangiModal(null);setKurangiAmount("");setKurangiAlasan("");}}}
+              style={{flex:1,padding:"12px",background:"#f3f4f6",color:"#374151",border:"1px solid #e5e7eb",borderRadius:12,fontWeight:700,cursor:kurangiLoading?"not-allowed":"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+              disabled={kurangiLoading}>
+              Batal
+            </button>
+            <button onClick={doKurangiSaldo} disabled={kurangiLoading||!kurangiAmount||!kurangiAlasan.trim()||parseInt(kurangiAmount)>kurangiModal.balance}
+              style={{flex:2,padding:"12px",background:kurangiLoading||!kurangiAmount||!kurangiAlasan.trim()||parseInt(kurangiAmount)>kurangiModal.balance?"#9ca3af":"#dc2626",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:kurangiLoading||!kurangiAmount||!kurangiAlasan.trim()||parseInt(kurangiAmount)>kurangiModal.balance?"not-allowed":"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+              {kurangiLoading?(<><span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>⏳</span> Memproses...</>):"✂️ Kurangi Saldo"}
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {/* ── Modal Kamera Langsung (HP & Laptop/PC berkamera) ── */}
       {showCamera&&(
         <Modal title="📷 Foto Bukti Transfer/QRIS" onClose={closeCamera} accent="#0284c7">
@@ -2414,6 +2525,12 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
                             style={{padding:"8px 14px",background:c.balance>0?"#fef3c7":"#f9fafb",color:c.balance>0?"#92400e":"#9ca3af",border:`1px solid ${c.balance>0?"#fbbf24":"#e5e7eb"}`,borderRadius:10,cursor:c.balance>0?"pointer":"not-allowed",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
                             onMouseOver={e=>{if(c.balance>0)e.currentTarget.style.background="#fde68a";}} onMouseOut={e=>{if(c.balance>0)e.currentTarget.style.background="#fef3c7";}}>
                             🪣 Kosongkan Saldo
+                          </button>
+                          <button onClick={()=>{setKurangiModal(c);setKurangiAmount("");setKurangiAlasan("");}} disabled={c.balance===0}
+                            style={{padding:"8px 14px",background:c.balance>0?"#fef2f2":"#f9fafb",color:c.balance>0?"#dc2626":"#9ca3af",border:`1px solid ${c.balance>0?"#fca5a5":"#e5e7eb"}`,borderRadius:10,cursor:c.balance>0?"pointer":"not-allowed",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                            title="Kurangi sebagian saldo untuk koreksi error transaksi"
+                            onMouseOver={e=>{if(c.balance>0)e.currentTarget.style.background="#fee2e2";}} onMouseOut={e=>{if(c.balance>0)e.currentTarget.style.background="#fef2f2";}}>
+                            ✂️ Kurangi Saldo
                           </button>
                           <button onClick={()=>deleteCustomer(c)}
                             style={{padding:"8px 14px",background:c.balance>0?"#f9fafb":"#fef2f2",color:c.balance>0?"#9ca3af":"#dc2626",border:`1px solid ${c.balance>0?"#e5e7eb":"#fca5a5"}`,borderRadius:10,cursor:c.balance>0?"not-allowed":"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
