@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────82
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────83
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -2465,7 +2465,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
           <div style={{flex:"1 1 calc(50% - 5px)",minWidth:0,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:14,padding:"10px 14px",boxSizing:"border-box"}}>
             <p style={{margin:"0 0 3px",color:"#16a34a",fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px"}}>Top Up Saya Hari Ini</p>
             <p style={{margin:"0 0 8px",color:"#14532d",fontSize:16,fontWeight:900,lineHeight:1,wordBreak:"break-all"}}>{idr(myTopUpToday)}</p>
-            <div style={{display:"flex",gap:6,marginBottom:myKoreksiToday.length>0?8:0}}>
+            <div style={{display:"flex",gap:6}}>
               <div style={{flex:1,minWidth:0,background:"#fff",borderRadius:8,padding:"5px 6px",border:"1px solid #dcfce7"}}>
                 <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600,whiteSpace:"nowrap"}}>💵 Tunai ({myCashCount}x)</p>
                 <p style={{margin:"2px 0 0",color:"#16a34a",fontSize:11,fontWeight:800,wordBreak:"break-all"}}>{idr(myCashToday)}</p>
@@ -2475,19 +2475,6 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
                 <p style={{margin:"2px 0 0",color:"#0284c7",fontSize:11,fontWeight:800,wordBreak:"break-all"}}>{idr(myTransferToday)}</p>
               </div>
             </div>
-            {/* Koreksi hari ini — hanya tampil kalau ada */}
-            {myKoreksiToday.length>0&&(
-              <div style={{borderTop:"1px dashed #bbf7d0",paddingTop:6}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-                  <span style={{fontSize:10,color:"#dc2626",fontWeight:700}}>✂️ Koreksi ({myKoreksiToday.length}x)</span>
-                  <span style={{fontSize:11,fontWeight:800,color:"#dc2626",wordBreak:"break-all"}}>-{idr(myKoreksiTotal)}</span>
-                </div>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"#fff",borderRadius:8,padding:"5px 8px",border:"1px solid #dcfce7"}}>
-                  <span style={{fontSize:10,color:"#374151",fontWeight:700}}>✅ Net Bersih</span>
-                  <span style={{fontSize:12,fontWeight:900,color:"#14532d",wordBreak:"break-all"}}>{idr(myTopUpToday-myKoreksiTotal)}</span>
-                </div>
-              </div>
-            )}
           </div>
           {/* Total global — hanya SuperAdmin */}
           {isSuperAdmin&&(
@@ -2815,7 +2802,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
           {/* Statistik */}
           {filteredHistLogs.length>0&&(
             <div style={{marginBottom:14}}>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:8,marginBottom:koreksiTotal>0?8:0}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:8,marginBottom:(isSuperAdmin&&histView==="global"&&koreksiTotal>0)?8:0}}>
                 {[
                   {l:"💵 Tunai",v:idr(cashTotal),c:"#16a34a",bg:"#f0fdf4",bc:"#bbf7d0"},
                   {l:"💳 Transfer",v:idr(transferTotal),c:"#0284c7",bg:"#eff6ff",bc:"#bae6fd"},
@@ -2827,8 +2814,8 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
                   </div>
                 ))}
               </div>
-              {/* Koreksi + Net — hanya tampil kalau ada koreksi */}
-              {koreksiTotal>0&&(
+              {/* Koreksi + Net — hanya tampil di tampilan Global dan kalau ada koreksi */}
+              {(isSuperAdmin&&histView==="global"&&koreksiTotal>0)&&(
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                   <div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:12,padding:"8px 10px",textAlign:"center",minWidth:0}}>
                     <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600}}>✂️ Koreksi</p>
