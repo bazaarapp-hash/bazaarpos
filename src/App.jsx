@@ -2109,7 +2109,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
       }
     }catch(e){
       console.error("Top up gagal simpan:",e);
-      showMsg(`❌ GAGAL MENYIMPAN! Top up TIDAK tercatat. (${e.message})`,8000);
+      showMsg("Transaksi Gagal, Silahkan cek riwayat transaksi dan refresh saldo di link pelanggan",10000);
       setSending(false);
       submittingRef.current=false;
       return; // STOP — tidak lanjut kirim WA

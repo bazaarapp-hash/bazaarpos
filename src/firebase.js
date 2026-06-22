@@ -1,4 +1,4 @@
-// ─── GANTI nilai firebaseConfig dengan punya kamu dari Firebase Console 75───────
+// ─── GANTI nilai firebaseConfig dengan punya kamu dari Firebase Console 76───────
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, getDoc, getDocFromServer, setDoc, onSnapshot, runTransaction } from "firebase/firestore";
 
@@ -28,30 +28,19 @@ export const db = {
 
   async set(key, value) {
     const payload = JSON.stringify(value);
-    // Peringatan dini jika dokumen mendekati limit 1MB Firestore
     if (payload.length > 900000) {
       console.warn(`⚠️ Dokumen "${key}" sudah ${(payload.length/1024).toFixed(0)}KB — mendekati limit 1MB Firestore!`);
     }
-    // Retry sampai 3x jika gagal (mengatasi koneksi tidak stabil di lokasi event)
-    let lastErr = null;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        await Promise.race([
-          setDoc(doc(firestore, "bazaarpos", key), {
-            value: payload,
-            updatedAt: new Date().toISOString(),
-          }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("Waktu simpan habis (jaringan lambat/terputus)")), 5000)),
-        ]);
-        return true; // sukses
-      } catch (e) {
-        lastErr = e;
-        console.error(`Firebase set error (percobaan ${attempt}/3):`, e);
-        if (attempt < 3) await new Promise(r => setTimeout(r, 500 * attempt));
-      }
-    }
-    // Gagal setelah 3x percobaan — lempar error agar caller TAHU dan TIDAK lanjut
-    throw new Error(`Gagal menyimpan data "${key}" ke database setelah 3x percobaan: ${lastErr?.message || lastErr}`);
+    // ── SATU KALI percobaan saja, TANPA retry ──────────────────────────────────
+    // Alasan: setDoc menulis seluruh dokumen sekaligus (overwrite). Jika kita retry
+    // dan percobaan pertama ternyata sudah commit di server (tapi konfirmasi hilang
+    // di jaringan), retry akan menulis data yang SAMA → tidak berbahaya untuk set().
+    // Tapi untuk konsistensi dan menghindari race condition, kita tetap 1x saja.
+    await setDoc(doc(firestore, "bazaarpos", key), {
+      value: payload,
+      updatedAt: new Date().toISOString(),
+    });
+    return true;
   },
 
   subscribe(key, callback) {
@@ -66,9 +55,6 @@ export const db = {
   },
 
   // ── Cek konektivitas cepat ke server — SATU KALI ping saja (tidak retry) ────
-  // Dipakai SEBELUM transaksi apapun dimulai — kalau server tidak terjangkau dalam
-  // 2.5 detik, langsung dianggap gagal, tanpa menunggu lama dan tanpa menghapus
-  // data orderan/keranjang yang sudah diisi kasir.
   // PENTING: pakai getDocFromServer (BUKAN getDoc) — getDoc() default Firestore SDK
   // bisa diam-diam serve dari cache lokal walau benar-benar offline, membuat ping
   // selalu "sukses" meski device sedang tidak ada koneksi sama sekali (false positive).
@@ -84,99 +70,95 @@ export const db = {
     }
   },
 
-  // ── Update saldo pelanggan secara ATOMIK (anti race-condition) ──────────────
-  // Dipakai untuk SEMUA perubahan saldo: top up, bayar transaksi, refund, kosongkan saldo.
-  // Menggunakan Firestore runTransaction: baca-ubah-tulis terjadi sebagai satu unit
-  // di server, dan otomatis di-retry kalau ada device lain menulis di waktu bersamaan.
-  // Ini mencegah kasus "saldo ketimpa" saat top up & transaksi terjadi nyaris bersamaan.
+  // ── Update saldo pelanggan secara ATOMIK — SATU KALI PERCOBAAN, TANPA RETRY ──
+  //
+  // MENGAPA TIDAK BOLEH RETRY:
+  // Ketika kita melakukan Promise.race antara runTransaction dan timeout, lalu
+  // timeout menang → client membatalkan PENANTIAN-nya, tapi runTransaction di
+  // Firestore SDK terus jalan di background dan bisa saja commit ke server.
+  // Kalau kita retry, kita akan memiliki DUA runTransaction yang berjalan
+  // bersamaan — keduanya membaca saldo SEBELUM satupun commit, sehingga
+  // keduanya menambah saldo dari titik yang sama → saldo bertambah DUA KALI
+  // dari satu aksi kasir. Inilah bug "top up masuk 3x" yang terjadi di lapangan.
+  //
+  // DENGAN 1x PERCOBAAN: paling buruk, 1 transaksi "ghost" commit tapi kasir
+  // lihat pesan "Gagal". Kasir cek riwayat → ternyata sudah masuk → tidak perlu
+  // ulangi. Jauh lebih aman daripada 3 transaksi masuk tanpa sadar.
   async updateCustomerBalance(customerId, deltaOrFn, buildLogEntry, extraCustFields = {}) {
+    const operationId = `op_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     const custRef = doc(firestore, "bazaarpos", "bzr_customers");
     const logRef = doc(firestore, "bazaarpos", "bzr_wallet_logs");
     let resultCust = null;
     let resultLog = null;
-    let lastErr = null;
 
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        await Promise.race([
-          runTransaction(firestore, async (transaction) => {
-            const custSnap = await transaction.get(custRef);
-            const logSnap = await transaction.get(logRef);
-            const customers = custSnap.exists() ? JSON.parse(custSnap.data().value) : [];
-            const walletLogs = logSnap.exists() ? JSON.parse(logSnap.data().value) : [];
+    await runTransaction(firestore, async (transaction) => {
+      const custSnap = await transaction.get(custRef);
+      const logSnap = await transaction.get(logRef);
+      const customers = custSnap.exists() ? JSON.parse(custSnap.data().value) : [];
+      const walletLogs = logSnap.exists() ? JSON.parse(logSnap.data().value) : [];
 
-            const idx = customers.findIndex(c => c.id === customerId);
-            if (idx === -1) throw new Error("Pelanggan tidak ditemukan (mungkin baru dihapus).");
+      const idx = customers.findIndex(c => c.id === customerId);
+      if (idx === -1) throw new Error("Pelanggan tidak ditemukan (mungkin baru dihapus).");
 
-            const balBefore = customers[idx].balance;
-            // deltaOrFn bisa berupa angka (tambah/kurang) atau fungsi (balBefore => balAfter) untuk set absolut
-            const balAfter = typeof deltaOrFn === "function" ? deltaOrFn(balBefore) : balBefore + deltaOrFn;
-            if (balAfter < 0) {
-              throw new Error(`Saldo tidak cukup! Saldo saat ini: Rp ${balBefore.toLocaleString("id-ID")} (mungkin sudah berubah sejak halaman dibuka).`);
-            }
-
-            customers[idx] = { ...customers[idx], ...extraCustFields, balance: balAfter };
-            const logEntry = buildLogEntry(balBefore, balAfter);
-            const newLogs = logEntry ? [logEntry, ...walletLogs] : walletLogs;
-
-            transaction.set(custRef, { value: JSON.stringify(customers), updatedAt: new Date().toISOString() });
-            if (logEntry) {
-              transaction.set(logRef, { value: JSON.stringify(newLogs), updatedAt: new Date().toISOString() });
-            }
-            resultCust = customers[idx];
-            resultLog = logEntry;
-          }),
-          // Batas waktu per percobaan — supaya tidak menggantung lama kalau jaringan putus di tengah proses
-          new Promise((_, reject) => setTimeout(() => reject(new Error("Waktu transaksi habis (jaringan lambat/terputus)")), 5000)),
-        ]);
-        return { customer: resultCust, logEntry: resultLog }; // sukses
-      } catch (e) {
-        lastErr = e;
-        // Error bisnis (saldo tidak cukup / pelanggan tidak ada) — jangan retry, lempar langsung
-        if (e.message && (e.message.includes("Saldo tidak cukup") || e.message.includes("tidak ditemukan"))) {
-          throw e;
-        }
-        console.error(`Transaksi saldo gagal (percobaan ${attempt}/3):`, e);
-        if (attempt < 3) await new Promise(r => setTimeout(r, 400 * attempt));
+      // Proteksi idempotency: kalau operasi ini sudah commit sebelumnya (jaringan
+      // lambat → client timeout → tapi server sudah commit), jangan ulangi delta.
+      const existingLog = walletLogs.find(l => l.operationId === operationId);
+      if (existingLog) {
+        resultCust = customers[idx];
+        resultLog = existingLog;
+        return;
       }
-    }
-    throw new Error(`Gagal update saldo setelah 3x percobaan: ${lastErr?.message || lastErr}`);
+
+      const balBefore = customers[idx].balance;
+      const balAfter = typeof deltaOrFn === "function" ? deltaOrFn(balBefore) : balBefore + deltaOrFn;
+      if (balAfter < 0) {
+        throw new Error(`Saldo tidak cukup! Saldo saat ini: Rp ${balBefore.toLocaleString("id-ID")} (mungkin sudah berubah sejak halaman dibuka).`);
+      }
+
+      customers[idx] = { ...customers[idx], ...extraCustFields, balance: balAfter };
+      const logEntry = buildLogEntry(balBefore, balAfter);
+      if (logEntry) logEntry.operationId = operationId;
+      const newLogs = logEntry ? [logEntry, ...walletLogs] : walletLogs;
+
+      transaction.set(custRef, { value: JSON.stringify(customers), updatedAt: new Date().toISOString() });
+      if (logEntry) {
+        transaction.set(logRef, { value: JSON.stringify(newLogs), updatedAt: new Date().toISOString() });
+      }
+      resultCust = customers[idx];
+      resultLog = logEntry;
+    });
+
+    return { customer: resultCust, logEntry: resultLog };
   },
 
-  // ── Tambah pelanggan baru ATOMIK (untuk top up pelanggan baru) ──────────────
+  // ── Tambah pelanggan baru ATOMIK — SATU KALI PERCOBAAN, TANPA RETRY ──────────
+  // Alasan sama seperti updateCustomerBalance di atas.
   async addNewCustomer(newCustomer, buildLogEntry) {
+    const operationId = `op_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     const custRef = doc(firestore, "bazaarpos", "bzr_customers");
     const logRef = doc(firestore, "bazaarpos", "bzr_wallet_logs");
-    let lastErr = null;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        await Promise.race([
-          runTransaction(firestore, async (transaction) => {
-            const custSnap = await transaction.get(custRef);
-            const logSnap = await transaction.get(logRef);
-            const customers = custSnap.exists() ? JSON.parse(custSnap.data().value) : [];
-            const walletLogs = logSnap.exists() ? JSON.parse(logSnap.data().value) : [];
-            if (customers.find(c => c.phone === newCustomer.phone)) {
-              throw new Error("Nomor HP sudah terdaftar (mungkin baru saja didaftarkan device lain).");
-            }
-            const newCustomers = [...customers, newCustomer];
-            const logEntry = buildLogEntry();
-            const newLogs = logEntry ? [logEntry, ...walletLogs] : walletLogs;
-            transaction.set(custRef, { value: JSON.stringify(newCustomers), updatedAt: new Date().toISOString() });
-            if (logEntry) {
-              transaction.set(logRef, { value: JSON.stringify(newLogs), updatedAt: new Date().toISOString() });
-            }
-          }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("Waktu transaksi habis (jaringan lambat/terputus)")), 5000)),
-        ]);
-        return true;
-      } catch (e) {
-        lastErr = e;
-        if (e.message && e.message.includes("sudah terdaftar")) throw e;
-        console.error(`Tambah pelanggan gagal (percobaan ${attempt}/3):`, e);
-        if (attempt < 3) await new Promise(r => setTimeout(r, 400 * attempt));
+
+    await runTransaction(firestore, async (transaction) => {
+      const custSnap = await transaction.get(custRef);
+      const logSnap = await transaction.get(logRef);
+      const customers = custSnap.exists() ? JSON.parse(custSnap.data().value) : [];
+      const walletLogs = logSnap.exists() ? JSON.parse(logSnap.data().value) : [];
+
+      const dup = customers.find(c => c.phone === newCustomer.phone);
+      if (dup) {
+        if (dup.createdOpId === operationId) return; // hasil percobaan kita sendiri
+        throw new Error("Nomor HP sudah terdaftar (mungkin baru saja didaftarkan device lain).");
       }
-    }
-    throw new Error(`Gagal tambah pelanggan setelah 3x percobaan: ${lastErr?.message || lastErr}`);
+      const newCustomers = [...customers, { ...newCustomer, createdOpId: operationId }];
+      const logEntry = buildLogEntry();
+      if (logEntry) logEntry.operationId = operationId;
+      const newLogs = logEntry ? [logEntry, ...walletLogs] : walletLogs;
+      transaction.set(custRef, { value: JSON.stringify(newCustomers), updatedAt: new Date().toISOString() });
+      if (logEntry) {
+        transaction.set(logRef, { value: JSON.stringify(newLogs), updatedAt: new Date().toISOString() });
+      }
+    });
+
+    return true;
   },
 };
