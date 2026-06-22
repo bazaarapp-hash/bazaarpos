@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────76
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────77
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -1927,17 +1927,28 @@ function generateCustomerCard({customer, bazaarName}){
 
 // ─── Kasir Top Up ─────────────────────────────────────────────────────────────
 function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustomers,onSaveWalletLogs,onUpdateCustomerBalance,onAddNewCustomer,onCheckConnection,isSuperAdmin}){
+  // ─ State ─────────────────────────────────────────────────────────────────────
   const [tab,setTab]=useState("customers");
   const [form,setForm]=useState({phone:"",name:"",amount:""});
+  const [payMethod,setPayMethod]=useState("cash"); // "cash" | "transfer"
+  const [photoCapture,setPhotoCapture]=useState(null); // base64 gambar bukti transfer (lokal device)
+  const photoInputRef=useRef(null);
   const [search,setSearch]=useState("");
   const [sending,setSending]=useState(false);
-  const submittingRef=useRef(false); // proteksi anti dobel-submit (klik ganda cepat)
-  const [pendingWaResend,setPendingWaResend]=useState(null); // {phone,message} — kalau auto-kirim WA gagal, tombol kirim manual
+  const submittingRef=useRef(false);
+  const [pendingWaResend,setPendingWaResend]=useState(null);
+  const [msg,setMsg]=useState("");
+  const [filterDate,setFilterDate]=useState(todayStr());
+  const [showPinModal,setShowPinModal]=useState(null);
+  const [histView,setHistView]=useState("mine"); // "mine" | "global" | "byadmin"
+  const [histAdminSel,setHistAdminSel]=useState("");
+  const [expandedProof,setExpandedProof]=useState(null); // log.id yang sedang ditampilkan fotonya
+  const [showScanSearch,setShowScanSearch]=useState(false);
+  const [scanSearchErr,setScanSearchErr]=useState("");
+  const videoSRef=useRef(null);
+  const scanSRef=useRef(null);
 
-  // ── Cegah refresh/tutup halaman SAAT top up sedang diproses ─────────────────
-  // Ini akar masalah utama dari bug "saldo masuk 2x": kasir refresh karena kira
-  // macet, padahal di server transaksi pertama SUDAH tersimpan, lalu top up
-  // diulang. Browser akan tampilkan dialog konfirmasi native kalau ini terjadi.
+  // ─ Cegah refresh saat proses sedang berjalan ─────────────────────────────────
   useEffect(()=>{
     if(!sending)return;
     const handler=e=>{e.preventDefault();e.returnValue="";return "";};
@@ -1945,19 +1956,48 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     return()=>window.removeEventListener("beforeunload",handler);
   },[sending]);
 
-  const [msg,setMsg]=useState("");
-  const [filterDate,setFilterDate]=useState(todayStr());
-  const [showPinModal,setShowPinModal]=useState(null);
-  const [pinSearch,setPinSearch]=useState("");
-  // Scan QR untuk cari pelanggan
-  const [showScanSearch,setShowScanSearch]=useState(false);
-  const [scanSearchErr,setScanSearchErr]=useState("");
-  const videoSRef=useRef(null);
-  const scanSRef=useRef(null);
-
   const showMsg=(m,dur=4000)=>{setMsg(m);setTimeout(()=>setMsg(""),dur);};
 
-  // Hapus pelanggan (SuperAdmin only)
+  // ─ Foto bukti transfer — disimpan di localStorage device saja ────────────────
+  const capturePhoto=e=>{
+    const file=e.target.files?.[0]; if(!file)return;
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      const img=new Image();
+      img.onload=()=>{
+        const MAX=640; let w=img.width,h=img.height;
+        if(w>MAX){h=Math.round(h*MAX/w);w=MAX;}
+        else if(h>MAX){w=Math.round(w*MAX/h);h=MAX;}
+        const canvas=document.createElement("canvas");
+        canvas.width=w;canvas.height=h;
+        canvas.getContext("2d").drawImage(img,0,0,w,h);
+        setPhotoCapture(canvas.toDataURL("image/jpeg",0.65));
+      };
+      img.src=ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
+  const savePhoto=(logId,photo)=>{try{localStorage.setItem(`bzr_photo_${logId}`,photo);}catch(e){console.warn("Gagal simpan foto:",e);}};
+  const getPhoto=(logId)=>{try{return localStorage.getItem(`bzr_photo_${logId}`);}catch(e){return null;}};
+  const deletePhoto=(logId)=>{try{localStorage.removeItem(`bzr_photo_${logId}`);}catch(e){}};
+
+  // ─ Export CSV/Excel riwayat top up ───────────────────────────────────────────
+  const exportCsv=(logs,filename)=>{
+    const BOM="\uFEFF";
+    const headers=["Tanggal","Waktu","Nama Pelanggan","No. HP","Nominal (Rp)","Saldo Setelah (Rp)","Admin","Metode Bayar"];
+    const rows=logs.map(l=>[
+      l.date||"",l.time||"",l.customerName||"",l.customerPhone||"",
+      l.amount||0,l.balanceAfter||0,l.adminName||"",
+      l.payMethod==="transfer"?"Transfer/QRIS":"Tunai",
+    ]);
+    const csv=BOM+[headers,...rows].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(",")).join("\n");
+    const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download=filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ─ Hapus & kosongkan saldo (SuperAdmin only) ─────────────────────────────────
   const deleteCustomer=async(c)=>{
     if(c.balance>0){showMsg(`❌ Saldo ${c.name} masih ${idr(c.balance)}. Kosongkan saldo dulu sebelum hapus.`);return;}
     if(!window.confirm(`Hapus pelanggan "${c.name}" (${c.phone})?\nTindakan ini permanen.`))return;
@@ -1966,36 +2006,27 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     try{
       await onSaveCustomers(customers.filter(x=>x.id!==c.id));
       showMsg(`✅ Pelanggan ${c.name} berhasil dihapus & TERSIMPAN.`);
-    }catch(e){
-      console.error("Hapus pelanggan gagal:",e);
-      showMsg(`❌ GAGAL MENYIMPAN! Pelanggan TIDAK terhapus. Cek koneksi, lalu coba lagi. (${e.message})`,8000);
-    }
+    }catch(e){showMsg(`❌ GAGAL MENYIMPAN! Pelanggan TIDAK terhapus. Cek koneksi, lalu coba lagi. (${e.message})`,8000);}
   };
 
-  // Kosongkan saldo (SuperAdmin only)
   const kosongkanSaldo=async(c)=>{
     if(c.balance===0){showMsg(`ℹ️ Saldo ${c.name} sudah 0.`);return;}
     if(!window.confirm(`Kosongkan saldo ${c.name}?\nSaldo saat ini ${idr(c.balance)} akan diset ke Rp 0.\nTindakan ini tidak bisa dibatalkan.`))return;
     const online=await onCheckConnection();
     if(!online){showMsg("Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.",8000);return;}
     try{
-      const result=await onUpdateCustomerBalance(
-        c.id,
-        ()=>0, // set absolut ke 0 (bukan delta) — selalu pakai saldo TERBARU di server
-        (balBefore,balAfter)=>({id:uid(),customerId:c.id,customerPhone:c.phone,customerName:c.name,
+      await onUpdateCustomerBalance(c.id,()=>0,
+        (balBefore)=>({id:uid(),customerId:c.id,customerPhone:c.phone,customerName:c.name,
           type:"adjustment",amount:balBefore,balanceBefore:balBefore,balanceAfter:0,
           nota:"ADJUST-"+todayStr(),tenantId:"",tenantName:"",
           adminName:adminData?.name||"Super Admin",
           timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()})
       );
       showMsg(`✅ Saldo ${c.name} berhasil dikosongkan & TERSIMPAN (Rp 0).`);
-    }catch(e){
-      console.error("Kosongkan saldo gagal:",e);
-      showMsg(`❌ GAGAL MENYIMPAN! Saldo TIDAK dikosongkan. Cek koneksi, lalu coba lagi. (${e.message})`,8000);
-    }
+    }catch(e){showMsg(`❌ GAGAL MENYIMPAN! Saldo TIDAK dikosongkan. Cek koneksi, lalu coba lagi. (${e.message})`,8000);}
   };
 
-  // Scanner QR untuk cari pelanggan
+  // ─ QR scanner untuk cari pelanggan ───────────────────────────────────────────
   const startScanSearch=async()=>{
     setScanSearchErr("");setShowScanSearch(true);
     if(!window.jsQR){await new Promise((res,rej)=>{const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
@@ -2023,56 +2054,33 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     setShowScanSearch(false);
   };
 
-  // Cari atau buat customer
-  const findOrCreate=()=>{
-    if(!form.phone.trim()||!form.name.trim()){showMsg("❌ Nomor WA dan nama harus diisi!");return null;}
-    const phone=form.phone.trim().replace(/\D/g,"");
-    let cust=customers.find(c=>c.phone===phone);
-    if(!cust){
-      // Generate PIN 4 digit acak untuk pelanggan baru
-      const pin=String(Math.floor(1000+Math.random()*9000));
-      cust={id:uid(),phone,name:form.name.trim(),balance:0,pin,createdAt:new Date().toISOString()};
-      return {cust,isNew:true};
-    }
-    return {cust,isNew:false};
-  };
-
+  // ─ Proses Top Up ─────────────────────────────────────────────────────────────
   const handleTopUp=async()=>{
-    if(submittingRef.current)return; // proteksi anti dobel-submit (klik ganda cepat)
+    if(submittingRef.current)return;
     if(!form.phone.trim()||!form.name.trim()){showMsg("❌ Nomor WA dan nama harus diisi!");return;}
     const amount=parseInt(form.amount);
     if(isNaN(amount)||amount<=0){showMsg("❌ Nominal top up tidak valid!");return;}
     const phone=form.phone.trim().replace(/\D/g,"");
 
-    // ── Deteksi duplikat "lunak": cek apakah ada top up nominal+nomor SAMA dalam ──
-    // 90 detik terakhir. Ini jaring pengaman utama untuk kasus: kasir top up →
-    // jaringan lambat → kasir kira macet → refresh halaman (padahal di server SUDAH
-    // tersimpan) → form kosong lagi → top up diulang tanpa sadar sudah berhasil.
+    // Deteksi duplikat "lunak" dalam 90 detik terakhir
     const recentDup=(walletLogs||[]).find(l=>{
       if(l.type!=="topup"||l.customerPhone!==phone||l.amount!==amount)return false;
       const ageMs=Date.now()-new Date(l.timestamp).getTime();
-      return ageMs>=0&&ageMs<90000; // dalam 90 detik terakhir
+      return ageMs>=0&&ageMs<90000;
     });
     if(recentDup){
       const ageSec=Math.round((Date.now()-new Date(recentDup.timestamp).getTime())/1000);
       const proceed=window.confirm(
-        `⚠️ PERINGATAN DUPLIKAT!\n\nTop up dengan nominal ${idr(amount)} untuk nomor ${phone} BARU SAJA tercatat ${ageSec} detik lalu (oleh ${recentDup.adminName||"admin"}).\n\nIni KEMUNGKINAN top up yang sama (misal akibat refresh halaman sebelumnya). Saldo BISA SUDAH masuk.\n\nCek dulu saldo pelanggan sebelum lanjut!\n\nTekan OK HANYA JIKA Anda yakin ini memang top up BARU yang berbeda (bukan pengulangan).`
+        `⚠️ PERINGATAN DUPLIKAT!\n\nTop up ${idr(amount)} untuk nomor ${phone} BARU SAJA tercatat ${ageSec} detik lalu (oleh ${recentDup.adminName||"admin"}).\n\nSaldo BISA SUDAH masuk. Cek dulu saldo pelanggan sebelum lanjut!\n\nTekan OK HANYA JIKA ini top up BARU yang berbeda.`
       );
-      if(!proceed){
-        showMsg("⛔ Top up dibatalkan — terdeteksi kemungkinan duplikat. Cek saldo pelanggan dulu.",8000);
-        return;
-      }
+      if(!proceed){showMsg("⛔ Top up dibatalkan — terdeteksi kemungkinan duplikat.",8000);return;}
     }
 
-    submittingRef.current=true;
-    setSending(true);
-    setPendingWaResend(null);
+    submittingRef.current=true; setSending(true); setPendingWaResend(null);
 
-    // ── Cek koneksi server DULU. Kalau gagal, tolak cepat & form tetap terisi ──
     const online=await onCheckConnection();
     if(!online){
-      setSending(false);
-      submittingRef.current=false;
+      setSending(false);submittingRef.current=false;
       showMsg("Top Up Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.",8000);
       return;
     }
@@ -2080,20 +2088,20 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     const existingCust=customers.find(c=>c.phone===phone);
     const adminName=adminData?.name||adminData?.username||"Super Admin";
     let updCust, balBefore, balAfter, isNew;
+    const logId=uid(); // pre-generate untuk foto
 
-    // ── Simpan ke database DULU secara ATOMIK. Jika gagal, STOP — jangan kirim WA ──
     try{
       if(existingCust){
         isNew=false;
         const result=await onUpdateCustomerBalance(
-          existingCust.id,
-          amount, // delta: tambah
+          existingCust.id, amount,
           (bBefore,bAfter)=>({
-            id:uid(),customerId:existingCust.id,customerPhone:existingCust.phone,customerName:form.name.trim(),
+            id:logId,customerId:existingCust.id,customerPhone:existingCust.phone,customerName:form.name.trim(),
             type:"topup",amount,balanceBefore:bBefore,balanceAfter:bAfter,
-            adminName,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
+            adminName,payMethod, // ← metode bayar
+            timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
           }),
-          {name:form.name.trim()} // update nama sekalian kalau berubah
+          {name:form.name.trim()}
         );
         updCust=result; balBefore=result.balance-amount; balAfter=result.balance;
       } else {
@@ -2102,69 +2110,72 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
         updCust={id:uid(),phone,name:form.name.trim(),balance:amount,pin,createdAt:new Date().toISOString()};
         balBefore=0; balAfter=amount;
         await onAddNewCustomer(updCust,()=>({
-          id:uid(),customerId:updCust.id,customerPhone:phone,customerName:updCust.name,
+          id:logId,customerId:updCust.id,customerPhone:phone,customerName:updCust.name,
           type:"topup",amount,balanceBefore:0,balanceAfter:amount,
-          adminName,timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
+          adminName,payMethod, // ← metode bayar
+          timestamp:new Date().toISOString(),date:todayStr(),time:timeStr(),
         }));
       }
     }catch(e){
       console.error("Top up gagal simpan:",e);
       showMsg("Transaksi Gagal, Silahkan cek riwayat transaksi dan refresh saldo di link pelanggan",10000);
-      setSending(false);
-      submittingRef.current=false;
-      return; // STOP — tidak lanjut kirim WA
+      setSending(false);submittingRef.current=false;
+      return;
     }
 
-    // ── Saldo SUDAH tersimpan di server — lepas kunci "jangan refresh" SEKARANG. ──
-    // Sisa proses (kirim WA) bukan data finansial kritis & sudah ada fallback manual,
-    // jadi tidak perlu lagi menahan kasir menunggu sebelum dapat konfirmasi jelas.
-    setSending(false);
-    submittingRef.current=false;
-    setForm({phone:"",name:"",amount:""});
-    showMsg(`✅ Top up berhasil & TERSIMPAN!${isNew?` PIN pelanggan: ${updCust.pin} (catat & sampaikan ke pelanggan)`:""} Mengirim struk WA...`,4000);
+    // ── Saldo TERSIMPAN — lepas kunci, reset form, simpan foto bukti ────────────
+    if(payMethod==="transfer"&&photoCapture) savePhoto(logId,photoCapture);
+    setSending(false); submittingRef.current=false;
+    setForm({phone:"",name:"",amount:""}); setPayMethod("cash"); setPhotoCapture(null);
+    showMsg(`✅ Top up berhasil & TERSIMPAN!${isNew?` PIN: ${updCust.pin} (sampaikan ke pelanggan)`:""}${payMethod==="transfer"?" • Transfer/QRIS":""}. Mengirim WA...`,4000);
 
-    // Link kartu pakai customer ID (aman, tidak expose nomor HP)
     const cardLink=`${window.location.origin}${window.location.pathname}?card=${updCust.id}`;
-
-    // Pesan WA dengan link kartu
-    const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\nHalo *${updCust.name}*! 👋\n\n✅ *Top Up Berhasil*\n💰 Nominal   : ${idr(amount)}\n📊 Saldo Lama: ${idr(balBefore)}\n🪙 Saldo Baru: ${idr(balAfter)}\n\n🔗 *Kartu Saldo Kamu:*\n${cardLink}\n\n_(Simpan link ini untuk cek saldo & QR Code)_\n\nTerima kasih! 🙏\n${waSignature(adminData?.name||"Admin")}`;
+    const waMsg=`🏪 *${settings.bazaarName||"BazaarPOS"}*\n\nHalo *${updCust.name}*! 👋\n\n✅ *Top Up Berhasil*\n💰 Nominal   : ${idr(amount)}\n📊 Saldo Lama: ${idr(balBefore)}\n🪙 Saldo Baru: ${idr(balAfter)}\n💳 Metode    : ${payMethod==="transfer"?"Transfer/QRIS":"Tunai"}\n\n🔗 *Kartu Saldo Kamu:*\n${cardLink}\n\n_(Simpan link ini untuk cek saldo & QR Code)_\n\nTerima kasih! 🙏\n${waSignature(adminName)}`;
 
     let waSent=false;
     if(settings.fonnteToken){
-      // Coba kirim, kalau gagal coba 1x lagi (jaringan kurang baik sering cuma butuh 1 retry)
       waSent=await sendWhatsApp({token:settings.fonnteToken,phone:updCust.phone,message:waMsg});
-      if(!waSent){
-        await new Promise(r=>setTimeout(r,1000));
-        waSent=await sendWhatsApp({token:settings.fonnteToken,phone:updCust.phone,message:waMsg});
-      }
+      if(!waSent){await new Promise(r=>setTimeout(r,1000));waSent=await sendWhatsApp({token:settings.fonnteToken,phone:updCust.phone,message:waMsg});}
     }
-    // Kalau auto-kirim (termasuk retry) gagal: JANGAN andalkan window.open() otomatis
-    // (sering diblokir browser mobile kalau dipanggil setelah jeda async) — tampilkan
-    // tombol kirim manual yang pasti berfungsi karena diklik langsung oleh kasir.
-    if(!waSent){
-      setPendingWaResend({phone:updCust.phone,message:waMsg,name:updCust.name});
-    }
-
-    showMsg(`✅ Top up berhasil & TERSIMPAN!${isNew?` PIN pelanggan: ${updCust.pin} (catat & sampaikan ke pelanggan)`:""}${waSent?" WA terkirim otomatis!":" ⚠️ WA OTOMATIS GAGAL — tekan tombol kirim manual di bawah."}`,waSent?5000:10000);
+    if(!waSent) setPendingWaResend({phone:updCust.phone,message:waMsg,name:updCust.name});
+    showMsg(`✅ Top up berhasil & TERSIMPAN!${isNew?` PIN: ${updCust.pin}`:""} ${waSent?"WA terkirim!":"⚠️ WA GAGAL — tekan kirim manual di bawah."}`,waSent?5000:10000);
   };
 
   const handleDownloadCard=async(cust)=>{
     const dataUrl=await generateCustomerCard({customer:cust,bazaarName:settings.bazaarName||"BazaarPOS"});
-    const link=document.createElement("a");
-    link.href=dataUrl; link.download=`Kartu_${cust.name.replace(/\s+/g,"_")}.jpg`;
-    link.click();
+    const link=document.createElement("a"); link.href=dataUrl; link.download=`Kartu_${cust.name.replace(/\s+/g,"_")}.jpg`; link.click();
   };
+
+  // ─ Computed values ────────────────────────────────────────────────────────────
+  const adminName=adminData?.name||adminData?.username||"Super Admin";
+
+  // Header stats
+  const myTopUpToday=(walletLogs||[]).filter(l=>l.type==="topup"&&l.date===todayStr()&&l.adminName===adminName).reduce((s,l)=>s+l.amount,0);
+  const globalTopUpToday=(walletLogs||[]).filter(l=>l.type==="topup"&&l.date===todayStr()).reduce((s,l)=>s+l.amount,0);
+
+  // History filter
+  const allTopUpLogs=(walletLogs||[]).filter(l=>l.type==="topup");
+  const baseHistLogs=isSuperAdmin
+    ?(histView==="mine"?allTopUpLogs.filter(l=>l.adminName===adminName)
+      :histView==="global"?allTopUpLogs
+      :allTopUpLogs.filter(l=>l.adminName===histAdminSel))
+    :allTopUpLogs.filter(l=>l.adminName===adminName);
+  const filteredHistLogs=baseHistLogs.filter(l=>l.date===filterDate).sort((a,b)=>(b.time||"").localeCompare(a.time||""));
+
+  const cashTotal=filteredHistLogs.filter(l=>!l.payMethod||l.payMethod==="cash").reduce((s,l)=>s+l.amount,0);
+  const transferTotal=filteredHistLogs.filter(l=>l.payMethod==="transfer").reduce((s,l)=>s+l.amount,0);
 
   const filteredSearch=customers.filter(c=>
     c.name.toLowerCase().includes(search.toLowerCase())||c.phone.includes(search)
   );
-  const filteredLogs=walletLogs.filter(l=>l.date===filterDate);
-  const todayTopUp=filteredLogs.filter(l=>l.type==="topup").reduce((s,l)=>s+l.amount,0);
-  const todayPayment=filteredLogs.filter(l=>l.type==="payment").reduce((s,l)=>s+l.amount,0);
 
+  // Nama admin unik dari semua log top up (untuk dropdown SuperAdmin)
+  const adminNamesInLogs=[...new Set(allTopUpLogs.filter(l=>l.adminName).map(l=>l.adminName))].sort();
+
+  // ─ Render ─────────────────────────────────────────────────────────────────────
   return(
     <div>
-      {/* ── Modal Lihat PIN ── */}
+      {/* ── Modal PIN ── */}
       {showPinModal&&(
         <Modal title="🔐 PIN Pelanggan" onClose={()=>setShowPinModal(null)} accent="#7c3aed">
           <div style={{background:"#f5f0ff",borderRadius:14,padding:"20px",textAlign:"center",marginBottom:14}}>
@@ -2188,18 +2199,33 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
         </Modal>
       )}
 
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:12}}>
+      {/* ── Header dengan stats ── */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,flexWrap:"wrap",gap:12}}>
         <div>
           <h2 style={{margin:0,fontSize:20,fontWeight:800,color:"#1c0a00"}}>💰 Kasir Top Up</h2>
           <p style={{color:"#9ca3af",margin:"4px 0 0",fontSize:13}}>{customers.length} pelanggan terdaftar</p>
         </div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          {/* Total top up admin ini hari ini */}
+          <div style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:12,padding:"8px 16px",textAlign:"center",minWidth:110}}>
+            <p style={{margin:0,color:"#16a34a",fontSize:11,fontWeight:600}}>Top Up Saya Hari Ini</p>
+            <p style={{margin:"3px 0 0",color:"#14532d",fontSize:15,fontWeight:900}}>{idr(myTopUpToday)}</p>
+          </div>
+          {/* Total global hari ini — hanya SuperAdmin */}
+          {isSuperAdmin&&(
+            <div style={{background:"#eff6ff",border:"1px solid #bae6fd",borderRadius:12,padding:"8px 16px",textAlign:"center",minWidth:110}}>
+              <p style={{margin:0,color:"#0284c7",fontSize:11,fontWeight:600}}>Total Global Hari Ini</p>
+              <p style={{margin:"3px 0 0",color:"#0c4a6e",fontSize:15,fontWeight:900}}>{idr(globalTopUpToday)}</p>
+            </div>
+          )}
+        </div>
       </div>
 
-      {msg&&<div className="pop-in" style={{background:msg.startsWith("✅")?"#f0fdf4":"#fef2f2",border:`1px solid ${msg.startsWith("✅")?"#bbf7d0":"#fca5a5"}`,borderRadius:12,padding:"10px 16px",marginBottom:16,fontWeight:600,fontSize:13,color:msg.startsWith("✅")?"#16a34a":"#dc2626"}}>{msg}</div>}
+      {msg&&<div className="pop-in" style={{background:msg.startsWith("✅")?"#f0fdf4":msg.startsWith("⛔")||msg.startsWith("❌")?"#fef2f2":"#fef3c7",border:`1px solid ${msg.startsWith("✅")?"#bbf7d0":msg.startsWith("⛔")||msg.startsWith("❌")?"#fca5a5":"#fbbf24"}`,borderRadius:12,padding:"10px 16px",marginBottom:16,fontWeight:600,fontSize:13,color:msg.startsWith("✅")?"#16a34a":msg.startsWith("⛔")||msg.startsWith("❌")?"#dc2626":"#92400e"}}>{msg}</div>}
 
-      {/* Sub-tabs + tab PIN */}
+      {/* ── Tabs (tanpa PIN — PIN bisa dilihat di tab Pelanggan) ── */}
       <div style={{display:"flex",gap:4,marginBottom:20,background:"#f9fafb",borderRadius:14,padding:4}}>
-        {[{k:"customers",i:"👥",l:"Pelanggan"},{k:"topup",i:"💳",l:"Top Up"},{k:"pin",i:"🔐",l:"Lihat PIN"},{k:"history",i:"📋",l:"Riwayat"}].map(t=>(
+        {[{k:"customers",i:"👥",l:"Pelanggan"},{k:"topup",i:"💳",l:"Top Up"},{k:"history",i:"📋",l:"Riwayat"}].map(t=>(
           <button key={t.k} onClick={()=>setTab(t.k)}
             style={{flex:1,padding:"10px 6px",background:tab===t.k?"#fff":"transparent",border:"none",borderRadius:10,fontWeight:tab===t.k?700:500,color:tab===t.k?"#ea580c":"#6b7280",cursor:"pointer",fontSize:12,boxShadow:tab===t.k?"0 2px 8px rgba(0,0,0,.08)":"none",transition:"all .2s"}}>
             {t.i} {t.l}
@@ -2210,7 +2236,6 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
       {/* ── Tab Pelanggan ── */}
       {tab==="customers"&&(
         <div>
-          {/* Modal scan QR cari pelanggan */}
           {showScanSearch&&(
             <Modal title="📷 Scan QR Cari Pelanggan" onClose={closeScanSearch}>
               <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>Scan QR Code kartu pelanggan untuk mencarinya.</p>
@@ -2225,7 +2250,6 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
             </Modal>
           )}
 
-          {/* Search bar + tombol scan QR */}
           <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"center"}}>
             <div style={{flex:1,position:"relative"}}>
               <input placeholder="🔍 Cari nama atau nomor WA..." value={search} onChange={e=>setSearch(e.target.value)}
@@ -2234,7 +2258,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
               {search&&<button onClick={()=>setSearch("")} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:"#9ca3af",fontSize:18}}>✕</button>}
             </div>
             <button onClick={startScanSearch} title="Scan QR pelanggan"
-              style={{padding:"11px 14px",background:"#fff7ed",color:"#ea580c",border:"2px solid #fed7aa",borderRadius:12,cursor:"pointer",fontWeight:700,fontSize:16,flexShrink:0,display:"flex",alignItems:"center",gap:6}}
+              style={{padding:"11px 14px",background:"#fff7ed",color:"#ea580c",border:"2px solid #fed7aa",borderRadius:12,cursor:"pointer",fontWeight:700,fontSize:16,flexShrink:0}}
               onMouseOver={e=>e.currentTarget.style.background="#fef3c7"} onMouseOut={e=>e.currentTarget.style.background="#fff7ed"}>
               📷
             </button>
@@ -2248,11 +2272,9 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
                     <div>
                       <p style={{fontWeight:800,fontSize:16,color:"#1c0a00",margin:"0 0 4px"}}>{c.name}</p>
                       <p style={{color:"#6b7280",fontSize:13,margin:"0 0 6px"}}>📱 {c.phone}</p>
-                      <div style={{display:"flex",gap:8}}>
-                        <span style={{background:c.balance>0?"#f0fdf4":"#fef2f2",color:c.balance>0?"#16a34a":"#dc2626",fontSize:13,fontWeight:800,padding:"4px 12px",borderRadius:20,border:`1px solid ${c.balance>0?"#bbf7d0":"#fca5a5"}`}}>
-                          🪙 Saldo: {idr(c.balance)}
-                        </span>
-                      </div>
+                      <span style={{background:c.balance>0?"#f0fdf4":"#fef2f2",color:c.balance>0?"#16a34a":"#dc2626",fontSize:13,fontWeight:800,padding:"4px 12px",borderRadius:20,border:`1px solid ${c.balance>0?"#bbf7d0":"#fca5a5"}`}}>
+                        🪙 Saldo: {idr(c.balance)}
+                      </span>
                     </div>
                     <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
                       <button onClick={()=>{setForm({phone:c.phone,name:c.name,amount:""});setTab("topup");}}
@@ -2266,10 +2288,10 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
                       </button>
                       <button onClick={()=>{
                         const link=`${window.location.origin}${window.location.pathname}?card=${c.id}`;
-                        const msg=`Halo ${c.name}! Cek saldo & QR Code kamu di:\n${link}`;
+                        const wa=`Halo ${c.name}! Cek saldo & QR Code kamu di:\n${link}`;
                         const waPhone=c.phone.replace(/\D/g,"");
                         const target=waPhone.startsWith("0")?"62"+waPhone.slice(1):waPhone;
-                        window.open(`https://wa.me/${target}?text=${encodeURIComponent(msg)}`,"_blank");
+                        window.open(`https://wa.me/${target}?text=${encodeURIComponent(wa)}`,"_blank");
                       }}
                         style={{padding:"8px 14px",background:"#f0fdf4",color:"#16a34a",border:"1px solid #bbf7d0",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
                         💬 Share Kartu
@@ -2279,26 +2301,19 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
                         onMouseOver={e=>e.currentTarget.style.background="#fef3c7"} onMouseOut={e=>e.currentTarget.style.background="#fff7ed"}>
                         🖨️ Cetak Kartu QR
                       </button>
-                      <button onClick={()=>{
-                        const link=`${window.location.origin}${window.location.pathname}?card=${c.id}`;
-                        window.open(link,"_blank");
-                      }}
+                      <button onClick={()=>{const link=`${window.location.origin}${window.location.pathname}?card=${c.id}`;window.open(link,"_blank");}}
                         style={{padding:"8px 14px",background:"#f0f9ff",color:"#0284c7",border:"1px solid #bae6fd",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
                         🪪 Lihat
                       </button>
-                      {/* Kosongkan Saldo & Hapus — hanya SuperAdmin */}
                       {isSuperAdmin&&(
                         <>
-                          <button onClick={()=>kosongkanSaldo(c)}
-                            disabled={c.balance===0}
+                          <button onClick={()=>kosongkanSaldo(c)} disabled={c.balance===0}
                             style={{padding:"8px 14px",background:c.balance>0?"#fef3c7":"#f9fafb",color:c.balance>0?"#92400e":"#9ca3af",border:`1px solid ${c.balance>0?"#fbbf24":"#e5e7eb"}`,borderRadius:10,cursor:c.balance>0?"pointer":"not-allowed",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
-                            title={c.balance===0?"Saldo sudah 0":"Kosongkan saldo pelanggan"}
                             onMouseOver={e=>{if(c.balance>0)e.currentTarget.style.background="#fde68a";}} onMouseOut={e=>{if(c.balance>0)e.currentTarget.style.background="#fef3c7";}}>
                             🪣 Kosongkan Saldo
                           </button>
                           <button onClick={()=>deleteCustomer(c)}
-                            style={{padding:"8px 14px",background:c.balance>0?"#f9fafb":"#fef2f2",color:c.balance>0?"#9ca3af":"#dc2626",border:`1px solid ${c.balance>0?"#e5e7eb":"#fca5a5"}`,borderRadius:10,cursor:c.balance>0?"not-allowed":"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
-                            title={c.balance>0?"Kosongkan saldo dulu sebelum hapus":"Hapus pelanggan"}>
+                            style={{padding:"8px 14px",background:c.balance>0?"#f9fafb":"#fef2f2",color:c.balance>0?"#9ca3af":"#dc2626",border:`1px solid ${c.balance>0?"#e5e7eb":"#fca5a5"}`,borderRadius:10,cursor:c.balance>0?"not-allowed":"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
                             🗑️ Hapus
                           </button>
                         </>
@@ -2322,9 +2337,8 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
               if(found) setForm(f=>({...f,name:found.name}));
             }}/>
             <FI label="Nama Pelanggan" placeholder="Nama lengkap" value={form.name} onChange={v=>setForm({...form,name:v})}/>
-            <FI label="Nominal Top Up (Rp)" placeholder="50000" value={form.amount} onChange={v=>setForm({...form,amount:v})} type="number"/>
+            <FI label="Nominal Top Up (Rp)" placeholder="50000" value={form.amount} onChange={v=>setForm({...form,amount:v})} money/>
 
-            {/* Preview nominal cepat — pakai functional setState agar tidak stale */}
             <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
               {[10000,20000,50000,100000].map(n=>(
                 <button key={n} onClick={()=>setForm(f=>({...f,amount:String(n)}))}
@@ -2334,36 +2348,69 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
               ))}
             </div>
 
-            {/* Preview saldo — tampil saat phone DAN amount sudah diisi, sembunyikan saat proses */}
+            {/* ── Pilihan Metode Bayar ── */}
+            <p style={{fontSize:13,fontWeight:700,color:"#374151",margin:"0 0 8px"}}>Metode Pembayaran</p>
+            <div style={{display:"flex",gap:10,marginBottom:16}}>
+              {[{k:"cash",l:"💵 Tunai"},{k:"transfer",l:"💳 Transfer / QRIS"}].map(m=>(
+                <button key={m.k} onClick={()=>{setPayMethod(m.k);if(m.k==="cash")setPhotoCapture(null);}}
+                  style={{flex:1,padding:"11px",background:payMethod===m.k?"#ea580c":"#f9fafb",color:payMethod===m.k?"#fff":"#6b7280",border:`2px solid ${payMethod===m.k?"#ea580c":"#e5e7eb"}`,borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif",transition:"all .15s"}}
+                  onMouseOver={e=>{if(payMethod!==m.k)e.currentTarget.style.background="#fff7ed";}} onMouseOut={e=>{if(payMethod!==m.k)e.currentTarget.style.background="#f9fafb";}}>
+                  {m.l}
+                </button>
+              ))}
+            </div>
+
+            {/* ── Foto bukti Transfer/QRIS ── */}
+            {payMethod==="transfer"&&(
+              <div style={{marginBottom:16}}>
+                <input ref={photoInputRef} type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={capturePhoto}/>
+                {photoCapture?(
+                  <div>
+                    <p style={{fontSize:12,color:"#16a34a",fontWeight:600,margin:"0 0 8px"}}>✅ Foto bukti tersimpan (lokal device)</p>
+                    <img src={photoCapture} alt="Bukti Transfer" style={{width:"100%",maxHeight:200,objectFit:"contain",borderRadius:12,border:"1px solid #e5e7eb",marginBottom:8}}/>
+                    <div style={{display:"flex",gap:8}}>
+                      <button onClick={()=>photoInputRef.current?.click()}
+                        style={{flex:1,padding:"9px",background:"#f0f9ff",color:"#0284c7",border:"1px solid #bae6fd",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                        📷 Ganti Foto
+                      </button>
+                      <button onClick={()=>setPhotoCapture(null)}
+                        style={{padding:"9px 14px",background:"#fef2f2",color:"#dc2626",border:"1px solid #fca5a5",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                        🗑️ Hapus
+                      </button>
+                    </div>
+                  </div>
+                ):(
+                  <button onClick={()=>photoInputRef.current?.click()}
+                    style={{width:"100%",padding:"14px",background:"#f0f9ff",color:"#0284c7",border:"2px dashed #bae6fd",borderRadius:14,cursor:"pointer",fontWeight:700,fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:10}}
+                    onMouseOver={e=>e.currentTarget.style.background="#e0f2fe"} onMouseOut={e=>e.currentTarget.style.background="#f0f9ff"}>
+                    📷 Foto Bukti Transfer / QRIS (Opsional)
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Preview saldo */}
             {form.phone&&form.amount&&!sending&&(()=>{
               const cleanPhone=form.phone.trim().replace(/\D/g,"");
               const found=customers.find(c=>c.phone===cleanPhone);
-              // Saldo saat ini: 0 jika pelanggan baru, atau saldo tersimpan jika sudah ada
               const curBal=found?found.balance:0;
               const topAmt=parseInt(form.amount)||0;
-              const isNew=!found;
+              const isNewCust=!found;
               return(
                 <div style={{background:"#f9fafb",borderRadius:12,padding:"14px 16px",marginBottom:14,border:"1px solid #e5e7eb"}}>
-                  {/* Status pelanggan */}
                   <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,paddingBottom:10,borderBottom:"1px dashed #e5e7eb"}}>
-                    <span style={{fontSize:14}}>{isNew?"🆕":"👤"}</span>
-                    <span style={{fontWeight:700,color:isNew?"#0284c7":"#16a34a",fontSize:13}}>
-                      {isNew?"Pelanggan Baru":"Pelanggan Terdaftar"}
-                    </span>
+                    <span style={{fontSize:14}}>{isNewCust?"🆕":"👤"}</span>
+                    <span style={{fontWeight:700,color:isNewCust?"#0284c7":"#16a34a",fontSize:13}}>{isNewCust?"Pelanggan Baru":"Pelanggan Terdaftar"}</span>
                   </div>
-                  {/* Baris 1: Saldo saat ini (merah di screenshot) */}
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:6}}>
                     <span style={{color:"#6b7280"}}>Saldo saat ini</span>
                     <span style={{fontWeight:700,color:"#374151"}}>{idr(curBal)}</span>
                   </div>
-                  {/* Baris 2: Nominal top up (hijau di screenshot) */}
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:6}}>
                     <span style={{color:"#6b7280"}}>Nominal top up</span>
                     <span style={{fontWeight:700,color:"#16a34a"}}>+ {idr(topAmt)}</span>
                   </div>
-                  {/* Garis pemisah */}
                   <div style={{borderTop:"2px solid #e5e7eb",paddingTop:8,marginTop:2}}>
-                    {/* Baris 3: Saldo setelah top up (hitam di screenshot) */}
                     <div style={{display:"flex",justifyContent:"space-between",fontSize:14}}>
                       <span style={{fontWeight:700,color:"#1c0a00"}}>Saldo setelah top up</span>
                       <span style={{fontWeight:900,color:"#ea580c",fontSize:16}}>{idr(curBal+topAmt)}</span>
@@ -2376,20 +2423,19 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
             <button onClick={handleTopUp} disabled={sending}
               style={{width:"100%",padding:"14px",background:sending?"#9ca3af":"#ea580c",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:sending?"not-allowed":"pointer",fontSize:15,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:10}}
               onMouseOver={e=>{if(!sending)e.currentTarget.style.background="#c2410c";}} onMouseOut={e=>{if(!sending)e.currentTarget.style.background="#ea580c";}}>
-              {sending?(<><span style={{display:"inline-block",animation:"spin 1s linear infinite"}}>⏳</span> Memproses...</>):"💰 Proses Top Up & Download Kartu"}
+              {sending?(<><span style={{display:"inline-block",animation:"spin 1s linear infinite"}}>⏳</span> Memproses...</>):`💰 Proses Top Up ${payMethod==="transfer"?"(Transfer)":"(Tunai)"}`}
             </button>
             {sending&&(
               <div style={{marginTop:8,background:"#fef2f2",border:"2px solid #fca5a5",borderRadius:10,padding:"10px 12px",textAlign:"center"}}>
                 <p style={{margin:0,fontSize:13,fontWeight:800,color:"#dc2626"}}>⚠️ JANGAN REFRESH ATAU TUTUP HALAMAN!</p>
-                <p style={{margin:"3px 0 0",fontSize:11,color:"#991b1b"}}>Sedang menyimpan ke server, mohon tunggu sampai selesai (maks ±20 detik)</p>
+                <p style={{margin:"3px 0 0",fontSize:11,color:"#991b1b"}}>Sedang menyimpan ke server, mohon tunggu sampai selesai</p>
               </div>
             )}
             {!settings.fonnteToken&&<p style={{textAlign:"center",color:"#f97316",fontSize:12,margin:"8px 0 0"}}>⚠️ Fonnte token belum diisi — notifikasi WA tidak akan terkirim</p>}
 
-            {/* Top up SUDAH tersimpan, tapi WA otomatis gagal — tombol kirim manual */}
             {pendingWaResend&&(
               <div style={{marginTop:12,background:"#fef3c7",border:"2px solid #fbbf24",borderRadius:12,padding:14}}>
-                <p style={{margin:"0 0 8px",fontSize:13,fontWeight:700,color:"#92400e"}}>⚠️ Saldo {pendingWaResend.name} sudah tersimpan, tapi WA otomatis gagal terkirim (jaringan kurang baik).</p>
+                <p style={{margin:"0 0 8px",fontSize:13,fontWeight:700,color:"#92400e"}}>⚠️ Saldo {pendingWaResend.name} sudah tersimpan, tapi WA otomatis gagal terkirim.</p>
                 <button onClick={()=>{
                     const waPhone=pendingWaResend.phone.replace(/\D/g,"");
                     const target=waPhone.startsWith("0")?"62"+waPhone.slice(1):waPhone;
@@ -2405,98 +2451,106 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
         </div>
       )}
 
-      {/* ── Tab Lihat PIN ── */}
-      {tab==="pin"&&(
-        <div style={{maxWidth:500}}>
-          <div style={{background:"#f5f0ff",border:"1px solid #c4b5fd",borderRadius:14,padding:"14px 18px",marginBottom:18}}>
-            <p style={{margin:0,fontWeight:700,color:"#4c1d95",fontSize:14}}>🔐 Cari PIN Pelanggan</p>
-            <p style={{margin:"4px 0 0",color:"#7c3aed",fontSize:13}}>Gunakan untuk membantu pelanggan yang lupa PIN</p>
-          </div>
-          {/* Search */}
-          <div style={{position:"relative",marginBottom:16}}>
-            <input placeholder="🔍 Cari nama atau nomor WA pelanggan..."
-              value={pinSearch} onChange={e=>setPinSearch(e.target.value)}
-              style={{width:"100%",border:"2px solid #e5e7eb",borderRadius:12,padding:"12px 14px",fontSize:14,outline:"none",color:"#111",boxSizing:"border-box",fontFamily:"'Plus Jakarta Sans',sans-serif",transition:"border-color .2s"}}
-              onFocus={e=>e.target.style.borderColor="#7c3aed"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
-            {pinSearch&&<button onClick={()=>setPinSearch("")} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:"#9ca3af",fontSize:18}}>✕</button>}
-          </div>
-          {/* Hasil pencarian */}
-          {pinSearch.trim()?(()=>{
-            const results=customers.filter(c=>
-              c.name.toLowerCase().includes(pinSearch.toLowerCase())||
-              c.phone.includes(pinSearch.replace(/\D/g,""))
-            );
-            return results.length===0
-              ?<EmptyState icon="🔍" text="Pelanggan tidak ditemukan."/>
-              :<div style={{display:"flex",flexDirection:"column",gap:10}}>
-                {results.map(c=>(
-                  <div key={c.id} style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:14,padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}>
-                    <div>
-                      <p style={{margin:0,fontWeight:700,color:"#1c0a00",fontSize:15}}>{c.name}</p>
-                      <p style={{margin:"3px 0 0",color:"#6b7280",fontSize:13}}>📱 {c.phone}</p>
-                      <p style={{margin:"3px 0 0",color:"#16a34a",fontSize:13,fontWeight:600}}>🪙 {idr(c.balance)}</p>
-                    </div>
-                    <button onClick={()=>setShowPinModal(c)}
-                      style={{padding:"10px 18px",background:"#7c3aed",color:"#fff",border:"none",borderRadius:12,cursor:"pointer",fontWeight:700,fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
-                      onMouseOver={e=>e.currentTarget.style.background="#6d28d9"} onMouseOut={e=>e.currentTarget.style.background="#7c3aed"}>
-                      🔐 Lihat PIN
-                    </button>
-                  </div>
-                ))}
-              </div>;
-          })():<EmptyState icon="🔐" text="Ketik nama atau nomor WA untuk mencari pelanggan."/>}
-        </div>
-      )}
-
-      {/* ── Tab Riwayat ── */}
+      {/* ── Tab Riwayat Top Up ── */}
       {tab==="history"&&(
         <div>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:10}}>
-            <h3 style={{margin:0,fontSize:16,fontWeight:800,color:"#1c0a00"}}>Riwayat Transaksi Saldo</h3>
-            <DP value={filterDate} onChange={setFilterDate}/>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
+            <h3 style={{margin:0,fontSize:16,fontWeight:800,color:"#1c0a00"}}>📋 Riwayat Top Up</h3>
+            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+              <DP value={filterDate} onChange={setFilterDate}/>
+              {filteredHistLogs.length>0&&(
+                <button onClick={()=>exportCsv(filteredHistLogs,`TopUp_${filterDate}${isSuperAdmin&&histView==="global"?"_Global":isSuperAdmin&&histView==="byadmin"?`_${histAdminSel}`:``}.csv`)}
+                  style={{padding:"8px 14px",background:"#166534",color:"#fff",border:"none",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",gap:6}}
+                  onMouseOver={e=>e.currentTarget.style.background="#14532d"} onMouseOut={e=>e.currentTarget.style.background="#166534"}>
+                  📥 Export CSV
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Statistik hari ini */}
-          {filteredLogs.length>0&&(
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16}}>
+          {/* Filter tampilan — SuperAdmin saja */}
+          {isSuperAdmin&&(
+            <div style={{background:"#f9fafb",borderRadius:14,padding:"12px 14px",marginBottom:14,display:"flex",flexWrap:"wrap",gap:8,alignItems:"center"}}>
+              <span style={{fontSize:12,fontWeight:700,color:"#6b7280",marginRight:4}}>Tampilkan:</span>
+              {[{k:"mine",l:"Top Up Saya"},{k:"global",l:"Semua Admin (Global)"},{k:"byadmin",l:"Per Admin"}].map(v=>(
+                <button key={v.k} onClick={()=>{setHistView(v.k);if(v.k!=="byadmin")setHistAdminSel("");}}
+                  style={{padding:"6px 14px",background:histView===v.k?"#ea580c":"#fff",color:histView===v.k?"#fff":"#6b7280",border:`1px solid ${histView===v.k?"#ea580c":"#e5e7eb"}`,borderRadius:20,cursor:"pointer",fontWeight:600,fontSize:12,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                  {v.l}
+                </button>
+              ))}
+              {histView==="byadmin"&&(
+                <select value={histAdminSel} onChange={e=>setHistAdminSel(e.target.value)}
+                  style={{padding:"6px 12px",border:"1px solid #e5e7eb",borderRadius:10,fontSize:13,color:"#374151",background:"#fff",cursor:"pointer",outline:"none"}}>
+                  <option value="">-- Pilih Admin --</option>
+                  {adminNamesInLogs.map(n=><option key={n} value={n}>{n}</option>)}
+                </select>
+              )}
+            </div>
+          )}
+
+          {/* Statistik */}
+          {filteredHistLogs.length>0&&(
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:14}}>
               {[
-                {l:"Total Top Up",v:idr(todayTopUp),c:"#16a34a",bg:"#f0fdf4",bc:"#bbf7d0"},
-                {l:"Total Belanja",v:idr(todayPayment),c:"#ea580c",bg:"#fff7ed",bc:"#fed7aa"},
-                {l:"Transaksi",v:filteredLogs.length,c:"#0284c7",bg:"#f0f9ff",bc:"#bae6fd"},
+                {l:"💵 Tunai",v:idr(cashTotal),c:"#16a34a",bg:"#f0fdf4",bc:"#bbf7d0"},
+                {l:"💳 Transfer",v:idr(transferTotal),c:"#0284c7",bg:"#eff6ff",bc:"#bae6fd"},
+                {l:"Total",v:idr(cashTotal+transferTotal),c:"#ea580c",bg:"#fff7ed",bc:"#fed7aa"},
               ].map(s=>(
                 <div key={s.l} style={{background:s.bg,border:`1px solid ${s.bc}`,borderRadius:12,padding:"10px 12px",textAlign:"center"}}>
                   <p style={{margin:0,color:"#6b7280",fontSize:11,fontWeight:600}}>{s.l}</p>
-                  <p style={{margin:"4px 0 0",color:s.c,fontWeight:900,fontSize:16}}>{s.v}</p>
+                  <p style={{margin:"4px 0 0",color:s.c,fontWeight:900,fontSize:14}}>{s.v}</p>
                 </div>
               ))}
             </div>
           )}
 
-          {filteredLogs.length===0?<EmptyState icon="📋" text="Tidak ada transaksi pada tanggal ini."/>:
-            <div style={{display:"flex",flexDirection:"column",gap:8}}>
-              {filteredLogs.map(log=>(
-                <div key={log.id} style={{background:"#fff",border:"1px solid #f3f4f6",borderRadius:14,padding:"12px 16px",boxShadow:"0 2px 6px rgba(0,0,0,.04)"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
-                    <div>
-                      <div style={{display:"flex",gap:8,marginBottom:4,flexWrap:"wrap"}}>
-                        <span style={{background:log.type==="topup"?"#f0fdf4":"#fff7ed",color:log.type==="topup"?"#16a34a":"#ea580c",fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:20,border:`1px solid ${log.type==="topup"?"#bbf7d0":"#fed7aa"}`}}>
-                          {log.type==="topup"?"💰 Top Up":"🛒 Belanja"}
-                        </span>
-                        {log.tenantName&&<span style={{background:"#f5f3ff",color:"#7c3aed",fontSize:11,fontWeight:600,padding:"2px 10px",borderRadius:20,border:"1px solid #ddd6fe"}}>{log.tenantName}</span>}
+          {/* Daftar transaksi */}
+          {filteredHistLogs.length===0
+            ?<EmptyState icon="📋" text={isSuperAdmin&&histView==="byadmin"&&!histAdminSel?"Pilih admin untuk menampilkan riwayat.":"Tidak ada transaksi top up pada tanggal ini."}/>
+            :<div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {filteredHistLogs.map(log=>{
+                const proof=getPhoto(log.id);
+                return(
+                  <div key={log.id} style={{background:"#fff",border:"1px solid #f3f4f6",borderRadius:14,padding:"12px 16px",boxShadow:"0 2px 6px rgba(0,0,0,.04)"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+                      <div>
+                        <div style={{display:"flex",gap:6,marginBottom:5,flexWrap:"wrap",alignItems:"center"}}>
+                          <span style={{background:"#f0fdf4",color:"#16a34a",fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:20,border:"1px solid #bbf7d0"}}>💰 Top Up</span>
+                          <span style={{background:log.payMethod==="transfer"?"#eff6ff":"#f0fdf4",color:log.payMethod==="transfer"?"#0284c7":"#16a34a",fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:20,border:`1px solid ${log.payMethod==="transfer"?"#bae6fd":"#bbf7d0"}`}}>
+                            {log.payMethod==="transfer"?"💳 Transfer":"💵 Tunai"}
+                          </span>
+                        </div>
+                        <p style={{fontWeight:700,color:"#1c0a00",margin:"0 0 2px",fontSize:14}}>{log.customerName}</p>
+                        <p style={{color:"#9ca3af",fontSize:12,margin:0}}>📱 {log.customerPhone} • {log.time}</p>
+                        {log.adminName&&<p style={{color:"#6b7280",fontSize:11,margin:"2px 0 0"}}>👤 Admin: <strong>{log.adminName}</strong></p>}
                       </div>
-                      <p style={{fontWeight:700,color:"#1c0a00",margin:"0 0 2px",fontSize:14}}>{log.customerName}</p>
-                      <p style={{color:"#9ca3af",fontSize:12,margin:0}}>📱 {log.customerPhone} • {log.time}</p>
-                      {log.adminName&&<p style={{color:"#6b7280",fontSize:11,margin:"2px 0 0"}}>👤 Admin: <strong>{log.adminName}</strong></p>}
+                      <div style={{textAlign:"right"}}>
+                        <p style={{fontWeight:900,color:"#16a34a",fontSize:16,margin:0}}>+{idr(log.amount)}</p>
+                        <p style={{color:"#374151",fontSize:11,margin:"3px 0 0",fontWeight:600}}>Saldo: <strong>{idr(log.balanceAfter)}</strong></p>
+                      </div>
                     </div>
-                    <div style={{textAlign:"right"}}>
-                      <p style={{fontWeight:900,color:log.type==="topup"?"#16a34a":"#ea580c",fontSize:16,margin:0}}>
-                        {log.type==="topup"?"+":"-"}{idr(log.amount)}
-                      </p>
-                      <p style={{color:"#374151",fontSize:11,margin:"3px 0 0",fontWeight:600}}>Saldo: <strong style={{color:"#111111"}}>{idr(log.balanceAfter)}</strong></p>
-                    </div>
+                    {/* Foto bukti transfer */}
+                    {proof&&(
+                      <div style={{marginTop:10,borderTop:"1px dashed #f3f4f6",paddingTop:10}}>
+                        <button onClick={()=>setExpandedProof(expandedProof===log.id?null:log.id)}
+                          style={{background:"none",border:"none",padding:0,cursor:"pointer",fontSize:12,color:"#0284c7",fontWeight:600,display:"flex",alignItems:"center",gap:6}}>
+                          <span>📷 Bukti Transfer</span>
+                          <span style={{transform:expandedProof===log.id?"rotate(180deg)":"rotate(0)",transition:"transform .2s",display:"inline-block"}}>▼</span>
+                        </button>
+                        {expandedProof===log.id&&(
+                          <div style={{marginTop:8}}>
+                            <img src={proof} alt="Bukti Transfer" style={{width:"100%",maxHeight:280,objectFit:"contain",borderRadius:10,border:"1px solid #e5e7eb"}}/>
+                            <button onClick={()=>{if(window.confirm("Hapus foto bukti ini dari device?"))deletePhoto(log.id);setExpandedProof(null);}}
+                              style={{marginTop:8,padding:"6px 12px",background:"#fef2f2",color:"#dc2626",border:"1px solid #fca5a5",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:600}}>
+                              🗑️ Hapus Foto dari Device
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>}
         </div>
       )}
@@ -4687,7 +4741,7 @@ function TenantMenuMgr({tenant,menus,allMenus,allTransactions,orders,onSaveMenus
       {showForm&&<Modal title={editing?"Edit Menu":"Tambah Menu Baru"} onClose={()=>setShowForm(false)} accent="#16a34a">
         <FI label="Kode Menu" placeholder="M001" value={form.code} onChange={v=>setForm({...form,code:v.toUpperCase()})} accent="#16a34a"/>
         <FI label="Nama Menu" placeholder="Nasi Goreng Spesial" value={form.name} onChange={v=>setForm({...form,name:v})} accent="#16a34a"/>
-        <FI label="Harga (Rp)" placeholder="15000" value={form.price} onChange={v=>setForm({...form,price:v})} type="number" accent="#16a34a"/>
+        <FI label="Harga (Rp)" placeholder="15000" value={form.price} onChange={v=>setForm({...form,price:v})} money accent="#16a34a"/>
         <div style={{display:"flex",gap:10,marginTop:8}}>
           <button onClick={()=>setShowForm(false)} style={btnSec}>Batal</button>
           <button onClick={save} style={{flex:1,padding:"12px",background:"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}} onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>Simpan</button>
@@ -5184,8 +5238,57 @@ function Modal({title,onClose,children,accent="#ea580c"}){
   );
 }
 
-function FI({label,placeholder,value,onChange,disabled,type="text",accent="#ea580c"}){
+function FI({label,placeholder,value,onChange,disabled,type="text",accent="#ea580c",money=false}){
   const [f,setF]=useState(false);
+  const inputRef=useRef(null);
+
+  // ── Format ribuan: "50000" → "50.000" (tampilan saja, value tetap angka mentah) ──
+  const fmt=v=>{
+    const d=String(v||"").replace(/\D/g,"");
+    return d?d.replace(/\B(?=(\d{3})+(?!\d))/g,"."):""
+  };
+
+  if(money){
+    const displayVal=fmt(value);
+    const handleChange=e=>{
+      const el=e.target;
+      const before=el.selectionStart; // posisi kursor SEBELUM reformat
+      const oldVal=el.value;
+      const raw=oldVal.replace(/\./g,"").replace(/\D/g,""); // angka mentah saja
+      const newFormatted=raw?raw.replace(/\B(?=(\d{3})+(?!\d))/g,"."):""
+      // Hitung berapa dot yang ada sebelum kursor di string lama vs baru
+      const dotsBeforeCursor_old=(oldVal.slice(0,before).match(/\./g)||[]).length;
+      const dotsBeforeCursor_new=(newFormatted.slice(0,before).match(/\./g)||[]).length;
+      const cursorAdjust=dotsBeforeCursor_new-dotsBeforeCursor_old;
+      const newCursor=Math.max(0,before+cursorAdjust);
+      onChange(raw);
+      // Restore posisi kursor setelah React re-render (rAF = setelah paint)
+      requestAnimationFrame(()=>{
+        if(inputRef.current){
+          inputRef.current.setSelectionRange(newCursor,newCursor);
+        }
+      });
+    };
+    return(
+      <div style={{marginBottom:13}}>
+        <label style={{display:"block",fontWeight:600,color:"#374151",fontSize:13,marginBottom:5}}>{label}</label>
+        <div style={{position:"relative"}}>
+          <input
+            ref={inputRef}
+            inputMode="numeric"
+            autoComplete="off"
+            placeholder={placeholder?fmt(String(placeholder).replace(/\D/g,""))||placeholder:placeholder}
+            value={displayVal}
+            disabled={disabled}
+            onFocus={()=>setF(true)} onBlur={()=>setF(false)}
+            onChange={handleChange}
+            style={{width:"100%",border:`2px solid ${f?accent:"#e5e7eb"}`,borderRadius:11,padding:"11px 46px 11px 14px",fontSize:14,outline:"none",fontFamily:"'Plus Jakarta Sans',sans-serif",background:disabled?"#f9fafb":"#fff",color:"#111",transition:"border-color .2s",boxSizing:"border-box"}}/>
+          <span style={{position:"absolute",right:13,top:"50%",transform:"translateY(-50%)",fontSize:12,fontWeight:700,color:"#9ca3af",pointerEvents:"none",userSelect:"none"}}>Rp</span>
+        </div>
+      </div>
+    );
+  }
+
   return(
     <div style={{marginBottom:13}}>
       <label style={{display:"block",fontWeight:600,color:"#374151",fontSize:13,marginBottom:5}}>{label}</label>
