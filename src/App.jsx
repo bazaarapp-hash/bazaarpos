@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────78
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────79
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -2022,19 +2022,31 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     closeCamera();
   };
 
-  // ─ Export CSV/Excel riwayat top up ───────────────────────────────────────────
-  const exportCsv=(logs,filename)=>{
-    const BOM="\uFEFF";
+  // ─ Export Excel riwayat top up ──────────────────────────────────────────────
+  // Pakai format HTML-in-XLS bukan CSV — CSV pakai koma tapi Excel Indonesia
+  // pakai titik-koma sebagai pemisah kolom, sehingga CSV sering tampil satu kolom.
+  // HTML table yang di-wrap dengan header Excel selalu terbaca kolom per kolom
+  // di semua versi Excel & regional setting tanpa perlu library tambahan.
+  const exportExcel=(logs,filename)=>{
     const headers=["Tanggal","Waktu","Nama Pelanggan","No. HP","Nominal (Rp)","Saldo Setelah (Rp)","Admin","Metode Bayar"];
     const rows=logs.map(l=>[
       l.date||"",l.time||"",l.customerName||"",l.customerPhone||"",
       l.amount||0,l.balanceAfter||0,l.adminName||"",
       l.payMethod==="transfer"?"Transfer/QRIS":"Tunai",
     ]);
-    const csv=BOM+[headers,...rows].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(",")).join("\n");
-    const blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+    const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    const thStyle='style="background:#16a34a;color:#fff;padding:6px 10px;border:1px solid #ccc;font-family:Arial;font-size:11pt;font-weight:bold;"';
+    const tdStyle='style="padding:5px 10px;border:1px solid #ccc;font-family:Arial;font-size:11pt;"';
+    const tbl=[
+      `<table>`,
+      `<tr>${headers.map(h=>`<th ${thStyle}>${esc(h)}</th>`).join("")}</tr>`,
+      ...rows.map(r=>`<tr>${r.map(c=>`<td ${tdStyle}>${esc(c)}</td>`).join("")}</tr>`),
+      `</table>`,
+    ].join("");
+    const html=`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"/><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Riwayat Top Up</x:Name></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head><body>${tbl}</body></html>`;
+    const blob=new Blob(["\uFEFF"+html],{type:"application/vnd.ms-excel;charset=utf-8"});
     const url=URL.createObjectURL(blob);
-    const a=document.createElement("a"); a.href=url; a.download=filename; a.click();
+    const a=document.createElement("a");a.href=url;a.download=filename.replace(/\.csv$/i,".xls");a.click();
     URL.revokeObjectURL(url);
   };
 
@@ -2252,7 +2264,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
       {showCamera&&(
         <Modal title="📷 Foto Bukti Transfer/QRIS" onClose={closeCamera} accent="#0284c7">
           <p style={{color:"#6b7280",fontSize:13,margin:"0 0 10px"}}>Arahkan kamera ke bukti transfer/QRIS, lalu tekan ambil foto.</p>
-          <div style={{position:"relative",borderRadius:14,overflow:"hidden",background:"#000",marginBottom:12,aspectRatio:"4/3"}}>
+          <div style={{position:"relative",borderRadius:14,overflow:"hidden",background:"#000",marginBottom:12,aspectRatio:"3/4",maxHeight:"65vh",display:"flex",alignItems:"center",justifyContent:"center"}}>
             <video ref={videoCamRef} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}} playsInline muted/>
           </div>
           <div style={{display:"flex",gap:10}}>
@@ -2566,10 +2578,10 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
             <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
               <DP value={filterDate} onChange={setFilterDate}/>
               {filteredHistLogs.length>0&&(
-                <button onClick={()=>exportCsv(filteredHistLogs,`TopUp_${filterDate}${isSuperAdmin&&histView==="global"?"_Global":isSuperAdmin&&histView==="byadmin"?`_${histAdminSel}`:``}.csv`)}
+                <button onClick={()=>exportExcel(filteredHistLogs,`TopUp_${filterDate}${isSuperAdmin&&histView==="global"?"_Global":isSuperAdmin&&histView==="byadmin"?`_${histAdminSel}`:``}.xls`)}
                   style={{padding:"8px 14px",background:"#166534",color:"#fff",border:"none",borderRadius:10,cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",gap:6}}
                   onMouseOver={e=>e.currentTarget.style.background="#14532d"} onMouseOut={e=>e.currentTarget.style.background="#166534"}>
-                  📥 Export CSV
+                  📥 Export Excel
                 </button>
               )}
             </div>
