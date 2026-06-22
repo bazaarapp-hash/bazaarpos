@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────81
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────82
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -2022,27 +2022,75 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     closeCamera();
   };
 
-  // ─ Export Excel riwayat top up ──────────────────────────────────────────────
-  // Pakai format HTML-in-XLS bukan CSV — CSV pakai koma tapi Excel Indonesia
-  // pakai titik-koma sebagai pemisah kolom, sehingga CSV sering tampil satu kolom.
-  // HTML table yang di-wrap dengan header Excel selalu terbaca kolom per kolom
-  // di semua versi Excel & regional setting tanpa perlu library tambahan.
+  // ─ Export Excel riwayat top up + koreksi ────────────────────────────────────
   const exportExcel=(logs,filename)=>{
-    const headers=["Tanggal","Waktu","Nama Pelanggan","No. HP","Nominal (Rp)","Saldo Setelah (Rp)","Admin","Metode Bayar"];
-    const rows=logs.map(l=>[
-      l.date||"",l.time||"",l.customerName||"",l.customerPhone||"",
-      l.amount||0,l.balanceAfter||0,l.adminName||"",
-      l.payMethod==="transfer"?"Transfer/QRIS":"Tunai",
-    ]);
-    const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    const headers=["No","Tipe","Tanggal","Waktu","Nama Pelanggan","No. HP","Nominal (Rp)","Saldo Setelah (Rp)","Admin","Metode Bayar","Keterangan"];
+    const esc=s=>String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
     const thStyle='style="background:#16a34a;color:#fff;padding:6px 10px;border:1px solid #ccc;font-family:Arial;font-size:11pt;font-weight:bold;"';
     const tdStyle='style="padding:5px 10px;border:1px solid #ccc;font-family:Arial;font-size:11pt;"';
-    const tbl=[
-      `<table>`,
-      `<tr>${headers.map(h=>`<th ${thStyle}>${esc(h)}</th>`).join("")}</tr>`,
-      ...rows.map(r=>`<tr>${r.map(c=>`<td ${tdStyle}>${esc(c)}</td>`).join("")}</tr>`),
-      `</table>`,
-    ].join("");
+    const tdRedStyle='style="padding:5px 10px;border:1px solid #ccc;font-family:Arial;font-size:11pt;background:#fef2f2;color:#dc2626;"';
+    const tdSumStyle='style="padding:6px 10px;border:1px solid #ccc;font-family:Arial;font-size:11pt;background:#f0fdf4;font-weight:bold;"';
+
+    // Baris data
+    const dataRows=logs.map((l,i)=>{
+      const isKoreksi=l.type==="adjustment";
+      const td=isKoreksi?tdRedStyle:tdStyle;
+      const tipe=isKoreksi?"✂️ KOREKSI":"💰 Top Up";
+      const metode=isKoreksi?"—":(l.payMethod==="transfer"?"Transfer/QRIS":"Tunai");
+      const ket=isKoreksi?(l.note||l.nota||"Koreksi saldo"):"";
+      return `<tr>
+        <td ${td}>${i+1}</td>
+        <td ${td}>${esc(tipe)}</td>
+        <td ${td}>${esc(l.date||"")}</td>
+        <td ${td}>${esc(l.time||"")}</td>
+        <td ${td}>${esc(l.customerName||"")}</td>
+        <td ${td}>${esc(l.customerPhone||"")}</td>
+        <td ${td}>${isKoreksi?"-":""}${esc(l.amount||0)}</td>
+        <td ${td}>${esc(l.balanceAfter||0)}</td>
+        <td ${td}>${esc(l.adminName||"")}</td>
+        <td ${td}>${esc(metode)}</td>
+        <td ${td}>${esc(ket)}</td>
+      </tr>`;
+    });
+
+    // Baris ringkasan di akhir
+    const topUpRows=logs.filter(l=>l.type==="topup");
+    const koreksiRows=logs.filter(l=>l.type==="adjustment");
+    const sumCash=topUpRows.filter(l=>!l.payMethod||l.payMethod==="cash").reduce((s,l)=>s+l.amount,0);
+    const sumTransfer=topUpRows.filter(l=>l.payMethod==="transfer").reduce((s,l)=>s+l.amount,0);
+    const sumGross=sumCash+sumTransfer;
+    const sumKoreksi=koreksiRows.reduce((s,l)=>s+l.amount,0);
+    const sumNet=sumGross-sumKoreksi;
+
+    const summaryRows=`
+      <tr><td colspan="11" style="padding:4px;border:none;"></td></tr>
+      <tr>
+        <td colspan="6" ${tdSumStyle}>💵 Total Tunai</td>
+        <td colspan="5" ${tdSumStyle}>${sumCash.toLocaleString("id-ID")}</td>
+      </tr>
+      <tr>
+        <td colspan="6" ${tdSumStyle}>💳 Total Transfer/QRIS</td>
+        <td colspan="5" ${tdSumStyle}>${sumTransfer.toLocaleString("id-ID")}</td>
+      </tr>
+      <tr>
+        <td colspan="6" style="padding:6px 10px;border:1px solid #ccc;font-family:Arial;font-size:11pt;font-weight:bold;background:#fff7ed;">GROSS Total Top Up</td>
+        <td colspan="5" style="padding:6px 10px;border:1px solid #ccc;font-family:Arial;font-size:11pt;font-weight:bold;background:#fff7ed;">${sumGross.toLocaleString("id-ID")}</td>
+      </tr>
+      ${sumKoreksi>0?`<tr>
+        <td colspan="6" style="padding:6px 10px;border:1px solid #ccc;font-family:Arial;font-size:11pt;font-weight:bold;background:#fef2f2;color:#dc2626;">✂️ Total Koreksi (${koreksiRows.length}x)</td>
+        <td colspan="5" style="padding:6px 10px;border:1px solid #ccc;font-family:Arial;font-size:11pt;font-weight:bold;background:#fef2f2;color:#dc2626;">-${sumKoreksi.toLocaleString("id-ID")}</td>
+      </tr>
+      <tr>
+        <td colspan="6" style="padding:6px 10px;border:2px solid #16a34a;font-family:Arial;font-size:12pt;font-weight:bold;background:#f0fdf4;color:#14532d;">✅ NET BERSIH</td>
+        <td colspan="5" style="padding:6px 10px;border:2px solid #16a34a;font-family:Arial;font-size:12pt;font-weight:bold;background:#f0fdf4;color:#14532d;">${sumNet.toLocaleString("id-ID")}</td>
+      </tr>`:""}
+    `;
+
+    const tbl=`<table>
+      <tr>${headers.map(h=>`<th ${thStyle}>${esc(h)}</th>`).join("")}</tr>
+      ${dataRows.join("")}
+      ${summaryRows}
+    </table>`;
     const html=`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"/><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Riwayat Top Up</x:Name></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head><body>${tbl}</body></html>`;
     const blob=new Blob(["\uFEFF"+html],{type:"application/vnd.ms-excel;charset=utf-8"});
     const url=URL.createObjectURL(blob);
@@ -2249,13 +2297,23 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
   const myTransferToday=myLogsToday.filter(l=>l.payMethod==="transfer").reduce((s,l)=>s+l.amount,0);
   const myCashCount=myLogsToday.filter(l=>!l.payMethod||l.payMethod==="cash").length;
   const myTransferCount=myLogsToday.filter(l=>l.payMethod==="transfer").length;
+  // Koreksi (adjustment) hari ini — dicatat terpisah, bukan dikurangi dari gross top up
+  const myKoreksiToday=(walletLogs||[]).filter(l=>l.type==="adjustment"&&l.date===todayStr()&&l.adminName===adminName&&(l.nota||"").startsWith("KOREKSI"));
+  const myKoreksiTotal=myKoreksiToday.reduce((s,l)=>s+l.amount,0);
+
   const globalLogsToday=(walletLogs||[]).filter(l=>l.type==="topup"&&l.date===todayStr());
   const globalTopUpToday=globalLogsToday.reduce((s,l)=>s+l.amount,0);
   const globalCashToday=globalLogsToday.filter(l=>!l.payMethod||l.payMethod==="cash").reduce((s,l)=>s+l.amount,0);
   const globalTransferToday=globalLogsToday.filter(l=>l.payMethod==="transfer").reduce((s,l)=>s+l.amount,0);
+  // Koreksi global hari ini
+  const globalKoreksiToday=(walletLogs||[]).filter(l=>l.type==="adjustment"&&l.date===todayStr()&&(l.nota||"").startsWith("KOREKSI"));
+  const globalKoreksiTotal=globalKoreksiToday.reduce((s,l)=>s+l.amount,0);
 
-  // History filter
-  const allTopUpLogs=(walletLogs||[]).filter(l=>l.type==="topup");
+  // History filter — top up + koreksi (adjustment KOREKSI-*) digabung
+  const allTopUpLogs=(walletLogs||[]).filter(l=>
+    l.type==="topup" ||
+    (l.type==="adjustment"&&(l.nota||"").startsWith("KOREKSI"))
+  );
   const baseHistLogs=isSuperAdmin
     ?(histView==="mine"?allTopUpLogs.filter(l=>l.adminName===adminName)
       :histView==="global"?allTopUpLogs
@@ -2263,8 +2321,11 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     :allTopUpLogs.filter(l=>l.adminName===adminName);
   const filteredHistLogs=baseHistLogs.filter(l=>l.date===filterDate).sort((a,b)=>(b.time||"").localeCompare(a.time||""));
 
-  const cashTotal=filteredHistLogs.filter(l=>!l.payMethod||l.payMethod==="cash").reduce((s,l)=>s+l.amount,0);
-  const transferTotal=filteredHistLogs.filter(l=>l.payMethod==="transfer").reduce((s,l)=>s+l.amount,0);
+  const cashTotal=filteredHistLogs.filter(l=>l.type==="topup"&&(!l.payMethod||l.payMethod==="cash")).reduce((s,l)=>s+l.amount,0);
+  const transferTotal=filteredHistLogs.filter(l=>l.type==="topup"&&l.payMethod==="transfer").reduce((s,l)=>s+l.amount,0);
+  const koreksiTotal=filteredHistLogs.filter(l=>l.type==="adjustment").reduce((s,l)=>s+l.amount,0);
+  const grossTotal=cashTotal+transferTotal;
+  const netTotal=grossTotal-koreksiTotal;
 
   const filteredSearch=customers.filter(c=>
     c.name.toLowerCase().includes(search.toLowerCase())||c.phone.includes(search)
@@ -2404,7 +2465,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
           <div style={{flex:"1 1 calc(50% - 5px)",minWidth:0,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:14,padding:"10px 14px",boxSizing:"border-box"}}>
             <p style={{margin:"0 0 3px",color:"#16a34a",fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px"}}>Top Up Saya Hari Ini</p>
             <p style={{margin:"0 0 8px",color:"#14532d",fontSize:16,fontWeight:900,lineHeight:1,wordBreak:"break-all"}}>{idr(myTopUpToday)}</p>
-            <div style={{display:"flex",gap:6}}>
+            <div style={{display:"flex",gap:6,marginBottom:myKoreksiToday.length>0?8:0}}>
               <div style={{flex:1,minWidth:0,background:"#fff",borderRadius:8,padding:"5px 6px",border:"1px solid #dcfce7"}}>
                 <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600,whiteSpace:"nowrap"}}>💵 Tunai ({myCashCount}x)</p>
                 <p style={{margin:"2px 0 0",color:"#16a34a",fontSize:11,fontWeight:800,wordBreak:"break-all"}}>{idr(myCashToday)}</p>
@@ -2414,13 +2475,26 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
                 <p style={{margin:"2px 0 0",color:"#0284c7",fontSize:11,fontWeight:800,wordBreak:"break-all"}}>{idr(myTransferToday)}</p>
               </div>
             </div>
+            {/* Koreksi hari ini — hanya tampil kalau ada */}
+            {myKoreksiToday.length>0&&(
+              <div style={{borderTop:"1px dashed #bbf7d0",paddingTop:6}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                  <span style={{fontSize:10,color:"#dc2626",fontWeight:700}}>✂️ Koreksi ({myKoreksiToday.length}x)</span>
+                  <span style={{fontSize:11,fontWeight:800,color:"#dc2626",wordBreak:"break-all"}}>-{idr(myKoreksiTotal)}</span>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"#fff",borderRadius:8,padding:"5px 8px",border:"1px solid #dcfce7"}}>
+                  <span style={{fontSize:10,color:"#374151",fontWeight:700}}>✅ Net Bersih</span>
+                  <span style={{fontSize:12,fontWeight:900,color:"#14532d",wordBreak:"break-all"}}>{idr(myTopUpToday-myKoreksiTotal)}</span>
+                </div>
+              </div>
+            )}
           </div>
           {/* Total global — hanya SuperAdmin */}
           {isSuperAdmin&&(
             <div style={{flex:"1 1 calc(50% - 5px)",minWidth:0,background:"#eff6ff",border:"1px solid #bae6fd",borderRadius:14,padding:"10px 14px",boxSizing:"border-box"}}>
               <p style={{margin:"0 0 3px",color:"#0284c7",fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px"}}>Total Global Hari Ini</p>
               <p style={{margin:"0 0 8px",color:"#0c4a6e",fontSize:16,fontWeight:900,lineHeight:1,wordBreak:"break-all"}}>{idr(globalTopUpToday)}</p>
-              <div style={{display:"flex",gap:6}}>
+              <div style={{display:"flex",gap:6,marginBottom:globalKoreksiToday.length>0?8:0}}>
                 <div style={{flex:1,minWidth:0,background:"#fff",borderRadius:8,padding:"5px 6px",border:"1px solid #dbeafe"}}>
                   <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600}}>💵 Tunai</p>
                   <p style={{margin:"2px 0 0",color:"#16a34a",fontSize:11,fontWeight:800,wordBreak:"break-all"}}>{idr(globalCashToday)}</p>
@@ -2430,6 +2504,19 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
                   <p style={{margin:"2px 0 0",color:"#0284c7",fontSize:11,fontWeight:800,wordBreak:"break-all"}}>{idr(globalTransferToday)}</p>
                 </div>
               </div>
+              {/* Koreksi global — hanya tampil kalau ada */}
+              {globalKoreksiToday.length>0&&(
+                <div style={{borderTop:"1px dashed #bae6fd",paddingTop:6}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                    <span style={{fontSize:10,color:"#dc2626",fontWeight:700}}>✂️ Koreksi ({globalKoreksiToday.length}x)</span>
+                    <span style={{fontSize:11,fontWeight:800,color:"#dc2626",wordBreak:"break-all"}}>-{idr(globalKoreksiTotal)}</span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:"#fff",borderRadius:8,padding:"5px 8px",border:"1px solid #dbeafe"}}>
+                    <span style={{fontSize:10,color:"#374151",fontWeight:700}}>✅ Net Bersih</span>
+                    <span style={{fontSize:12,fontWeight:900,color:"#0c4a6e",wordBreak:"break-all"}}>{idr(globalTopUpToday-globalKoreksiTotal)}</span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -2727,17 +2814,32 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
 
           {/* Statistik */}
           {filteredHistLogs.length>0&&(
-            <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:8,marginBottom:14}}>
-              {[
-                {l:"💵 Tunai",v:idr(cashTotal),c:"#16a34a",bg:"#f0fdf4",bc:"#bbf7d0"},
-                {l:"💳 Transfer",v:idr(transferTotal),c:"#0284c7",bg:"#eff6ff",bc:"#bae6fd"},
-                {l:"Total",v:idr(cashTotal+transferTotal),c:"#ea580c",bg:"#fff7ed",bc:"#fed7aa"},
-              ].map(s=>(
-                <div key={s.l} style={{background:s.bg,border:`1px solid ${s.bc}`,borderRadius:12,padding:"8px 6px",textAlign:"center",minWidth:0,overflow:"hidden"}}>
-                  <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.l}</p>
-                  <p style={{margin:"3px 0 0",color:s.c,fontWeight:900,fontSize:12,wordBreak:"break-all"}}>{s.v}</p>
+            <div style={{marginBottom:14}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:8,marginBottom:koreksiTotal>0?8:0}}>
+                {[
+                  {l:"💵 Tunai",v:idr(cashTotal),c:"#16a34a",bg:"#f0fdf4",bc:"#bbf7d0"},
+                  {l:"💳 Transfer",v:idr(transferTotal),c:"#0284c7",bg:"#eff6ff",bc:"#bae6fd"},
+                  {l:"Gross Total",v:idr(grossTotal),c:"#ea580c",bg:"#fff7ed",bc:"#fed7aa"},
+                ].map(s=>(
+                  <div key={s.l} style={{background:s.bg,border:`1px solid ${s.bc}`,borderRadius:12,padding:"8px 6px",textAlign:"center",minWidth:0,overflow:"hidden"}}>
+                    <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.l}</p>
+                    <p style={{margin:"3px 0 0",color:s.c,fontWeight:900,fontSize:12,wordBreak:"break-all"}}>{s.v}</p>
+                  </div>
+                ))}
+              </div>
+              {/* Koreksi + Net — hanya tampil kalau ada koreksi */}
+              {koreksiTotal>0&&(
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                  <div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:12,padding:"8px 10px",textAlign:"center",minWidth:0}}>
+                    <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600}}>✂️ Koreksi</p>
+                    <p style={{margin:"3px 0 0",color:"#dc2626",fontWeight:900,fontSize:12,wordBreak:"break-all"}}>-{idr(koreksiTotal)}</p>
+                  </div>
+                  <div style={{background:"#f0fdf4",border:"2px solid #16a34a",borderRadius:12,padding:"8px 10px",textAlign:"center",minWidth:0}}>
+                    <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:700}}>✅ Net Bersih</p>
+                    <p style={{margin:"3px 0 0",color:"#14532d",fontWeight:900,fontSize:12,wordBreak:"break-all"}}>{idr(netTotal)}</p>
+                  </div>
                 </div>
-              ))}
+              )}
             </div>
           )}
 
@@ -2747,27 +2849,40 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
             :<div style={{display:"flex",flexDirection:"column",gap:8}}>
               {filteredHistLogs.map(log=>{
                 const proof=getPhoto(log.id);
+                const isKoreksi=log.type==="adjustment";
                 return(
-                  <div key={log.id} style={{background:"#fff",border:"1px solid #f3f4f6",borderRadius:14,padding:"12px 16px",boxShadow:"0 2px 6px rgba(0,0,0,.04)"}}>
+                  <div key={log.id} style={{background:isKoreksi?"#fff8f8":"#fff",border:`1px solid ${isKoreksi?"#fca5a5":"#f3f4f6"}`,borderRadius:14,padding:"12px 16px",boxShadow:"0 2px 6px rgba(0,0,0,.04)"}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
                       <div>
                         <div style={{display:"flex",gap:6,marginBottom:5,flexWrap:"wrap",alignItems:"center"}}>
-                          <span style={{background:"#f0fdf4",color:"#16a34a",fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:20,border:"1px solid #bbf7d0"}}>💰 Top Up</span>
-                          <span style={{background:log.payMethod==="transfer"?"#eff6ff":"#f0fdf4",color:log.payMethod==="transfer"?"#0284c7":"#16a34a",fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:20,border:`1px solid ${log.payMethod==="transfer"?"#bae6fd":"#bbf7d0"}`}}>
-                            {log.payMethod==="transfer"?"💳 Transfer":"💵 Tunai"}
-                          </span>
+                          {isKoreksi?(
+                            <span style={{background:"#fef2f2",color:"#dc2626",fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:20,border:"1px solid #fca5a5"}}>✂️ Koreksi Saldo</span>
+                          ):(
+                            <>
+                              <span style={{background:"#f0fdf4",color:"#16a34a",fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:20,border:"1px solid #bbf7d0"}}>💰 Top Up</span>
+                              <span style={{background:log.payMethod==="transfer"?"#eff6ff":"#f0fdf4",color:log.payMethod==="transfer"?"#0284c7":"#16a34a",fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:20,border:`1px solid ${log.payMethod==="transfer"?"#bae6fd":"#bbf7d0"}`}}>
+                                {log.payMethod==="transfer"?"💳 Transfer":"💵 Tunai"}
+                              </span>
+                            </>
+                          )}
                         </div>
                         <p style={{fontWeight:700,color:"#1c0a00",margin:"0 0 2px",fontSize:14}}>{log.customerName}</p>
                         <p style={{color:"#9ca3af",fontSize:12,margin:0}}>📱 {log.customerPhone} • {log.time}</p>
                         {log.adminName&&<p style={{color:"#6b7280",fontSize:11,margin:"2px 0 0"}}>👤 Admin: <strong>{log.adminName}</strong></p>}
+                        {/* Alasan koreksi */}
+                        {isKoreksi&&log.note&&(
+                          <p style={{color:"#dc2626",fontSize:11,margin:"4px 0 0",fontStyle:"italic"}}>📝 {log.note}</p>
+                        )}
                       </div>
                       <div style={{textAlign:"right"}}>
-                        <p style={{fontWeight:900,color:"#16a34a",fontSize:16,margin:0}}>+{idr(log.amount)}</p>
+                        <p style={{fontWeight:900,color:isKoreksi?"#dc2626":"#16a34a",fontSize:16,margin:0}}>
+                          {isKoreksi?"-":"+"}{idr(log.amount)}
+                        </p>
                         <p style={{color:"#374151",fontSize:11,margin:"3px 0 0",fontWeight:600}}>Saldo: <strong>{idr(log.balanceAfter)}</strong></p>
                       </div>
                     </div>
                     {/* Foto bukti transfer */}
-                    {proof&&(
+                    {proof&&!isKoreksi&&(
                       <div style={{marginTop:10,borderTop:"1px dashed #f3f4f6",paddingTop:10}}>
                         <button onClick={()=>setExpandedProof(expandedProof===log.id?null:log.id)}
                           style={{background:"none",border:"none",padding:0,cursor:"pointer",fontSize:12,color:"#0284c7",fontWeight:600,display:"flex",alignItems:"center",gap:6}}>
