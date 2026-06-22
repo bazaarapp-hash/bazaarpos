@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────79
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────80
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -2282,40 +2282,41 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
       )}
 
       {/* ── Header dengan stats ── */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,flexWrap:"wrap",gap:12}}>
-        <div>
+      <div style={{marginBottom:16}}>
+        <div style={{marginBottom:10}}>
           <h2 style={{margin:0,fontSize:20,fontWeight:800,color:"#1c0a00"}}>💰 Kasir Top Up</h2>
           <p style={{color:"#9ca3af",margin:"4px 0 0",fontSize:13}}>{customers.length} pelanggan terdaftar</p>
         </div>
+        {/* Kartu stats — penuh lebar layar, SuperAdmin tampil 2 kartu berderet */}
         <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-          {/* Top Up admin ini hari ini — dengan breakdown Tunai/Transfer */}
-          <div style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:14,padding:"10px 16px",minWidth:180}}>
-            <p style={{margin:"0 0 4px",color:"#16a34a",fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px"}}>Top Up Saya Hari Ini</p>
-            <p style={{margin:"0 0 8px",color:"#14532d",fontSize:17,fontWeight:900,lineHeight:1}}>{idr(myTopUpToday)}</p>
+          {/* Top Up admin ini hari ini */}
+          <div style={{flex:"1 1 calc(50% - 5px)",minWidth:0,background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:14,padding:"10px 14px",boxSizing:"border-box"}}>
+            <p style={{margin:"0 0 3px",color:"#16a34a",fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px"}}>Top Up Saya Hari Ini</p>
+            <p style={{margin:"0 0 8px",color:"#14532d",fontSize:16,fontWeight:900,lineHeight:1,wordBreak:"break-all"}}>{idr(myTopUpToday)}</p>
             <div style={{display:"flex",gap:6}}>
-              <div style={{flex:1,background:"#fff",borderRadius:8,padding:"5px 8px",border:"1px solid #dcfce7"}}>
-                <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600}}>💵 Tunai ({myCashCount}x)</p>
-                <p style={{margin:"2px 0 0",color:"#16a34a",fontSize:12,fontWeight:800}}>{idr(myCashToday)}</p>
+              <div style={{flex:1,minWidth:0,background:"#fff",borderRadius:8,padding:"5px 6px",border:"1px solid #dcfce7"}}>
+                <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600,whiteSpace:"nowrap"}}>💵 Tunai ({myCashCount}x)</p>
+                <p style={{margin:"2px 0 0",color:"#16a34a",fontSize:11,fontWeight:800,wordBreak:"break-all"}}>{idr(myCashToday)}</p>
               </div>
-              <div style={{flex:1,background:"#fff",borderRadius:8,padding:"5px 8px",border:"1px solid #dcfce7"}}>
-                <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600}}>💳 Transfer ({myTransferCount}x)</p>
-                <p style={{margin:"2px 0 0",color:"#0284c7",fontSize:12,fontWeight:800}}>{idr(myTransferToday)}</p>
+              <div style={{flex:1,minWidth:0,background:"#fff",borderRadius:8,padding:"5px 6px",border:"1px solid #dcfce7"}}>
+                <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600,whiteSpace:"nowrap"}}>💳 Transfer ({myTransferCount}x)</p>
+                <p style={{margin:"2px 0 0",color:"#0284c7",fontSize:11,fontWeight:800,wordBreak:"break-all"}}>{idr(myTransferToday)}</p>
               </div>
             </div>
           </div>
-          {/* Total global hari ini — hanya SuperAdmin, juga dengan breakdown */}
+          {/* Total global — hanya SuperAdmin */}
           {isSuperAdmin&&(
-            <div style={{background:"#eff6ff",border:"1px solid #bae6fd",borderRadius:14,padding:"10px 16px",minWidth:180}}>
-              <p style={{margin:"0 0 4px",color:"#0284c7",fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px"}}>Total Global Hari Ini</p>
-              <p style={{margin:"0 0 8px",color:"#0c4a6e",fontSize:17,fontWeight:900,lineHeight:1}}>{idr(globalTopUpToday)}</p>
+            <div style={{flex:"1 1 calc(50% - 5px)",minWidth:0,background:"#eff6ff",border:"1px solid #bae6fd",borderRadius:14,padding:"10px 14px",boxSizing:"border-box"}}>
+              <p style={{margin:"0 0 3px",color:"#0284c7",fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:".5px"}}>Total Global Hari Ini</p>
+              <p style={{margin:"0 0 8px",color:"#0c4a6e",fontSize:16,fontWeight:900,lineHeight:1,wordBreak:"break-all"}}>{idr(globalTopUpToday)}</p>
               <div style={{display:"flex",gap:6}}>
-                <div style={{flex:1,background:"#fff",borderRadius:8,padding:"5px 8px",border:"1px solid #dbeafe"}}>
+                <div style={{flex:1,minWidth:0,background:"#fff",borderRadius:8,padding:"5px 6px",border:"1px solid #dbeafe"}}>
                   <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600}}>💵 Tunai</p>
-                  <p style={{margin:"2px 0 0",color:"#16a34a",fontSize:12,fontWeight:800}}>{idr(globalCashToday)}</p>
+                  <p style={{margin:"2px 0 0",color:"#16a34a",fontSize:11,fontWeight:800,wordBreak:"break-all"}}>{idr(globalCashToday)}</p>
                 </div>
-                <div style={{flex:1,background:"#fff",borderRadius:8,padding:"5px 8px",border:"1px solid #dbeafe"}}>
+                <div style={{flex:1,minWidth:0,background:"#fff",borderRadius:8,padding:"5px 6px",border:"1px solid #dbeafe"}}>
                   <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600}}>💳 Transfer</p>
-                  <p style={{margin:"2px 0 0",color:"#0284c7",fontSize:12,fontWeight:800}}>{idr(globalTransferToday)}</p>
+                  <p style={{margin:"2px 0 0",color:"#0284c7",fontSize:11,fontWeight:800,wordBreak:"break-all"}}>{idr(globalTransferToday)}</p>
                 </div>
               </div>
             </div>
@@ -2609,15 +2610,15 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
 
           {/* Statistik */}
           {filteredHistLogs.length>0&&(
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:14}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:8,marginBottom:14}}>
               {[
                 {l:"💵 Tunai",v:idr(cashTotal),c:"#16a34a",bg:"#f0fdf4",bc:"#bbf7d0"},
                 {l:"💳 Transfer",v:idr(transferTotal),c:"#0284c7",bg:"#eff6ff",bc:"#bae6fd"},
                 {l:"Total",v:idr(cashTotal+transferTotal),c:"#ea580c",bg:"#fff7ed",bc:"#fed7aa"},
               ].map(s=>(
-                <div key={s.l} style={{background:s.bg,border:`1px solid ${s.bc}`,borderRadius:12,padding:"10px 12px",textAlign:"center"}}>
-                  <p style={{margin:0,color:"#6b7280",fontSize:11,fontWeight:600}}>{s.l}</p>
-                  <p style={{margin:"4px 0 0",color:s.c,fontWeight:900,fontSize:14}}>{s.v}</p>
+                <div key={s.l} style={{background:s.bg,border:`1px solid ${s.bc}`,borderRadius:12,padding:"8px 6px",textAlign:"center",minWidth:0,overflow:"hidden"}}>
+                  <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.l}</p>
+                  <p style={{margin:"3px 0 0",color:s.c,fontWeight:900,fontSize:12,wordBreak:"break-all"}}>{s.v}</p>
                 </div>
               ))}
             </div>
