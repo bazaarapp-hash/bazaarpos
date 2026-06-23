@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────87
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────88
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -1031,7 +1031,7 @@ function SuperAdminDashboard(props){
   const [bazaarInput,setBazaarInput]=useState(settings.bazaarName||"");
   const [showAlertPop,setShowAlertPop]=useState(true);
   const {BackConfirmModal}=useBackConfirm(true);
-  const todayTx=transactions.filter(t=>t.date===todayStr());
+  const todayTx=transactions.filter(t=>t.date===todayStr()&&!t.refunded);
 
   const tabs=[
     {k:"tenants",i:"🏪",l:"Tenant"},{k:"admins",i:"🔑",l:"Admin"},
@@ -1113,7 +1113,7 @@ function AdminDashboard(props){
   const [filterDate,setFilterDate]=useState(todayStr());
   const {BackConfirmModal}=useBackConfirm(true);
   const [showAlertPop,setShowAlertPop]=useState(true);
-  const todayTx=transactions.filter(t=>t.date===todayStr());
+  const todayTx=transactions.filter(t=>t.date===todayStr()&&!t.refunded);
   const tabs=[
     {k:"tenants",i:"🏪",l:"Tenant"},{k:"wallet",i:"💰",l:"Kasir Top Up"},
     {k:"po",i:"📦",l:"Pre-Order"},
@@ -1268,7 +1268,7 @@ function AdminTenants({tenants,transactions,menus,onSaveTenants}){
       {/* ── Modal Daftar Menu Tenant ── */}
       {viewMenuOf&&(()=>{
         const tenantMenus=(menus||[]).filter(m=>m.tenantId===viewMenuOf.id);
-        const todayTx=transactions.filter(t=>t.tenantId===viewMenuOf.id&&t.date===todayStr());
+        const todayTx=transactions.filter(t=>t.tenantId===viewMenuOf.id&&t.date===todayStr()&&!t.refunded);
         const totalOmzet=todayTx.reduce((s,t)=>s+t.total,0);
         // Hitung qty terjual per menu (semua waktu)
         const soldQty={};
@@ -4288,12 +4288,79 @@ function AdminTransactions({tenants,transactions,settings,customers,walletLogs,o
   const bname=settings?.bazaarName||"BazaarPOS";
 
   // Filter: tanggal + search nota
-  const byDate=transactions.filter(t=>t.date===filterDate);
+  const byDate=transactions.filter(t=>t.date===filterDate&&!t.refunded);
   const filtered=searchNota.trim()
     ?transactions.filter(t=>t.nota.toLowerCase().includes(searchNota.trim().toLowerCase()))
     :byDate;
   const sorted=[...filtered].sort((a,b)=>b.nota.localeCompare(a.nota));
   const gt=filtered.reduce((s,t)=>s+t.total,0);
+
+  // ── Data refund untuk laporan ─────────────────────────────────────────────
+  const refundedTx=transactions.filter(t=>t.refunded&&t.date===filterDate)
+    .sort((a,b)=>(b.refundedAt||"").localeCompare(a.refundedAt||""));
+  const refundTotal=refundedTx.reduce((s,t)=>s+t.total,0);
+
+  const exportRefundExcel=()=>{
+    const esc=s=>String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    const thStyle='style="background:#dc2626;color:#fff;padding:6px 10px;border:1px solid #ccc;font-family:Arial;font-size:11pt;font-weight:bold;"';
+    const tdStyle='style="padding:5px 10px;border:1px solid #ccc;font-family:Arial;font-size:11pt;"';
+    const headers=["No Nota","Tenant","Waktu Transaksi","Waktu Refund","Pelanggan","Item","Total Refund (Rp)","Diproses Oleh"];
+    const rows=refundedTx.map(tx=>{
+      const tn=getTn(tx.tenantId);
+      const items=(tx.items||[]).map(it=>`${it.menuName} x${it.qty}`).join(", ");
+      const refundedBy=tx.refundedBy||(adminData?.name||"Admin");
+      return`<tr>
+        <td ${tdStyle}>${esc(tx.nota)}</td>
+        <td ${tdStyle}>${esc(tn.name||tn.code||"")}</td>
+        <td ${tdStyle}>${esc(tx.date)} ${esc(tx.time)}</td>
+        <td ${tdStyle}>${tx.refundedAt?esc(new Date(tx.refundedAt).toLocaleString("id-ID")):"—"}</td>
+        <td ${tdStyle}>${esc(tx.walletCustomerName||"Tunai")}</td>
+        <td ${tdStyle}>${esc(items)}</td>
+        <td ${tdStyle}>${esc(tx.total)}</td>
+        <td ${tdStyle}>${esc(refundedBy)}</td>
+      </tr>`;
+    }).join("");
+    const sumRow=`<tr><td colspan="6" style="padding:6px 10px;border:1px solid #ccc;font-family:Arial;font-weight:bold;background:#fef2f2;">TOTAL REFUND (${refundedTx.length} transaksi)</td><td style="padding:6px 10px;border:1px solid #ccc;font-family:Arial;font-weight:bold;background:#fef2f2;color:#dc2626;">${refundTotal.toLocaleString("id-ID")}</td><td style="padding:6px 10px;border:1px solid #ccc;background:#fef2f2;"></td></tr>`;
+    const tbl=`<table><tr>${headers.map(h=>`<th ${thStyle}>${esc(h)}</th>`).join("")}</tr>${rows}${sumRow}</table>`;
+    const html=`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"/></head><body>${tbl}</body></html>`;
+    const blob=new Blob(["\uFEFF"+html],{type:"application/vnd.ms-excel;charset=utf-8"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");a.href=url;a.download=`Refund_${filterDate}.xls`;a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const printRefundA4=()=>{
+    const rows=refundedTx.map((tx,i)=>{
+      const tn=getTn(tx.tenantId);
+      const items=(tx.items||[]).map(it=>`[${it.menuCode}] ${it.menuName} ×${it.qty} = ${idr(it.qty*it.price)}`).join("<br/>");
+      return`<tr>
+        <td>${i+1}</td>
+        <td><strong>${tx.nota}</strong></td>
+        <td><strong>${tn.code||""}</strong><br/><span style="color:#6b7280;font-size:10px">${tn.name||""}</span></td>
+        <td>${tx.date}<br/>${tx.time}</td>
+        <td>${tx.refundedAt?new Date(tx.refundedAt).toLocaleString("id-ID",{hour:"2-digit",minute:"2-digit"}):"—"}</td>
+        <td>${tx.walletCustomerName||"<span style='color:#9ca3af'>Tunai</span>"}</td>
+        <td style="font-size:10px">${items}</td>
+        <td style="text-align:right;font-weight:700;color:#dc2626">${idr(tx.total)}</td>
+      </tr>`;
+    }).join("");
+    const summary=`<div class="sr">
+      <div class="sb"><p class="lbl">Jumlah Refund</p><p class="val" style="color:#dc2626">${refundedTx.length}</p></div>
+      <div class="sb em"><p class="lbl">Total Nilai Refund</p><p class="val" style="color:#dc2626">${idr(refundTotal)}</p></div>
+      <div class="sb"><p class="lbl">Omset Bersih</p><p class="val">${idr(gt)}</p></div>
+    </div>`;
+    printA4({
+      title:"Laporan Refund / Pembatalan Transaksi",
+      subtitle:`Tanggal: ${filterDate} | Dicetak: ${new Date().toLocaleString("id-ID")}`,
+      bazaarName:bname,
+      bodyHtml:`${summary}<div class="sec">Daftar Transaksi yang Direfund</div>
+      <table>
+        <thead><tr><th>#</th><th>No Nota</th><th>Tenant</th><th>Waktu Transaksi</th><th>Waktu Refund</th><th>Pelanggan</th><th>Item</th><th style="text-align:right">Total</th></tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot><tr><td colspan="7"><strong>TOTAL REFUND</strong></td><td style="text-align:right;color:#dc2626"><strong>${idr(refundTotal)}</strong></td></tr></tfoot>
+      </table>`
+    });
+  };
 
   const doRefund=async(tx)=>{
     setRefunding(tx.id); setShowConfirmId(null);
@@ -4306,7 +4373,7 @@ function AdminTransactions({tenants,transactions,settings,customers,walletLogs,o
       return;
     }
     try{
-      const updTx=transactions.map(t=>t.id===tx.id?{...t,refunded:true,refundedAt:new Date().toISOString()}:t);
+      const updTx=transactions.map(t=>t.id===tx.id?{...t,refunded:true,refundedAt:new Date().toISOString(),refundedBy:adminData?.name||"Admin"}:t);
       await onSaveTx(updTx);
       if(tx.walletCustomerPhone){
         const cust=(customers||[]).find(c=>c.phone===tx.walletCustomerPhone);
@@ -4352,6 +4419,48 @@ function AdminTransactions({tenants,transactions,settings,customers,walletLogs,o
           {filtered.length>0&&<button onClick={doPrint} style={{background:"#1c0a00",color:"#fff",border:"none",borderRadius:12,padding:"10px 16px",fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}} onMouseOver={e=>e.currentTarget.style.background="#431407"} onMouseOut={e=>e.currentTarget.style.background="#1c0a00"}>🖨️ Print A4</button>}
         </div>
       </div>
+
+      {/* ── Laporan Refund ── tampil hanya kalau ada refund di tanggal ini */}
+      {refundedTx.length>0&&(
+        <div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:16,padding:16,marginBottom:20}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10,marginBottom:12}}>
+            <div>
+              <h3 style={{margin:0,fontSize:15,fontWeight:800,color:"#dc2626"}}>↩️ Laporan Refund / Pembatalan</h3>
+              <p style={{margin:"3px 0 0",color:"#9ca3af",fontSize:12}}>{refundedTx.length} transaksi direfund • Total: <strong style={{color:"#dc2626"}}>{idr(refundTotal)}</strong></p>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={exportRefundExcel}
+                style={{padding:"8px 14px",background:"#dc2626",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",gap:6}}
+                onMouseOver={e=>e.currentTarget.style.background="#b91c1c"} onMouseOut={e=>e.currentTarget.style.background="#dc2626"}>
+                📥 Excel Refund
+              </button>
+              <button onClick={printRefundA4}
+                style={{padding:"8px 14px",background:"#7f1d1d",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",gap:6}}
+                onMouseOver={e=>e.currentTarget.style.background="#991b1b"} onMouseOut={e=>e.currentTarget.style.background="#7f1d1d"}>
+                🖨️ Print Refund
+              </button>
+            </div>
+          </div>
+          {/* Daftar ringkas transaksi yang direfund */}
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {refundedTx.map(tx=>{
+              const tn=getTn(tx.tenantId);
+              return(
+                <div key={tx.id} style={{background:"#fff",borderRadius:10,padding:"10px 14px",border:"1px solid #fecaca",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                  <div>
+                    <span style={{fontWeight:700,fontSize:13,color:"#1c0a00"}}>{tx.nota}</span>
+                    <span style={{color:"#9ca3af",fontSize:12,marginLeft:8}}>{tn.name||tn.code||""}</span>
+                    <span style={{color:"#9ca3af",fontSize:12,marginLeft:8}}>{tx.time}</span>
+                    {tx.walletCustomerName&&<span style={{color:"#6b7280",fontSize:12,marginLeft:8}}>• {tx.walletCustomerName}</span>}
+                    {tx.refundedBy&&<p style={{margin:"2px 0 0",color:"#9ca3af",fontSize:11}}>Direfund oleh: {tx.refundedBy} • {tx.refundedAt?new Date(tx.refundedAt).toLocaleString("id-ID",{hour:"2-digit",minute:"2-digit"}):"—"}</p>}
+                  </div>
+                  <span style={{fontWeight:800,color:"#dc2626",fontSize:14,whiteSpace:"nowrap"}}>-{idr(tx.total)}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Search nota */}
       <div style={{position:"relative",marginBottom:16}}>
@@ -4435,7 +4544,7 @@ function AdminTransactions({tenants,transactions,settings,customers,walletLogs,o
 // ─── Admin Tenant Report ──────────────────────────────────────────────────────
 function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDate}){
   const [selTn,setSelTn]=useState("all"); const [exp,setExp]=useState({});
-  const filtered=transactions.filter(t=>t.date===filterDate);
+  const filtered=transactions.filter(t=>t.date===filterDate&&!t.refunded);
   const actv=tenants.filter(tn=>filtered.some(t=>t.tenantId===tn.id));
   const disp=selTn==="all"?actv:actv.filter(t=>t.id===selTn);
   const COLS=["#ea580c","#0284c7","#16a34a","#7c3aed","#db2777","#ca8a04","#0891b2","#dc2626"];
@@ -4597,7 +4706,7 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
 
 // ─── Admin Summary ────────────────────────────────────────────────────────────
 function AdminSummary({tenants,transactions,settings,filterDate,setFilterDate}){
-  const filtered=transactions.filter(t=>t.date===filterDate);
+  const filtered=transactions.filter(t=>t.date===filterDate&&!t.refunded);
   const gt=filtered.reduce((s,t)=>s+t.total,0);
   const bname=settings?.bazaarName||"BazaarPOS";
   const byTn=tenants.map(tn=>{const txs=filtered.filter(t=>t.tenantId===tn.id);return{...tn,n:txs.length,tt:txs.reduce((s,t)=>s+t.total,0),em:txs.filter(t=>t.paymentMethod==="emoney").reduce((s,t)=>s+t.total,0),cs:txs.filter(t=>t.paymentMethod==="cash").reduce((s,t)=>s+t.total,0)};}).filter(t=>t.n>0).sort((a,b)=>b.tt-a.tt);
@@ -4722,7 +4831,7 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
             <p style={{color:"#bbf7d0",fontSize:11,margin:"2px 0 0"}}>Tenant App • {todayStr()}</p>
             {/* Omset hari ini — real time */}
             {(()=>{
-              const todayTx=transactions.filter(t=>t.date===todayStr());
+              const todayTx=transactions.filter(t=>t.date===todayStr()&&!t.refunded);
               const omset=todayTx.reduce((s,t)=>s+t.total,0);
               const txCount=todayTx.length;
               return(
@@ -5284,7 +5393,7 @@ ${waSignature(tenant.name)}`;
     }
     setSending(null);
   };
-  const filtered=[...transactions.filter(t=>t.date===filterDate)].sort((a,b)=>b.nota.localeCompare(a.nota));
+  const filtered=[...transactions.filter(t=>t.date===filterDate&&!t.refunded)].sort((a,b)=>b.nota.localeCompare(a.nota));
   const tot=filtered.reduce((s,t)=>s+t.total,0);
 
 
