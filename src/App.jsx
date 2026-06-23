@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────84
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────85
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -17,6 +17,7 @@ _gs.textContent = `
   @keyframes pop{0%{transform:scale(.9);opacity:0}100%{transform:scale(1);opacity:1}}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
   @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+  @keyframes slideDown{from{opacity:0;transform:translateY(-100%)}to{opacity:1;transform:translateY(0)}}
   .spinning{animation:spin .8s linear infinite}
   .fade-in{animation:fadeIn .35s ease forwards}
   .slide-up{animation:slideUp .4s ease forwards}
@@ -139,29 +140,75 @@ function PayBadge({method}){
   return <span style={{background:p.bg,color:p.color,border:`1px solid ${p.border}`,fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:20}}>{p.label}</span>;
 }
 
+// ─── NetToast — pesan warning jaringan fixed di atas layar ───────────────────
+// Pakai Portal ke <body> supaya selalu terlihat di posisi manapun user berada
+// di halaman — tidak perlu scroll untuk melihat pesan error jaringan.
+function NetToast({msg,onClose}){
+  useEffect(()=>{
+    if(!msg)return;
+    const t=setTimeout(onClose,7000);
+    return()=>clearTimeout(t);
+  },[msg,onClose]);
+  if(!msg)return null;
+  return createPortal(
+    <div style={{
+      position:"fixed",top:0,left:0,right:0,zIndex:999999,
+      background:"#dc2626",color:"#fff",
+      padding:"13px 52px 13px 16px",
+      fontSize:13,fontWeight:700,lineHeight:1.5,
+      boxShadow:"0 4px 20px rgba(220,38,38,.45)",
+      animation:"slideDown .25s ease",
+      fontFamily:"'Plus Jakarta Sans',sans-serif",
+    }}>
+      ⚠️ {msg}
+      <button onClick={onClose} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:"rgba(255,255,255,.85)",cursor:"pointer",fontSize:20,lineHeight:1,padding:"4px",fontFamily:"inherit"}}>✕</button>
+    </div>,
+    document.body
+  );
+}
+
 // ─── Network Badge — lampu status koneksi ke server di header ────────────────
-// Cek konektivitas berkala (bukan cuma navigator.onLine yang kadang tidak akurat —
-// device bisa "online" ke WiFi tapi WiFi-nya sendiri tidak benar-benar tersambung
-// internet/Firestore). Hijau = server terjangkau, Merah = bermasalah.
+// Strategi hybrid:
+//   (a) navigator.onLine + event listener → deteksi mati total INSTAN (0 Firestore reads)
+//   (b) Ping ke Firestore saat online event → verifikasi benar-benar bisa ke server
+//   (c) Ping berkala tiap 60 detik → safety check sinyal lemah tapi masih "connected"
+// Jauh lebih hemat Firestore reads vs ping tiap 20 detik (dari ~11.160/jam → ~31/jam
+// untuk 31 user aktif — hampir semuanya dari event listener, bukan polling).
 function NetworkBadge({onCheckConnection}){
-  const [status,setStatus]=useState("checking"); // "good" | "bad" | "checking"
+  const [status,setStatus]=useState(navigator.onLine?"checking":"bad");
   useEffect(()=>{
     let cancelled=false;
-    const check=async()=>{
-      if(!onCheckConnection)return;
+    const doCheck=async()=>{
+      if(!navigator.onLine){if(!cancelled)setStatus("bad");return;}
+      if(!onCheckConnection){if(!cancelled)setStatus("good");return;}
       const ok=await onCheckConnection();
-      if(!cancelled) setStatus(ok?"good":"bad");
+      if(!cancelled)setStatus(ok?"good":"bad");
     };
-    check();
-    const interval=setInterval(check,20000); // cek ulang tiap 20 detik
-    return()=>{cancelled=true;clearInterval(interval);};
+    // Event listener: deteksi mati/hidup instan dari OS/browser
+    const handleOnline=()=>{setStatus("checking");doCheck();};
+    const handleOffline=()=>{if(!cancelled)setStatus("bad");};
+    window.addEventListener("online",handleOnline);
+    window.addEventListener("offline",handleOffline);
+    // Ping awal
+    doCheck();
+    // Safety check tiap 60 detik — tangkap sinyal lemah yang masih "online" di OS
+    const interval=setInterval(doCheck,60000);
+    return()=>{
+      cancelled=true;
+      clearInterval(interval);
+      window.removeEventListener("online",handleOnline);
+      window.removeEventListener("offline",handleOffline);
+    };
   },[onCheckConnection]);
-  const color=status==="good"?"#22c55e":status==="bad"?"#ef4444":"#9ca3af";
-  const label=status==="good"?"Jaringan Baik":status==="bad"?"Jaringan Buruk":"Mengecek...";
+  const cfg={
+    good: {color:"#22c55e",shadow:"0 0 6px #22c55e",label:"Jaringan Baik"},
+    bad:  {color:"#ef4444",shadow:"0 0 6px #ef4444",label:"Jaringan Buruk"},
+    checking:{color:"#9ca3af",shadow:"none",label:"Mengecek..."},
+  }[status];
   return(
-    <div title={label} style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",borderRadius:20,padding:"5px 10px"}}>
-      <span style={{width:9,height:9,borderRadius:"50%",background:color,boxShadow:status==="good"?"0 0 6px #22c55e":status==="bad"?"0 0 6px #ef4444":"none",flexShrink:0}}/>
-      <span style={{color:"#fff",fontSize:11,fontWeight:600,whiteSpace:"nowrap"}}>{label}</span>
+    <div title={cfg.label} style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",borderRadius:20,padding:"5px 10px"}}>
+      <span style={{width:9,height:9,borderRadius:"50%",background:cfg.color,boxShadow:cfg.shadow,flexShrink:0,transition:"background .3s"}}/>
+      <span style={{color:"#fff",fontSize:11,fontWeight:600,whiteSpace:"nowrap"}}>{cfg.label}</span>
     </div>
   );
 }
@@ -1960,6 +2007,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
   const [sending,setSending]=useState(false);
   const submittingRef=useRef(false);
   const [pendingWaResend,setPendingWaResend]=useState(null);
+  const [netToast,setNetToast]=useState(""); // pesan jaringan fixed di atas layar
   const [msg,setMsg]=useState("");
   const [filterDate,setFilterDate]=useState(todayStr());
   const [showPinModal,setShowPinModal]=useState(null);
@@ -2123,7 +2171,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     if(c.balance>0){showMsg(`❌ Saldo ${c.name} masih ${idr(c.balance)}. Kosongkan saldo dulu sebelum hapus.`);return;}
     if(!window.confirm(`Hapus pelanggan "${c.name}" (${c.phone})?\nTindakan ini permanen.`))return;
     const online=await onCheckConnection();
-    if(!online){showMsg("Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.",8000);return;}
+    if(!online){setNetToast("Transaksi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");return;}
     try{
       await onSaveCustomers(customers.filter(x=>x.id!==c.id));
       showMsg(`✅ Pelanggan ${c.name} berhasil dihapus & TERSIMPAN.`);
@@ -2134,7 +2182,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
     if(c.balance===0){showMsg(`ℹ️ Saldo ${c.name} sudah 0.`);return;}
     if(!window.confirm(`Kosongkan saldo ${c.name}?\nSaldo saat ini ${idr(c.balance)} akan diset ke Rp 0.\nTindakan ini tidak bisa dibatalkan.`))return;
     const online=await onCheckConnection();
-    if(!online){showMsg("Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.",8000);return;}
+    if(!online){setNetToast("Transaksi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");return;}
     try{
       await onUpdateCustomerBalance(c.id,()=>0,
         (balBefore)=>({id:uid(),customerId:c.id,customerPhone:c.phone,customerName:c.name,
@@ -2164,7 +2212,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
       `Kurangi saldo ${kurangiModal.name}?\n\n• Dikurangi  : ${idr(amount)}\n• Saldo saat ini : ${idr(kurangiModal.balance)}\n• Saldo setelah  : ${idr(kurangiModal.balance-amount)}\n• Alasan     : ${alasan}\n\nTindakan ini dicatat di riwayat transaksi dan tidak bisa dibatalkan.`
     ))return;
     const online=await onCheckConnection();
-    if(!online){showMsg("Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.",8000);return;}
+    if(!online){setNetToast("Transaksi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");return;}
     setKurangiLoading(true);
     try{
       await onUpdateCustomerBalance(
@@ -2239,10 +2287,21 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
 
     submittingRef.current=true; setSending(true); setPendingWaResend(null);
 
+    // ── UI timeout: kalau transaksi tidak selesai dalam 12 detik, unlock UI ──────
+    // Transaksi di Firestore mungkin masih jalan di background — kasir diarahkan
+    // cek riwayat dulu sebelum mencoba ulang supaya tidak double top up.
+    const uiTimeoutId=setTimeout(()=>{
+      if(submittingRef.current){
+        setSending(false); submittingRef.current=false;
+        setForm({phone:"",name:"",amount:""}); setPayMethod("cash"); setPhotoCapture(null);
+        setNetToast("Transaksi Gagal, Silahkan cek riwayat transaksi dan refresh saldo di link pelanggan");
+      }
+    },12000);
+
     const online=await onCheckConnection();
     if(!online){
       setSending(false);submittingRef.current=false;
-      showMsg("Top Up Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.",8000);
+      setNetToast("Top Up Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
       return;
     }
 
@@ -2278,13 +2337,15 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
         }));
       }
     }catch(e){
+      clearTimeout(uiTimeoutId);
       console.error("Top up gagal simpan:",e);
-      showMsg("Transaksi Gagal, Silahkan cek riwayat transaksi dan refresh saldo di link pelanggan",10000);
+      setNetToast("Transaksi Gagal, Silahkan cek riwayat transaksi dan refresh saldo di link pelanggan");
       setSending(false);submittingRef.current=false;
       return;
     }
 
     // ── Saldo TERSIMPAN — lepas kunci, reset form, simpan foto bukti ────────────
+    clearTimeout(uiTimeoutId);
     if(payMethod==="transfer"&&photoCapture) savePhoto(logId,photoCapture);
     setSending(false); submittingRef.current=false;
     setForm({phone:"",name:"",amount:""}); setPayMethod("cash"); setPhotoCapture(null);
@@ -2380,6 +2441,8 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
           <button onClick={()=>setShowPinModal(null)} style={{width:"100%",padding:"12px",background:"#7c3aed",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>Tutup</button>
         </Modal>
       )}
+
+      <NetToast msg={netToast} onClose={()=>setNetToast("")}/>
 
       {/* ── Modal Kurangi Saldo (SuperAdmin only) ── */}
       {kurangiModal&&(
@@ -3022,7 +3085,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
     if(!online){
       setProcessing(false);
       submittingRef.current=false;
-      setScanError("PO Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
+      setNetToast("PO Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
       return;
     }
 
@@ -3108,7 +3171,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
     // ── Cek koneksi server DULU. Kalau gagal, tolak cepat & data PO tetap utuh ──
     const online=await onCheckConnection();
     if(!online){
-      setVerifyError("Verifikasi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
+      setNetToast("Verifikasi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
       return;
     }
 
@@ -3194,7 +3257,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
     const online=await onCheckConnection();
     if(!online){
       setPOActionLoading(false);
-      setSuccessMsg("Refund Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
+      setNetToast("Refund Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
       return;
     }
     try{
@@ -3229,7 +3292,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
     const online=await onCheckConnection();
     if(!online){
       setPOActionLoading(false);
-      setSuccessMsg("Pembatalan Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
+      setNetToast("Pembatalan Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
       return;
     }
     try{
@@ -3442,6 +3505,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
           <p style={{color:"#9ca3af",margin:"4px 0 0",fontSize:13}}>{allPending.length} PO belum selesai • {(orders||[]).filter(o=>o.status==="completed").length} selesai</p>
         </div>
       </div>
+      <NetToast msg={netToast} onClose={()=>setNetToast("")}/>
       {successMsg&&<div className="pop-in" style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:12,padding:"10px 16px",marginBottom:16,fontWeight:600,fontSize:13,color:"#16a34a"}}>{successMsg}</div>}
       <WaFallbackCard pending={pendingWaResend} onDismiss={()=>setPendingWaResend(null)}/>
 
@@ -3652,7 +3716,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                       if(!window.confirm(`Buat PO "Bayar Nanti" untuk ${selCust.name}?\nSaldo TIDAK dipotong sekarang, pelanggan bayar saat pengambilan.`))return;
                       const online=await onCheckConnection();
                       if(!online){
-                        alert("PO Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
+                        setNetToast("PO Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
                         return;
                       }
                       const todayOrders=(orders||[]).filter(o=>o.date===todayStr());
@@ -3952,7 +4016,7 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,onUpdate
     // ── Cek koneksi server DULU. Kalau gagal, tolak cepat & data PO tetap utuh ──
     const online=onCheckConnection?await onCheckConnection():true;
     if(!online){
-      setVerifyError("Verifikasi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
+      setNetToast("Verifikasi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
       return;
     }
 
@@ -4107,6 +4171,7 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,onUpdate
           </div>
         );
       })()}
+      <NetToast msg={netToast} onClose={()=>setNetToast("")}/>
       {successMsg&&<div className="pop-in" style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:12,padding:"10px 16px",marginBottom:12,fontWeight:600,fontSize:13,color:"#16a34a"}}>{successMsg}</div>}
 
       <div style={{position:"relative",marginBottom:14}}>
@@ -4195,7 +4260,7 @@ function AdminTransactions({tenants,transactions,settings,customers,walletLogs,o
     const online=await onCheckConnection();
     if(!online){
       setRefunding(null);
-      setRefundMsg("Refund Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
+      setNetToast("Refund Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
       setTimeout(()=>setRefundMsg(""),6000);
       return;
     }
@@ -4235,7 +4300,8 @@ function AdminTransactions({tenants,transactions,settings,customers,walletLogs,o
   return(
     <div>
       {/* Notif refund */}
-      {refundMsg&&<div className="pop-in" style={{background:refundMsg.startsWith("✅")?"#f0fdf4":"#fef2f2",border:`1px solid ${refundMsg.startsWith("✅")?"#bbf7d0":"#fca5a5"}`,borderRadius:12,padding:"10px 16px",marginBottom:16,fontWeight:600,fontSize:13,color:refundMsg.startsWith("✅")?"#16a34a":"#dc2626"}}>{refundMsg}</div>}
+      <NetToast msg={netToast} onClose={()=>setNetToast("")}/>
+        {refundMsg&&<div className="pop-in" style={{background:refundMsg.startsWith("✅")?"#f0fdf4":"#fef2f2",border:`1px solid ${refundMsg.startsWith("✅")?"#bbf7d0":"#fca5a5"}`,borderRadius:12,padding:"10px 16px",marginBottom:16,fontWeight:600,fontSize:13,color:refundMsg.startsWith("✅")?"#16a34a":"#dc2626"}}>{refundMsg}</div>}
 
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:12}}>
         <div><h2 style={{margin:0,fontSize:20,fontWeight:800,color:"#1c0a00"}}>Data Transaksi</h2>
@@ -4667,6 +4733,7 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,customers,wal
   const [pinError,setPinError]=useState("");
   const [scannedCust,setScannedCust]=useState(null); // customer hasil scan, menunggu PIN
   const [checkoutLoading,setCheckoutLoading]=useState(false);
+  const [netToast,setNetToast]=useState("");
   const submittingRef=useRef(false); // proteksi anti dobel-submit (klik ganda cepat)
   const videoRef=useRef(null);
   const scanIntervalRef=useRef(null);
@@ -4744,20 +4811,26 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,customers,wal
 
   // ── Checkout utama ────────────────────────────────────────────────────────
   const handleCheckout=async(paymentMethod,walletCust=null)=>{
-    if(submittingRef.current)return; // proteksi anti dobel-submit (klik ganda cepat)
+    if(submittingRef.current)return;
     if(!cart.length){alert("Keranjang kosong!");return;}
     submittingRef.current=true;
     setCheckoutLoading(true);
 
-    // ── Cek koneksi server DULU sebelum apapun (1x ping cepat). Kalau gagal, tolak cepat & keranjang/scan tetap utuh ──
+    // ── Cek koneksi + latency sebelum mulai ──
     const online=await onCheckConnection();
     if(!online){
-      setCheckoutLoading(false);
-      submittingRef.current=false;
-      const msg="Transaksi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.";
-      if(paymentMethod==="wallet") setScanError(msg); else alert(msg);
-      return; // STOP — cart & data scan/PIN tidak hilang, kasir tinggal coba lagi
+      setCheckoutLoading(false); submittingRef.current=false;
+      setNetToast("Transaksi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
+      return;
     }
+
+    // ── UI timeout 12 detik — unlock kasir kalau proses terlalu lama ────────────
+    const uiTimeoutId=setTimeout(()=>{
+      if(submittingRef.current){
+        setCheckoutLoading(false); submittingRef.current=false;
+        setNetToast("Transaksi Gagal, Silahkan cek riwayat transaksi dan refresh saldo di link pelanggan");
+      }
+    },12000);
 
     const nota=genNota(tenant.code,allTransactions);
     const tx={id:uid(),tenantId:tenant.id,tenantCode:tenant.code,nota,items:cart,total,paymentMethod,
@@ -4765,12 +4838,10 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,customers,wal
       walletCustomerName:walletCust?.name||null, date:todayStr(),time:timeStr()};
 
     try{
-      // ── Potong saldo DULU (paling rawan gagal: validasi saldo & race-condition) ──
-      // Supaya tidak ada transaksi "hantu" yang tercatat tanpa saldo benar-benar terpotong.
       if(paymentMethod==="wallet"&&walletCust){
         const result=await onUpdateCustomerBalance(
           walletCust.id,
-          -total, // delta: kurangi
+          -total,
           (balBefore,balAfter)=>({
             id:uid(),customerId:walletCust.id,customerPhone:walletCust.phone,customerName:walletCust.name,
             type:"payment",amount:total,balanceBefore:balBefore,balanceAfter:balAfter,
@@ -4795,15 +4866,16 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,customers,wal
       }
 
       if(paymentMethod==="wallet") closeScanner();
+      clearTimeout(uiTimeoutId);
       setLastNota(tx);setPrinted(false);setCart([]);
       setCheckoutLoading(false);
       submittingRef.current=false;
     }catch(e){
+      clearTimeout(uiTimeoutId);
       console.error("Checkout gagal:",e);
       setCheckoutLoading(false);
       submittingRef.current=false;
-      alert("Transaksi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
-      // Jangan kosongkan cart — biarkan kasir retry
+      setNetToast("Transaksi Gagal, Jaringan Kurang Baik. Silahkan coba lagi setelah jaringan baik.");
     }
   };
 
@@ -4942,6 +5014,7 @@ ${waSignature(tenant.name)}`;
         </Modal>
       )}
 
+      <NetToast msg={netToast} onClose={()=>setNetToast("")}/>
       {/* ── Nota Sukses ── */}
       {lastNota&&(
         <Modal title="" onClose={()=>{}}>

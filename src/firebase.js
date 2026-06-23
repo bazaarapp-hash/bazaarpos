@@ -1,4 +1,4 @@
-// ─── GANTI nilai firebaseConfig dengan punya kamu dari Firebase Console 76───────
+// ─── GANTI nilai firebaseConfig dengan punya kamu dari Firebase Console 85───────
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, getDoc, getDocFromServer, setDoc, onSnapshot, runTransaction } from "firebase/firestore";
 
@@ -54,17 +54,20 @@ export const db = {
     });
   },
 
-  // ── Cek konektivitas cepat ke server — SATU KALI ping saja (tidak retry) ────
-  // PENTING: pakai getDocFromServer (BUKAN getDoc) — getDoc() default Firestore SDK
-  // bisa diam-diam serve dari cache lokal walau benar-benar offline, membuat ping
-  // selalu "sukses" meski device sedang tidak ada koneksi sama sekali (false positive).
+  // ── Cek konektivitas cepat ke server — SATU KALI ping, ukur latency ─────────
+  // Return false kalau:
+  //   (a) tidak bisa terhubung sama sekali (timeout/error), ATAU
+  //   (b) bisa terhubung tapi latency > 1500ms — jaringan terlalu lambat untuk
+  //       transaksi finansial yang aman, lebih baik ditolak daripada hang lama.
   async ping(timeoutMs = 2500) {
+    const start = Date.now();
     try {
       await Promise.race([
         getDocFromServer(doc(firestore, "bazaarpos", "bzr_settings")),
         new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), timeoutMs)),
       ]);
-      return true;
+      const latency = Date.now() - start;
+      return latency <= 1500; // false kalau lambat > 1.5 detik
     } catch (e) {
       return false;
     }
