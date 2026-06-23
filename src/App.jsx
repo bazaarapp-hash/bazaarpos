@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────86
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────87
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -3044,6 +3044,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
   const [scannedCust,setScannedCust]=useState(null);
   const [processing,setProcessing]=useState(false);
   const submittingRef=useRef(false); // proteksi anti dobel-submit (klik ganda cepat)
+  const [netToast,setNetToast]=useState(""); // network toast
   const [successMsg,setSuccessMsg]=useState("");
   const [pendingWaResend,setPendingWaResend]=useState(null);
   const [cartMinimized,setCartMinimized]=useState(false);
@@ -4016,6 +4017,7 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,onUpdate
   const [verifyError,setVerifyError]=useState("");
   const [verifyPin,setVerifyPin]=useState("");
   const [verifyPinError,setVerifyPinError]=useState("");
+  const [netToast,setNetToast]=useState(""); // network toast
   const [successMsg,setSuccessMsg]=useState("");
   const videoRef=useRef(null);
   const scanRef=useRef(null);
@@ -4279,6 +4281,7 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,onUpdate
 function AdminTransactions({tenants,transactions,settings,customers,walletLogs,onSaveTx,onSaveCustomers,onSaveWalletLogs,onUpdateCustomerBalance,onCheckConnection,filterDate,setFilterDate,isSuperAdmin,adminData}){
   const getTn=id=>tenants.find(t=>t.id===id)||{};
   const [searchNota,setSearchNota]=useState("");
+  const [netToast,setNetToast]=useState(""); // network toast
   const [refunding,setRefunding]=useState(null);
   const [refundMsg,setRefundMsg]=useState("");
   const [showConfirmId,setShowConfirmId]=useState(null);
