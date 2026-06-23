@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────85
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────86
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -169,42 +169,80 @@ function NetToast({msg,onClose}){
 
 // ─── Network Badge — lampu status koneksi ke server di header ────────────────
 // Strategi hybrid:
-//   (a) navigator.onLine + event listener → deteksi mati total INSTAN (0 Firestore reads)
-//   (b) Ping ke Firestore saat online event → verifikasi benar-benar bisa ke server
-//   (c) Ping berkala tiap 60 detik → safety check sinyal lemah tapi masih "connected"
-// Jauh lebih hemat Firestore reads vs ping tiap 20 detik (dari ~11.160/jam → ~31/jam
-// untuk 31 user aktif — hampir semuanya dari event listener, bukan polling).
+//   (a) navigator.onLine + event listener → deteksi mati TOTAL secara instan
+//   (b) visibilitychange → cek ulang saat user kembali ke tab/app
+//   (c) Interval ADAPTIF:
+//       • Status HIJAU → 60 detik (hemat Firestore reads, jaringan sudah baik)
+//       • Status MERAH → 10 detik (cepat recover saat jaringan pulih kembali)
+//       Ini mengatasi kasus sinyal buruk-tapi-terhubung yang tidak memicu event
+//       online/offline, sehingga badge bisa recover dalam ≤10 detik bukan ~60 detik.
 function NetworkBadge({onCheckConnection}){
   const [status,setStatus]=useState(navigator.onLine?"checking":"bad");
+  const statusRef=useRef(status); // ref untuk akses status terbaru di dalam closure interval
+
+  useEffect(()=>{
+    statusRef.current=status;
+  },[status]);
+
   useEffect(()=>{
     let cancelled=false;
+    let intervalId=null;
+
     const doCheck=async()=>{
-      if(!navigator.onLine){if(!cancelled)setStatus("bad");return;}
+      if(cancelled)return;
+      if(!navigator.onLine){
+        if(!cancelled)setStatus("bad");
+        return;
+      }
       if(!onCheckConnection){if(!cancelled)setStatus("good");return;}
       const ok=await onCheckConnection();
-      if(!cancelled)setStatus(ok?"good":"bad");
+      if(cancelled)return;
+      setStatus(ok?"good":"bad");
     };
-    // Event listener: deteksi mati/hidup instan dari OS/browser
+
+    // Jadwalkan interval adaptif berdasarkan status terkini
+    const scheduleNext=()=>{
+      if(cancelled)return;
+      clearInterval(intervalId);
+      // Merah → 10 detik (cepat recover), Hijau → 60 detik (hemat reads)
+      const delay=statusRef.current==="bad"?10000:60000;
+      intervalId=setInterval(async()=>{
+        await doCheck();
+        scheduleNext(); // reschedule setiap kali cek selesai agar interval ikuti status terbaru
+      },delay);
+    };
+
+    // Event: disconnect/reconnect total dari OS
     const handleOnline=()=>{setStatus("checking");doCheck();};
     const handleOffline=()=>{if(!cancelled)setStatus("bad");};
+
+    // Event: user kembali ke tab/app → langsung cek tanpa tunggu interval
+    const handleVisible=()=>{
+      if(document.visibilityState==="visible")doCheck();
+    };
+
     window.addEventListener("online",handleOnline);
     window.addEventListener("offline",handleOffline);
-    // Ping awal
-    doCheck();
-    // Safety check tiap 60 detik — tangkap sinyal lemah yang masih "online" di OS
-    const interval=setInterval(doCheck,60000);
+    document.addEventListener("visibilitychange",handleVisible);
+
+    // Ping awal lalu mulai jadwal
+    doCheck().then(scheduleNext);
+
     return()=>{
       cancelled=true;
-      clearInterval(interval);
+      clearInterval(intervalId);
       window.removeEventListener("online",handleOnline);
       window.removeEventListener("offline",handleOffline);
+      document.removeEventListener("visibilitychange",handleVisible);
     };
   },[onCheckConnection]);
+
   const cfg={
-    good: {color:"#22c55e",shadow:"0 0 6px #22c55e",label:"Jaringan Baik"},
-    bad:  {color:"#ef4444",shadow:"0 0 6px #ef4444",label:"Jaringan Buruk"},
+    good:    {color:"#22c55e",shadow:"0 0 6px #22c55e",label:"Jaringan Baik"},
+    bad:     {color:"#ef4444",shadow:"0 0 6px #ef4444",label:"Jaringan Buruk"},
     checking:{color:"#9ca3af",shadow:"none",label:"Mengecek..."},
   }[status];
+
   return(
     <div title={cfg.label} style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",borderRadius:20,padding:"5px 10px"}}>
       <span style={{width:9,height:9,borderRadius:"50%",background:cfg.color,boxShadow:cfg.shadow,flexShrink:0,transition:"background .3s"}}/>
