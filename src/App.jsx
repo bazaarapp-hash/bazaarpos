@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────92
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────93
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -58,9 +58,16 @@ const idr = n => new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",
 const todayStr = () => new Date().toISOString().split("T")[0];
 const timeStr = () => new Date().toTimeString().slice(0,5);
 const uid = () => Date.now().toString(36)+Math.random().toString(36).slice(2,6);
-const genNota = (tenantCode, allTx) => {
+const genNota = (tenantCode, allTx, kasirCode="") => {
   const d = todayStr().replace(/-/g,"");
-  const n = allTx.filter(t=>t.tenantCode===tenantCode&&t.date===todayStr()).length+1;
+  const todayTx = allTx.filter(t=>t.tenantCode===tenantCode&&t.date===todayStr());
+  if(kasirCode){
+    // Hitung urutan per kasir per hari supaya nota tidak tabrakan antar kasir
+    const kasirTx = todayTx.filter(t=>t.kasirCode===kasirCode);
+    const n = kasirTx.length + 1;
+    return `${tenantCode}-${d}-${kasirCode}-${String(n).padStart(3,"0")}`;
+  }
+  const n = todayTx.length + 1;
   return `${tenantCode}-${d}-${String(n).padStart(3,"0")}`;
 };
 
@@ -881,7 +888,21 @@ function LoginScreen({tenants,admins,settings,onLogin}){
     const t=tenants.find(x=>x.code===tCode.trim().toUpperCase());
     if(!t) showErr(`Kode tenant "${tCode.trim().toUpperCase()}" tidak ditemukan.`);
     else if(t.password!==tPass) showErr("Kode akses salah. Coba lagi.");
-    else onLogin("tenant",t);
+    else{
+      // Kredensial OK — tanya nama kasir sebelum masuk
+      setKasirTenant(t);
+      setKasirName("");
+      setMode("kasir_input");
+      clearErr();
+    }
+  };
+  const [kasirTenant,setKasirTenant]=useState(null);
+  const [kasirName,setKasirName]=useState("");
+  const confirmKasir=()=>{
+    const name=kasirName.trim()||"Kasir";
+    // Simpan kasir ke sessionStorage, bisa dibaca TenantApp
+    try{sessionStorage.setItem(`bzr_kasir_${kasirTenant.id}`,name);}catch(e){}
+    onLogin("tenant",kasirTenant);
   };
 
   const goBack=(m)=>{setMode(m);clearErr();setSaUser("");setSaPass("");setAdUser("");setAdPass("");setTCode("");setTPass("");};
@@ -991,6 +1012,41 @@ function LoginScreen({tenants,admins,settings,onLogin}){
               Masuk
             </button>
             <button onClick={()=>goBack("select")} style={{background:"none",border:"none",color:"#6b7280",cursor:"pointer",fontSize:14,padding:6}}>← Kembali</button>
+          </div>
+        )}
+
+        {/* ── Step 2: Input nama kasir setelah kredensial berhasil ── */}
+        {mode==="kasir_input"&&kasirTenant&&(
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div style={{textAlign:"center",marginBottom:4}}>
+              <div style={{fontSize:36,marginBottom:6}}>👤</div>
+              <p style={{fontWeight:800,fontSize:17,color:"#1c0a00",margin:0}}>Siapa yang bertugas?</p>
+              <p style={{color:"#6b7280",fontSize:13,margin:"4px 0 0"}}>{kasirTenant.name} ({kasirTenant.code})</p>
+            </div>
+            <div>
+              <label style={{display:"block",fontWeight:700,color:"#374151",fontSize:13,marginBottom:6}}>Nama / Kode Kasir</label>
+              <input placeholder="Contoh: Kasir 1, Budi, K2, dll."
+                value={kasirName}
+                onChange={e=>setKasirName(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&confirmKasir()}
+                autoFocus
+                onFocus={e=>e.target.style.borderColor="#16a34a"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}
+                style={inp("#16a34a")}/>
+              <p style={{fontSize:11,color:"#9ca3af",margin:"5px 0 0"}}>
+                Digunakan sebagai prefix nota transaksi. Kosongkan jika hanya 1 kasir.
+              </p>
+            </div>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>{setMode("tenant");clearErr();}}
+                style={{flex:1,padding:"12px",background:"#f9fafb",color:"#374151",border:"1px solid #e5e7eb",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                ← Kembali
+              </button>
+              <button onClick={confirmKasir}
+                style={{flex:2,padding:"12px",background:"#16a34a",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
+                ✅ Mulai Bertugas
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -4183,7 +4239,7 @@ function POReport({orders,tenants,customers,settings}){
   );
 }
 
-function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,onUpdateCustomerBalance,onCheckConnection,settings,menus}){
+function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,onUpdateCustomerBalance,onCheckConnection,settings,menus,kasirName=""}){
   const [poSearch,setPOSearch]=useState("");
   const [showScanner,setShowScanner]=useState(false);
   const [verifyOrderId,setVerifyOrderId]=useState(null);
@@ -4258,7 +4314,7 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,onUpdate
 
     // ── Baru tandai order selesai ──
     try{
-      await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",paymentStatus:"paid",verifiedAt:new Date().toISOString(),verifiedBy:tenant.name}:o));
+      await onSaveOrders((orders||[]).map(o=>o.id===verifyOrderId?{...o,status:"completed",paymentStatus:"paid",verifiedAt:new Date().toISOString(),verifiedBy:kasirName?`${tenant.name} — ${kasirName}`:tenant.name}:o));
     }catch(e){
       console.error("Order PO gagal disimpan SETELAH saldo terpotong:",e);
       setVerifyError(`⚠️ Saldo SUDAH terpotong tapi status PO gagal diupdate! Laporkan ke Super Admin. (${e.message})`);
@@ -4466,12 +4522,12 @@ function AdminTransactions({tenants,transactions,settings,customers,walletLogs,o
   const filtered=searchNota.trim()
     ?transactions.filter(t=>t.nota.toLowerCase().includes(searchNota.trim().toLowerCase()))
     :byDate;
-  const sorted=[...filtered].sort((a,b)=>b.nota.localeCompare(a.nota));
+  const sorted=[...filtered].sort((a,b)=>{const ta=a.timestamp?new Date(a.timestamp).getTime():0;const tb=b.timestamp?new Date(b.timestamp).getTime():0;return tb-ta;});
   const gt=filtered.reduce((s,t)=>s+t.total,0);
 
   // ── Data refund untuk laporan ─────────────────────────────────────────────
   const refundedTx=transactions.filter(t=>t.refunded&&t.date===filterDate)
-    .sort((a,b)=>(b.refundedAt||"").localeCompare(a.refundedAt||""));
+    .sort((a,b)=>{const ta=a.refundedAt?new Date(a.refundedAt).getTime():0;const tb=b.refundedAt?new Date(b.refundedAt).getTime():0;return tb-ta;});
   const refundTotal=refundedTx.reduce((s,t)=>s+t.total,0);
 
   const exportRefundExcel=()=>{
@@ -4726,7 +4782,7 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
 
   const exportXls=()=>{
     const sheets=disp.map(tn=>{
-      const txs=filtered.filter(t=>t.tenantId===tn.id).sort((a,b)=>a.nota.localeCompare(b.nota));
+      const txs=filtered.filter(t=>t.tenantId===tn.id).sort((a,b)=>{const ta=a.timestamp?new Date(a.timestamp).getTime():0;const tb=b.timestamp?new Date(b.timestamp).getTime():0;return tb-ta;});
       const rows=[];txs.forEach(tx=>tx.items.forEach((it,i)=>rows.push([i===0?tx.nota:"",i===0?tx.date:"",i===0?tx.time:"",i===0?"Saldo":"",it.menuCode,it.menuName,it.qty,it.price,it.qty*it.price,i===0?tx.total:""])));
       const em=txs.reduce((s,t)=>s+t.total,0);const cs=0;
       rows.push([],[],[`TOTAL SALDO`,"","","","","","","","",em],["GRAND TOTAL","","","","","","","","",txs.reduce((s,t)=>s+t.total,0)]);
@@ -4739,7 +4795,7 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
   const doPrint=()=>{
     let body="";
     disp.forEach(tn=>{
-      const txs=filtered.filter(t=>t.tenantId===tn.id).sort((a,b)=>a.nota.localeCompare(b.nota));
+      const txs=filtered.filter(t=>t.tenantId===tn.id).sort((a,b)=>{const ta=a.timestamp?new Date(a.timestamp).getTime():0;const tb=b.timestamp?new Date(b.timestamp).getTime():0;return tb-ta;});
       const tt=txs.reduce((s,t)=>s+t.total,0);
       const ms={};txs.forEach(tx=>tx.items.forEach(it=>{if(!ms[it.menuCode])ms[it.menuCode]={name:it.menuName,qty:0,total:0};ms[it.menuCode].qty+=it.qty;ms[it.menuCode].total+=it.qty*it.price;}));
       const mr=Object.entries(ms).map(([c,m])=>`<tr><td>[${c}]</td><td>${m.name}</td><td style="text-align:center">${m.qty}</td><td style="text-align:right">${idr(m.total)}</td></tr>`).join("");
@@ -4771,7 +4827,7 @@ function AdminTenantReport({tenants,transactions,settings,filterDate,setFilterDa
       {filtered.length===0?<EmptyState icon="📑" text="Tidak ada transaksi."/>:disp.length===0?<EmptyState icon="🏪" text="Tidak ada tenant aktif."/>:
         <div style={{display:"flex",flexDirection:"column",gap:20}}>
           {disp.map((tn,ti)=>{
-            const txs=[...filtered.filter(t=>t.tenantId===tn.id)].sort((a,b)=>a.nota.localeCompare(b.nota));
+            const txs=[...filtered.filter(t=>t.tenantId===tn.id)].sort((a,b)=>{const ta=a.timestamp?new Date(a.timestamp).getTime():0;const tb=b.timestamp?new Date(b.timestamp).getTime():0;return tb-ta;});
             const tt=txs.reduce((s,t)=>s+t.total,0);
             const ac=COLS[ti%COLS.length];const ms={};txs.forEach(tx=>tx.items.forEach(it=>{if(!ms[it.menuCode])ms[it.menuCode]={name:it.menuName,price:it.price,qty:0,total:0};ms[it.menuCode].qty+=it.qty;ms[it.menuCode].total+=it.qty*it.price;}));
             return(
@@ -4967,6 +5023,20 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
   const [showEmerg,setShowEmerg]=useState(false);
   const [emergMsg,setEmergMsg]=useState("");
 
+  // ── Baca nama kasir dari sessionStorage (diisi saat login) ───────────────────
+  const kasirName=useMemo(()=>{
+    try{return sessionStorage.getItem(`bzr_kasir_${tenant.id}`)||"";}catch(e){return "";}
+  },[tenant.id]);
+  // Kode kasir: ambil spasi hapus, uppercase, max 4 char (contoh: "Kasir 1"→"K1", "Budi"→"BUDI")
+  const kasirCode=useMemo(()=>{
+    if(!kasirName)return "";
+    // Cek apakah sudah dalam format pendek (≤4 char tanpa spasi)
+    const clean=kasirName.replace(/\s+/g,"");
+    if(clean.length<=4)return clean.toUpperCase();
+    // Ambil huruf pertama tiap kata, max 4 char
+    return kasirName.split(/\s+/).map(w=>w[0]||"").join("").toUpperCase().slice(0,4);
+  },[kasirName]);
+
   useEffect(()=>{
     const on=()=>setIsOnline(true); const off=()=>setIsOnline(false);
     window.addEventListener("online",on); window.addEventListener("offline",off);
@@ -5002,7 +5072,9 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
               <span style={{background:"rgba(255,255,255,.2)",color:"#fff",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20}}>{tenant.code}</span>
             </div>
             <h1 style={{color:"#fff",fontSize:18,fontWeight:800,margin:0}}>{tenant.name}</h1>
-            <p style={{color:"#bbf7d0",fontSize:11,margin:"2px 0 0"}}>Tenant App • {todayStr()}</p>
+            <p style={{color:"#bbf7d0",fontSize:11,margin:"2px 0 0"}}>
+              {kasirName?<>👤 <strong>{kasirName}</strong> • </>:""}Tenant App • {todayStr()}
+            </p>
             {/* Omset hari ini — real time */}
             {(()=>{
               const todayTx=transactions.filter(t=>t.date===todayStr()&&!t.refunded);
@@ -5036,8 +5108,8 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
       </div>
 
       <div style={{padding:16,maxWidth:520,margin:"0 auto"}} className="fade-in">
-        {tab==="pos"&&<TenantPOS tenant={tenant} menus={menus} allTransactions={allTransactions} onSaveTx={onSaveTx} settings={settings} customers={customers} walletLogs={walletLogs} onSaveCustomers={onSaveCustomers} onSaveWalletLogs={onSaveWalletLogs} onUpdateCustomerBalance={onUpdateCustomerBalance} onCheckConnection={onCheckConnection}/>}
-        {tab==="po"&&<POTenant tenant={tenant} orders={orders} customers={customers} onSaveOrders={onSaveOrders} onSaveCustomers={onSaveCustomers} onUpdateCustomerBalance={onUpdateCustomerBalance} onCheckConnection={onCheckConnection} settings={settings} menus={menus}/>}
+        {tab==="pos"&&<TenantPOS tenant={tenant} menus={menus} allTransactions={allTransactions} onSaveTx={onSaveTx} settings={settings} customers={customers} walletLogs={walletLogs} onSaveCustomers={onSaveCustomers} onSaveWalletLogs={onSaveWalletLogs} onUpdateCustomerBalance={onUpdateCustomerBalance} onCheckConnection={onCheckConnection} kasirName={kasirName} kasirCode={kasirCode}/>}
+        {tab==="po"&&<POTenant tenant={tenant} orders={orders} customers={customers} onSaveOrders={onSaveOrders} onSaveCustomers={onSaveCustomers} onUpdateCustomerBalance={onUpdateCustomerBalance} onCheckConnection={onCheckConnection} settings={settings} menus={menus} kasirName={kasirName}/>}
         {tab==="menu"&&<TenantMenuMgr tenant={tenant} menus={menus} allMenus={allMenus} allTransactions={allTransactions} orders={orders} onSaveMenus={onSaveMenus}/>}
         {tab==="history"&&<TenantHistory transactions={transactions} tenant={tenant} settings={settings}/>}
       </div>
@@ -5046,7 +5118,7 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
 }
 
 // ─── Tenant POS ───────────────────────────────────────────────────────────────
-function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,customers,walletLogs,onSaveCustomers,onSaveWalletLogs,onUpdateCustomerBalance,onCheckConnection}){
+function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,customers,walletLogs,onSaveCustomers,onSaveWalletLogs,onUpdateCustomerBalance,onCheckConnection,kasirName="",kasirCode=""}){
   const [cart,setCart]=useState([]);
   const [lastNota,setLastNota]=useState(null);
   const [printed,setPrinted]=useState(false);
@@ -5156,10 +5228,12 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,customers,wal
       }
     },12000);
 
-    const nota=genNota(tenant.code,allTransactions);
+    const nota=genNota(tenant.code,allTransactions,kasirCode);
     const tx={id:uid(),tenantId:tenant.id,tenantCode:tenant.code,nota,items:cart,total,paymentMethod,
       walletCustomerId:walletCust?.id||null, walletCustomerPhone:walletCust?.phone||null,
-      walletCustomerName:walletCust?.name||null, date:todayStr(),time:timeStr()};
+      walletCustomerName:walletCust?.name||null, date:todayStr(),time:timeStr(),
+      timestamp:new Date().toISOString(),
+      kasirName:kasirName||tenant.name, kasirCode:kasirCode||""};
 
     try{
       if(paymentMethod==="wallet"&&walletCust){
@@ -5567,7 +5641,7 @@ ${waSignature(tenant.name)}`;
     }
     setSending(null);
   };
-  const filtered=[...transactions.filter(t=>t.date===filterDate&&!t.refunded)].sort((a,b)=>b.nota.localeCompare(a.nota));
+  const filtered=[...transactions.filter(t=>t.date===filterDate&&!t.refunded)].sort((a,b)=>{const ta=a.timestamp?new Date(a.timestamp).getTime():0;const tb=b.timestamp?new Date(b.timestamp).getTime():0;return tb-ta;});
   const tot=filtered.reduce((s,t)=>s+t.total,0);
 
 
