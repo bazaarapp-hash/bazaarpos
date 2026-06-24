@@ -1,4 +1,4 @@
-// ─── GANTI nilai firebaseConfig dengan punya kamu dari Firebase Console 85───────
+// ─── GANTI nilai firebaseConfig dengan punya kamu dari Firebase Console ───────95
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, getDoc, getDocFromServer, setDoc, onSnapshot, runTransaction } from "firebase/firestore";
 
@@ -163,5 +163,35 @@ export const db = {
     });
 
     return true;
+  },
+
+  // ── Transfer saldo antar pelanggan — ATOMIK, SATU PERCOBAAN ─────────────────
+  async transferBalance(senderId, receiverId, amount, minRemaining, buildLogEntries){
+    const operationId=`tr_${Date.now()}_${Math.random().toString(36).slice(2,10)}`;
+    const custRef=doc(firestore,"bazaarpos","bzr_customers");
+    const logRef=doc(firestore,"bazaarpos","bzr_wallet_logs");
+    let result=null;
+    await runTransaction(firestore,async(transaction)=>{
+      const custSnap=await transaction.get(custRef);
+      const logSnap=await transaction.get(logRef);
+      const customers=custSnap.exists()?JSON.parse(custSnap.data().value):[];
+      const walletLogs=logSnap.exists()?JSON.parse(logSnap.data().value):[];
+      if(walletLogs.find(l=>l.operationId===operationId)){result={alreadyDone:true};return;}
+      const sIdx=customers.findIndex(c=>c.id===senderId);
+      const rIdx=customers.findIndex(c=>c.id===receiverId);
+      if(sIdx===-1) throw new Error("Pelanggan pengirim tidak ditemukan.");
+      if(rIdx===-1) throw new Error("Pelanggan penerima tidak ditemukan.");
+      const sender=customers[sIdx]; const receiver=customers[rIdx];
+      const sAfter=sender.balance-amount; const rAfter=receiver.balance+amount;
+      if(sAfter<minRemaining) throw new Error(`Saldo tidak cukup. Minimal sisa: Rp ${new Intl.NumberFormat("id-ID").format(minRemaining)}`);
+      customers[sIdx]={...sender,balance:sAfter};
+      customers[rIdx]={...receiver,balance:rAfter};
+      const [logOut,logIn]=buildLogEntries(sender.balance,sAfter,receiver.balance,rAfter);
+      logOut.operationId=operationId; logIn.operationId=operationId+"_in";
+      transaction.set(custRef,{value:JSON.stringify(customers),updatedAt:new Date().toISOString()});
+      transaction.set(logRef,{value:JSON.stringify([logOut,logIn,...walletLogs]),updatedAt:new Date().toISOString()});
+      result={senderBalBefore:sender.balance,senderBalAfter:sAfter,receiverBalBefore:receiver.balance,receiverBalAfter:rAfter,senderName:sender.name,receiverName:receiver.name};
+    });
+    return result;
   },
 };

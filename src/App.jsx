@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────94
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────95
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -109,6 +109,7 @@ const DEF = {
   saUser:"superadmin", saPass:"superadmin123", resetPass:"reset123",
   autoBackup:false, backupInterval:30,
   fonnteToken:"", bazaarPhone:"",
+  minBalanceAfterTransfer:0, // saldo minimum yang harus tersisa setelah transfer antar pelanggan
 };
 
 // ─── Payment ──────────────────────────────────────────────────────────────────
@@ -1469,6 +1470,11 @@ function SettingsPanel({settings,onSaveSettings}){
       <Sec label="📱 WhatsApp (Fonnte API)">
         <FI label="Fonnte API Token" placeholder="Token dari fonnte.com" value={form.fonnteToken||""} onChange={v=>setForm({...form,fonnteToken:v})}/>
         <FI label="Nomor WA Bazaar (pengirim)" placeholder="628123456789" value={form.bazaarPhone||""} onChange={v=>setForm({...form,bazaarPhone:v})}/>
+        <div style={{marginBottom:13}}>
+          <label style={{display:"block",fontWeight:600,color:"#374151",fontSize:13,marginBottom:5}}>Saldo Minimum Setelah Transfer Antar Pelanggan (Rp)</label>
+          <FI placeholder="0 = tidak ada minimum" value={String(form.minBalanceAfterTransfer||0)} onChange={v=>setForm({...form,minBalanceAfterTransfer:parseInt(v)||0})} money/>
+          <p style={{margin:"3px 0 0",fontSize:11,color:"#9ca3af"}}>Pelanggan tidak bisa transfer jika saldo tersisa kurang dari nilai ini. Set 0 untuk tidak ada batas minimum.</p>
+        </div>
         <div style={{background:"#f0f9ff",borderRadius:10,padding:"10px 14px",fontSize:12,color:"#0284c7"}}>
           💡 Daftar di <strong>fonnte.com</strong> → hubungkan nomor WA → copy API Token ke sini.
           Diperlukan untuk kirim notifikasi saldo otomatis ke pelanggan.
@@ -5785,15 +5791,98 @@ function CustomerCardPageLoader({phone}){
 // CUSTOMER CARD PAGE — halaman publik ?card=PHONE
 // ═════════════════════════════════════════════════════════════════════════════
 function CustomerCardPage({phone,settings,customers,walletLogs,onRefresh,refreshing,lastUpdated,justRefreshed}){
-  // Cari customer by ID (format baru, aman) atau phone (backward compat QR lama)
   const param=(phone||"").trim();
   const customer=customers.find(c=>c.id===param)||customers.find(c=>c.phone===param)||customers.find(c=>c.phone===param.replace(/\D/g,""));
   const bazaarName=settings?.bazaarName||"BazaarPOS";
-  // Share link selalu pakai customer ID — tidak expose nomor HP
   const shareUrl=customer?`${window.location.origin}${window.location.pathname}?card=${customer.id}`:window.location.href;
   const waShare=`https://wa.me/?text=${encodeURIComponent(`Cek saldo kamu di ${bazaarName}:\n${shareUrl}`)}`;
   const [expandedTx,setExpandedTx]=useState(null);
   const [showAllTx,setShowAllTx]=useState(false);
+
+  // ── State Transfer Saldo ────────────────────────────────────────────────────
+  const [showTransfer,setShowTransfer]=useState(false);
+  const [trStep,setTrStep]=useState("scan"); // "scan"|"manual"|"confirm"|"pin"|"processing"|"done"|"error"
+  const [trReceiver,setTrReceiver]=useState(null);
+  const [trAmount,setTrAmount]=useState("");
+  const [trPin,setTrPin]=useState("");
+  const [trPinErr,setTrPinErr]=useState("");
+  const [trResult,setTrResult]=useState(null);
+  const [trError,setTrError]=useState("");
+  const [manualWa,setManualWa]=useState("");
+  const [manualWaErr,setManualWaErr]=useState("");
+  // QR Scanner untuk transfer
+  const [scanErr,setScanErr]=useState("");
+  const trVideoRef=useRef(null);
+  const trScanRef=useRef(null);
+
+  const resetTransfer=()=>{
+    setShowTransfer(false);setTrStep("scan");setTrReceiver(null);
+    setTrAmount("");setTrPin("");setTrPinErr("");setTrResult(null);
+    setTrError("");setManualWa("");setManualWaErr("");setScanErr("");
+    stopTrScan();
+  };
+  const stopTrScan=()=>{
+    clearInterval(trScanRef.current);
+    if(trVideoRef.current?.srcObject){trVideoRef.current.srcObject.getTracks().forEach(t=>t.stop());trVideoRef.current.srcObject=null;}
+  };
+  const startTrScan=async()=>{
+    setScanErr("");
+    if(!window.jsQR){
+      await new Promise((res,rej)=>{const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";s.onload=res;s.onerror=rej;document.head.appendChild(s);});
+    }
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"},audio:false});
+      if(trVideoRef.current){trVideoRef.current.srcObject=stream;trVideoRef.current.play();}
+      trScanRef.current=setInterval(()=>{
+        if(!trVideoRef.current||!window.jsQR)return;
+        const cv=document.createElement("canvas");cv.width=trVideoRef.current.videoWidth;cv.height=trVideoRef.current.videoHeight;
+        const ctx=cv.getContext("2d");ctx.drawImage(trVideoRef.current,0,0);
+        const code=window.jsQR(ctx.getImageData(0,0,cv.width,cv.height).data,cv.width,cv.height);
+        if(code?.data){
+          const scanned=code.data.trim();
+          const found=customers.find(c=>c.id===scanned);
+          stopTrScan();
+          if(!found){setScanErr("QR tidak dikenali. Pastikan scan QR kartu pelanggan BazaarPOS.");return;}
+          if(found.id===customer?.id){setScanErr("Tidak bisa transfer ke diri sendiri.");return;}
+          setTrReceiver(found);setTrStep("confirm");
+        }
+      },500);
+    }catch(e){setScanErr("Gagal akses kamera: "+e.message);}
+  };
+  const findByWa=()=>{
+    const cleaned=manualWa.replace(/\D/g,"");
+    if(!cleaned){setManualWaErr("Masukkan nomor WA penerima.");return;}
+    const found=customers.find(c=>c.phone===cleaned||c.phone==="0"+cleaned.slice(2)||("62"+c.phone.slice(1))===cleaned);
+    if(!found){setManualWaErr("Nomor WA tidak terdaftar di "+bazaarName+".");return;}
+    if(found.id===customer?.id){setManualWaErr("Tidak bisa transfer ke diri sendiri.");return;}
+    setTrReceiver(found);setTrStep("confirm");setManualWaErr("");
+  };
+  const doTransfer=async()=>{
+    if(trPin.length!==4||trPin!==customer?.pin){setTrPinErr("PIN salah. Coba lagi.");setTrPin("");return;}
+    const amount=parseInt(trAmount);
+    if(isNaN(amount)||amount<=0){setTrError("Nominal tidak valid.");return;}
+    const minLeft=settings?.minBalanceAfterTransfer||0;
+    if((customer.balance-amount)<minLeft){setTrError(`Saldo tidak cukup. Minimal sisa: ${idr(minLeft)}`);return;}
+    setTrStep("processing");setTrPinErr("");setTrError("");
+    try{
+      const result=await db.transferBalance(
+        customer.id, trReceiver.id, amount, minLeft,
+        (sBefore,sAfter,rBefore,rAfter)=>[
+          {id:uid(),customerId:customer.id,customerPhone:customer.phone,customerName:customer.name,
+           type:"transfer_out",amount,balanceBefore:sBefore,balanceAfter:sAfter,
+           toCustomerId:trReceiver.id,toCustomerName:trReceiver.name,toCustomerPhone:trReceiver.phone,
+           timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()},
+          {id:uid(),customerId:trReceiver.id,customerPhone:trReceiver.phone,customerName:trReceiver.name,
+           type:"transfer_in",amount,balanceBefore:rBefore,balanceAfter:rAfter,
+           fromCustomerId:customer.id,fromCustomerName:customer.name,fromCustomerPhone:customer.phone,
+           timestamp:new Date().toISOString(),date:todayStr(),time:timeStr()},
+        ]
+      );
+      setTrResult(result);setTrStep("done");
+    }catch(e){
+      setTrError(e.message||"Transfer gagal.");setTrStep("error");
+    }
+  };
 
   const idr2=n=>new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",minimumFractionDigits:0}).format(n||0);
 
@@ -5814,6 +5903,178 @@ function CustomerCardPage({phone,settings,customers,walletLogs,onRefresh,refresh
 
   return(
     <div style={{minHeight:"100vh",background:"linear-gradient(145deg,#4c1d95,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+      {/* ── Modal Transfer Saldo ── */}
+      {showTransfer&&(
+        <div style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,.7)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{background:"#fff",borderRadius:24,padding:24,width:"100%",maxWidth:400,maxHeight:"90vh",overflowY:"auto",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+
+            {/* Header modal */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+              <h3 style={{margin:0,fontSize:17,fontWeight:800,color:"#4c1d95"}}>💸 Transfer Saldo</h3>
+              <button onClick={resetTransfer} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:"#9ca3af",padding:4,lineHeight:1}}>✕</button>
+            </div>
+
+            {/* Step: Scan QR */}
+            {trStep==="scan"&&(
+              <div>
+                <p style={{color:"#6b7280",fontSize:13,margin:"0 0 14px"}}>Scan QR kartu pelanggan penerima, atau masukkan nomor WA mereka.</p>
+                <div style={{position:"relative",borderRadius:14,overflow:"hidden",background:"#000",marginBottom:12,aspectRatio:"1"}}>
+                  <video ref={trVideoRef} style={{width:"100%",height:"100%",objectFit:"cover"}} playsInline muted/>
+                  <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none"}}>
+                    <div style={{width:"65%",aspectRatio:"1",border:"3px solid #7c3aed",borderRadius:12,boxShadow:"0 0 0 2000px rgba(0,0,0,.45)"}}/>
+                  </div>
+                </div>
+                {scanErr&&<p style={{color:"#dc2626",fontWeight:600,fontSize:13,textAlign:"center",margin:"0 0 10px"}}>{scanErr}</p>}
+                <button onClick={startTrScan} style={{width:"100%",padding:"12px",background:"#4c1d95",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:10}}>
+                  📷 Mulai Scan QR
+                </button>
+                <button onClick={()=>{stopTrScan();setTrStep("manual");setScanErr("");}} style={{width:"100%",padding:"10px",background:"#f5f0ff",color:"#7c3aed",border:"1px solid #c4b5fd",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:13}}>
+                  ⌨️ Input Nomor WA Manual
+                </button>
+              </div>
+            )}
+
+            {/* Step: Input WA Manual */}
+            {trStep==="manual"&&(
+              <div>
+                <p style={{color:"#6b7280",fontSize:13,margin:"0 0 14px"}}>Masukkan nomor WA terdaftar penerima.</p>
+                <FI label="Nomor WA Penerima" placeholder="08xxxxxxxxxx" value={manualWa} onChange={v=>setManualWa(v)}/>
+                {manualWaErr&&<p style={{color:"#dc2626",fontSize:12,fontWeight:600,margin:"-8px 0 10px"}}>{manualWaErr}</p>}
+                <div style={{display:"flex",gap:10}}>
+                  <button onClick={()=>setTrStep("scan")} style={{flex:1,padding:"11px",background:"#f9fafb",color:"#374151",border:"1px solid #e5e7eb",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:13}}>← Scan QR</button>
+                  <button onClick={findByWa} style={{flex:2,padding:"11px",background:"#4c1d95",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:13}}>Cari Penerima →</button>
+                </div>
+              </div>
+            )}
+
+            {/* Step: Konfirmasi nominal */}
+            {trStep==="confirm"&&trReceiver&&(
+              <div>
+                <div style={{background:"#f5f0ff",borderRadius:14,padding:"14px 16px",marginBottom:16}}>
+                  <p style={{margin:0,fontSize:12,color:"#6b7280",fontWeight:600}}>Penerima</p>
+                  <p style={{margin:"3px 0 0",fontWeight:800,fontSize:16,color:"#4c1d95"}}>{trReceiver.name}</p>
+                  <p style={{margin:"2px 0 0",fontSize:12,color:"#9ca3af"}}>📱 {trReceiver.phone}</p>
+                </div>
+                <div style={{background:"#f9fafb",borderRadius:12,padding:"10px 14px",marginBottom:16,display:"flex",justifyContent:"space-between"}}>
+                  <span style={{fontSize:13,color:"#6b7280"}}>Saldo kamu saat ini</span>
+                  <span style={{fontWeight:800,color:"#16a34a"}}>{idr2(customer.balance)}</span>
+                </div>
+                <FI label="Nominal Transfer (Rp)" placeholder="10000" value={trAmount} onChange={v=>setTrAmount(v)} money accent="#4c1d95"/>
+                {settings?.minBalanceAfterTransfer>0&&(
+                  <p style={{fontSize:11,color:"#9ca3af",margin:"-6px 0 10px"}}>⚠️ Minimal sisa saldo setelah transfer: {idr2(settings.minBalanceAfterTransfer)}</p>
+                )}
+                {/* Preview saldo setelah transfer */}
+                {trAmount&&!isNaN(parseInt(trAmount))&&(()=>{
+                  const amt=parseInt(trAmount); const after=customer.balance-amt;
+                  const min=settings?.minBalanceAfterTransfer||0;
+                  return(
+                    <div style={{background:after<min?"#fef2f2":"#f0fdf4",borderRadius:10,padding:"8px 12px",marginBottom:14,display:"flex",justifyContent:"space-between"}}>
+                      <span style={{fontSize:13,color:"#6b7280"}}>Saldo setelah transfer</span>
+                      <span style={{fontWeight:800,color:after<min?"#dc2626":"#16a34a"}}>{after<0?"❌ Tidak cukup":after<min?"❌ Di bawah minimum":idr2(after)}</span>
+                    </div>
+                  );
+                })()}
+                {trError&&<p style={{color:"#dc2626",fontSize:12,fontWeight:600,margin:"0 0 10px"}}>{trError}</p>}
+                <div style={{display:"flex",gap:10}}>
+                  <button onClick={()=>{setTrStep("scan");setTrReceiver(null);setTrAmount("");}} style={{flex:1,padding:"11px",background:"#f9fafb",color:"#374151",border:"1px solid #e5e7eb",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:13}}>← Ganti</button>
+                  <button onClick={()=>{
+                    const amt=parseInt(trAmount); const min=settings?.minBalanceAfterTransfer||0;
+                    if(isNaN(amt)||amt<=0){setTrError("Nominal tidak valid.");return;}
+                    if((customer.balance-amt)<min){setTrError(`Minimal sisa: ${idr2(min)}`);return;}
+                    setTrError("");setTrStep("pin");
+                  }} style={{flex:2,padding:"11px",background:"#4c1d95",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:13}}>Lanjut → Verifikasi PIN</button>
+                </div>
+              </div>
+            )}
+
+            {/* Step: Input PIN */}
+            {trStep==="pin"&&(
+              <div>
+                <div style={{textAlign:"center",marginBottom:16}}>
+                  <div style={{fontSize:36,marginBottom:8}}>🔐</div>
+                  <p style={{fontWeight:800,fontSize:15,color:"#1c0a00",margin:0}}>Verifikasi PIN Kamu</p>
+                  <p style={{color:"#6b7280",fontSize:12,margin:"4px 0 0"}}>Masukkan PIN 4 digit untuk konfirmasi transfer {idr2(parseInt(trAmount)||0)} ke {trReceiver?.name}</p>
+                </div>
+                <div style={{display:"flex",gap:12,justifyContent:"center",marginBottom:14}}>
+                  {[0,1,2,3].map(i=>(
+                    <div key={i} style={{width:52,height:64,background:"#f5f0ff",border:`2px solid ${trPin.length>i?"#7c3aed":"#e5e7eb"}`,borderRadius:12,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,fontWeight:900,color:"#4c1d95"}}>
+                      {trPin.length>i?"●":""}
+                    </div>
+                  ))}
+                </div>
+                {/* Numpad */}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:14}}>
+                  {[1,2,3,4,5,6,7,8,9,"",0,"⌫"].map((k,i)=>(
+                    <button key={i} onClick={()=>{
+                      if(k==="⌫"){setTrPin(p=>p.slice(0,-1));setTrPinErr("");}
+                      else if(k!==""&&trPin.length<4){const np=trPin+String(k);setTrPin(np);setTrPinErr("");}
+                    }}
+                      style={{padding:"14px",background:k===""?"transparent":"#f9fafb",border:k===""?"none":"1px solid #e5e7eb",borderRadius:12,fontSize:18,fontWeight:700,cursor:k===""?"default":"pointer",color:"#1c0a00"}}>
+                      {k}
+                    </button>
+                  ))}
+                </div>
+                {trPinErr&&<p style={{color:"#dc2626",fontSize:13,fontWeight:600,textAlign:"center",margin:"0 0 10px"}}>{trPinErr}</p>}
+                <div style={{display:"flex",gap:10}}>
+                  <button onClick={()=>{setTrStep("confirm");setTrPin("");setTrPinErr("");}} style={{flex:1,padding:"12px",background:"#f9fafb",color:"#374151",border:"1px solid #e5e7eb",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:14}}>← Kembali</button>
+                  <button onClick={doTransfer} disabled={trPin.length!==4} style={{flex:2,padding:"12px",background:trPin.length===4?"#4c1d95":"#e5e7eb",color:trPin.length===4?"#fff":"#9ca3af",border:"none",borderRadius:12,fontWeight:700,cursor:trPin.length===4?"pointer":"not-allowed",fontSize:14}}>✅ Konfirmasi Transfer</button>
+                </div>
+              </div>
+            )}
+
+            {/* Step: Processing */}
+            {trStep==="processing"&&(
+              <div style={{textAlign:"center",padding:"20px 0"}}>
+                <div style={{fontSize:48,animation:"spin 1s linear infinite",display:"inline-block",marginBottom:12}}>⏳</div>
+                <p style={{fontWeight:700,color:"#4c1d95",fontSize:15,margin:0}}>Memproses Transfer...</p>
+                <p style={{color:"#6b7280",fontSize:12,margin:"6px 0 0"}}>Jangan tutup halaman ini.</p>
+              </div>
+            )}
+
+            {/* Step: Sukses */}
+            {trStep==="done"&&trResult&&(
+              <div style={{textAlign:"center"}}>
+                <div style={{fontSize:52,marginBottom:8}}>✅</div>
+                <h3 style={{color:"#16a34a",margin:"0 0 4px",fontSize:18}}>Transfer Berhasil!</h3>
+                <p style={{color:"#6b7280",fontSize:13,margin:"0 0 20px"}}>{idr2(parseInt(trAmount))} telah dikirim ke <strong>{trReceiver?.name}</strong></p>
+                <div style={{background:"#f0fdf4",borderRadius:14,padding:"14px 16px",marginBottom:16,textAlign:"left"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                    <span style={{color:"#6b7280",fontSize:13}}>Saldo kamu sebelum</span>
+                    <span style={{fontWeight:700}}>{idr2(trResult.senderBalBefore)}</span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                    <span style={{color:"#dc2626",fontSize:13}}>Transfer ke {trReceiver?.name}</span>
+                    <span style={{fontWeight:700,color:"#dc2626"}}>-{idr2(parseInt(trAmount))}</span>
+                  </div>
+                  <div style={{borderTop:"1px solid #bbf7d0",paddingTop:8,display:"flex",justifyContent:"space-between"}}>
+                    <span style={{fontWeight:700,fontSize:14}}>Saldo kamu sekarang</span>
+                    <span style={{fontWeight:900,color:"#16a34a",fontSize:16}}>{idr2(trResult.senderBalAfter)}</span>
+                  </div>
+                </div>
+                <p style={{color:"#9ca3af",fontSize:12,marginBottom:16}}>Minta penerima refresh halaman kartunya untuk melihat saldo terbaru.</p>
+                <button onClick={()=>{resetTransfer();onRefresh&&onRefresh();}} style={{width:"100%",padding:"13px",background:"#4c1d95",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:14}}>Selesai & Refresh Saldo</button>
+              </div>
+            )}
+
+            {/* Step: Error */}
+            {trStep==="error"&&(
+              <div style={{textAlign:"center"}}>
+                <div style={{fontSize:52,marginBottom:8}}>❌</div>
+                <h3 style={{color:"#dc2626",margin:"0 0 8px"}}>Transfer Gagal</h3>
+                <p style={{color:"#6b7280",fontSize:13,margin:"0 0 8px"}}>{trError}</p>
+                <div style={{background:"#fef3c7",border:"1px solid #fbbf24",borderRadius:12,padding:"12px 14px",marginBottom:16,textAlign:"left"}}>
+                  <p style={{margin:0,fontSize:12,color:"#92400e",fontWeight:700}}>💡 Jika tidak yakin apakah transfer berhasil atau tidak, refresh halaman kartu kamu. Jika saldo sudah berkurang, berarti transfer berhasil sampai ke penerima.</p>
+                </div>
+                <div style={{display:"flex",gap:10}}>
+                  <button onClick={()=>{setTrStep("confirm");setTrPin("");setTrPinErr("");setTrError("");}} style={{flex:1,padding:"12px",background:"#f9fafb",color:"#374151",border:"1px solid #e5e7eb",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:14}}>Coba Lagi</button>
+                  <button onClick={()=>{resetTransfer();onRefresh&&onRefresh();}} style={{flex:1,padding:"12px",background:"#4c1d95",color:"#fff",border:"none",borderRadius:12,fontWeight:700,cursor:"pointer",fontSize:14}}>Refresh Kartu</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Decorative blobs */}
       <div style={{position:"fixed",top:-100,right:-100,width:300,height:300,borderRadius:"50%",background:"rgba(255,255,255,.07)"}}/>
       <div style={{position:"fixed",bottom:-80,left:-80,width:250,height:250,borderRadius:"50%",background:"rgba(255,255,255,.05)"}}/>
@@ -5891,6 +6152,8 @@ function CustomerCardPage({phone,settings,customers,walletLogs,onRefresh,refresh
             {/* Recent transactions */}
             {(()=>{
               const allTx=(walletLogs||[]).filter(l=>l.customerId===customer.id&&l.type==="payment").sort((a,b)=>b.timestamp?.localeCompare(a.timestamp)||0);
+              // Riwayat transfer
+              const allTransfers=(walletLogs||[]).filter(l=>l.customerId===customer.id&&(l.type==="transfer_out"||l.type==="transfer_in")).sort((a,b)=>b.timestamp?.localeCompare(a.timestamp)||0).slice(0,5);
               const visibleTx=showAllTx?allTx:allTx.slice(0,5);
               return allTx.length>0?(
                 <div style={{marginBottom:14}}>
@@ -5942,6 +6205,37 @@ function CustomerCardPage({phone,settings,customers,walletLogs,onRefresh,refresh
               ):null;
             })()}
 
+            {/* Riwayat Transfer */}
+            {(()=>{
+              if(!allTransfers||allTransfers.length===0) return null;
+              return(
+                <div style={{marginBottom:14}}>
+                  <p style={{color:"#374151",fontSize:13,fontWeight:700,margin:"0 0 8px"}}>💸 Riwayat Transfer Saldo</p>
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {allTransfers.map(tr=>{
+                      const isOut=tr.type==="transfer_out";
+                      return(
+                        <div key={tr.id} style={{background:isOut?"#fef2f2":"#f0fdf4",borderRadius:10,padding:"9px 12px",border:`1px solid ${isOut?"#fca5a5":"#bbf7d0"}`}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                            <div>
+                              <p style={{margin:0,fontSize:13,fontWeight:700,color:isOut?"#dc2626":"#16a34a"}}>
+                                {isOut?"💸 Transfer ke "+tr.toCustomerName:"💰 Terima dari "+tr.fromCustomerName}
+                              </p>
+                              <p style={{margin:"2px 0 0",color:"#9ca3af",fontSize:11}}>{tr.date} {tr.time}</p>
+                            </div>
+                            <div style={{textAlign:"right"}}>
+                              <p style={{margin:0,fontWeight:800,color:isOut?"#dc2626":"#16a34a",fontSize:14}}>{isOut?"-":"+"}{idr2(tr.amount)}</p>
+                              <p style={{margin:"2px 0 0",color:"#9ca3af",fontSize:11}}>Sisa: {idr2(tr.balanceAfter)}</p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
             <p style={{color:"#6b7280",fontSize:12,margin:"0 0 12px",textAlign:"center"}}>
               ID: <span style={{fontFamily:"monospace",color:"#374151",fontWeight:600}}>{customer.id?.slice(0,8).toUpperCase()}</span>
             </p>
@@ -5951,6 +6245,15 @@ function CustomerCardPage({phone,settings,customers,walletLogs,onRefresh,refresh
               style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,width:"100%",padding:"14px",background:"#16a34a",color:"#fff",border:"none",borderRadius:14,fontWeight:700,fontSize:15,textDecoration:"none",boxSizing:"border-box",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
               <span style={{fontSize:20}}>💬</span> Share ke WhatsApp
             </a>
+
+            {/* Tombol Transfer Saldo */}
+            {customer.balance>0&&(
+              <button onClick={()=>{setShowTransfer(true);setTrStep("scan");}}
+                style={{width:"100%",padding:"14px",background:"linear-gradient(135deg,#4c1d95,#7c3aed)",color:"#fff",border:"none",borderRadius:14,fontWeight:700,cursor:"pointer",fontSize:15,marginTop:8,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",justifyContent:"center",gap:10}}
+                onMouseOver={e=>e.currentTarget.style.opacity=".9"} onMouseOut={e=>e.currentTarget.style.opacity="1"}>
+                <span style={{fontSize:20}}>💸</span> Transfer Saldo ke Pelanggan Lain
+              </button>
+            )}
 
             {/* Tombol copy link */}
             <button onClick={()=>{navigator.clipboard.writeText(shareUrl).then(()=>alert("✅ Link berhasil disalin!"));}}
