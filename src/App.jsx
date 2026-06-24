@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────91
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────92
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -3285,7 +3285,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
   };
 
   // Data PO Tercatat — filtered per tenant
-  const allPending=[...(orders||[]).filter(o=>o.status==="pending")].sort((a,b)=>(b.timestamp||b.date+b.time||"").localeCompare(a.timestamp||a.date+a.time||""));
+  const allPending=[...(orders||[]).filter(o=>o.status==="pending")].sort((a,b)=>{const ta=a.timestamp?new Date(a.timestamp).getTime():0;const tb=b.timestamp?new Date(b.timestamp).getTime():0;return tb-ta;});
   const filteredPO=allPending.filter(o=>{
     const tenantOk=poTenantFilter==="all"||o.tenantId===poTenantFilter;
     const searchOk=!poSearch.trim()||(o.customerName.toLowerCase().includes(poSearch.toLowerCase())||o.customerPhone.replace(/\D/g,"").includes(poSearch.replace(/\D/g,""))||o.nota.toLowerCase().includes(poSearch.toLowerCase()));
@@ -3956,7 +3956,7 @@ function POReport({orders,tenants,customers,settings}){
     reportTab==="paid_pending" ?paidPendingOrders:
     reportTab==="unpaid"       ?unpaidOrders:
     cancelledOrders
-  )].sort((a,b)=>(b.timestamp||b.date+b.time||"").localeCompare(a.timestamp||a.date+a.time||""));
+  )].sort((a,b)=>{const ta=a.timestamp?new Date(a.timestamp).getTime():0;const tb=b.timestamp?new Date(b.timestamp).getTime():0;return tb-ta;});
   const dispTotal=dispOrders.reduce((s,o)=>s+o.subtotal,0);
 
   // Label status yang jelas untuk tiap kondisi
@@ -4064,8 +4064,8 @@ function POReport({orders,tenants,customers,settings}){
 
   const tabCfg={
     completed:    {color:"#16a34a",bg:"#f0fdf4",bc:"#bbf7d0",icon:"✅",label:"PO Selesai",    count:completedOrders.length,    thBg:"#16a34a"},
-    paid_pending: {color:"#ea580c",bg:"#fff7ed",bc:"#fed7aa",icon:"💰",label:"Sudah Bayar",   count:paidPendingOrders.length,  thBg:"#ea580c"},
-    unpaid:       {color:"#0284c7",bg:"#eff6ff",bc:"#bae6fd",icon:"⏳",label:"Belum Bayar",   count:unpaidOrders.length,       thBg:"#0284c7"},
+    paid_pending: {color:"#0284c7",bg:"#eff6ff",bc:"#bae6fd",icon:"💰",label:"Sudah Bayar",   count:paidPendingOrders.length,  thBg:"#0284c7"},
+    unpaid:       {color:"#ea580c",bg:"#fff7ed",bc:"#fed7aa",icon:"⏳",label:"Belum Bayar",   count:unpaidOrders.length,       thBg:"#ea580c"},
     cancelled:    {color:"#dc2626",bg:"#fef2f2",bc:"#fca5a5",icon:"❌",label:"Batal/Refund",  count:cancelledOrders.length,    thBg:"#dc2626"},
   };
   const curTab=tabCfg[reportTab];
@@ -4197,8 +4197,8 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,onUpdate
   const scanRef=useRef(null);
 
   const myOrders=(orders||[]).filter(o=>o.tenantId===tenant.id);
-  const pendingOrders=[...myOrders.filter(o=>o.status==="pending"&&(!poSearch||o.customerName.toLowerCase().includes(poSearch.toLowerCase())||o.customerPhone.replace(/\D/g,"").includes(poSearch.replace(/\D/g,""))||o.nota.toLowerCase().includes(poSearch.toLowerCase())))].sort((a,b)=>(b.timestamp||b.date+b.time||"").localeCompare(a.timestamp||a.date+a.time||""));
-  const completedOrders=[...myOrders.filter(o=>o.status==="completed"&&(!poSearch||o.customerName.toLowerCase().includes(poSearch.toLowerCase())))].sort((a,b)=>(b.verifiedAt||b.timestamp||"").localeCompare(a.verifiedAt||a.timestamp||"")).slice(0,8);
+  const pendingOrders=[...myOrders.filter(o=>o.status==="pending"&&(!poSearch||o.customerName.toLowerCase().includes(poSearch.toLowerCase())||o.customerPhone.replace(/\D/g,"").includes(poSearch.replace(/\D/g,""))||o.nota.toLowerCase().includes(poSearch.toLowerCase())))].sort((a,b)=>{const ta=a.timestamp?new Date(a.timestamp).getTime():0;const tb=b.timestamp?new Date(b.timestamp).getTime():0;return tb-ta;});
+  const completedOrders=[...myOrders.filter(o=>o.status==="completed"&&(!poSearch||o.customerName.toLowerCase().includes(poSearch.toLowerCase())))].sort((a,b)=>{const ta=a.verifiedAt?new Date(a.verifiedAt).getTime():a.timestamp?new Date(a.timestamp).getTime():0;const tb=b.verifiedAt?new Date(b.verifiedAt).getTime():b.timestamp?new Date(b.timestamp).getTime():0;return tb-ta;}).slice(0,8);
 
   const startVerify=async(orderId)=>{
     window.scrollTo({top:0,behavior:"instant"});
