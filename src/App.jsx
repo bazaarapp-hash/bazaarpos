@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────90
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────91
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -3146,7 +3146,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
         customerId:cust.id, customerName:cust.name, customerPhone:cust.phone,
         tenantId, tenantCode:tenant?.code||"", tenantName:tenant?.name||"",
         items:items.map(it=>({menuId:it.menuId,menuCode:it.menuCode,menuName:it.menuName,price:it.price,qty:it.qty})),
-        subtotal, groupTotal:total, status:"pending",
+        subtotal, groupTotal:total, status:"pending", paymentStatus:"paid", // saldo langsung dipotong saat PO dibuat
         date:todayStr(), time:timeStr(), timestamp:new Date().toISOString(),
         createdBy:adminData?.name||"Admin",
       });
@@ -3285,7 +3285,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
   };
 
   // Data PO Tercatat — filtered per tenant
-  const allPending=(orders||[]).filter(o=>o.status==="pending");
+  const allPending=[...(orders||[]).filter(o=>o.status==="pending")].sort((a,b)=>(b.timestamp||b.date+b.time||"").localeCompare(a.timestamp||a.date+a.time||""));
   const filteredPO=allPending.filter(o=>{
     const tenantOk=poTenantFilter==="all"||o.tenantId===poTenantFilter;
     const searchOk=!poSearch.trim()||(o.customerName.toLowerCase().includes(poSearch.toLowerCase())||o.customerPhone.replace(/\D/g,"").includes(poSearch.replace(/\D/g,""))||o.nota.toLowerCase().includes(poSearch.toLowerCase()));
@@ -3951,11 +3951,12 @@ function POReport({orders,tenants,customers,settings}){
   const unpaidOrders    =byDate.filter(o=>o.status==="pending"&&(o.paymentStatus==="unpaid"||!o.paymentStatus));
   const cancelledOrders =byDate.filter(o=>o.status==="cancelled");
 
-  const dispOrders=
+  const dispOrders=[...(
     reportTab==="completed"    ?completedOrders:
     reportTab==="paid_pending" ?paidPendingOrders:
     reportTab==="unpaid"       ?unpaidOrders:
-    cancelledOrders;
+    cancelledOrders
+  )].sort((a,b)=>(b.timestamp||b.date+b.time||"").localeCompare(a.timestamp||a.date+a.time||""));
   const dispTotal=dispOrders.reduce((s,o)=>s+o.subtotal,0);
 
   // Label status yang jelas untuk tiap kondisi
@@ -4196,8 +4197,8 @@ function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,onUpdate
   const scanRef=useRef(null);
 
   const myOrders=(orders||[]).filter(o=>o.tenantId===tenant.id);
-  const pendingOrders=myOrders.filter(o=>o.status==="pending"&&(!poSearch||o.customerName.toLowerCase().includes(poSearch.toLowerCase())||o.customerPhone.replace(/\D/g,"").includes(poSearch.replace(/\D/g,""))||o.nota.toLowerCase().includes(poSearch.toLowerCase())));
-  const completedOrders=myOrders.filter(o=>o.status==="completed"&&(!poSearch||o.customerName.toLowerCase().includes(poSearch.toLowerCase()))).slice(0,8);
+  const pendingOrders=[...myOrders.filter(o=>o.status==="pending"&&(!poSearch||o.customerName.toLowerCase().includes(poSearch.toLowerCase())||o.customerPhone.replace(/\D/g,"").includes(poSearch.replace(/\D/g,""))||o.nota.toLowerCase().includes(poSearch.toLowerCase())))].sort((a,b)=>(b.timestamp||b.date+b.time||"").localeCompare(a.timestamp||a.date+a.time||""));
+  const completedOrders=[...myOrders.filter(o=>o.status==="completed"&&(!poSearch||o.customerName.toLowerCase().includes(poSearch.toLowerCase())))].sort((a,b)=>(b.verifiedAt||b.timestamp||"").localeCompare(a.verifiedAt||a.timestamp||"")).slice(0,8);
 
   const startVerify=async(orderId)=>{
     window.scrollTo({top:0,behavior:"instant"});
