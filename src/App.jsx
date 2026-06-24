@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────93
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────94
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -5024,18 +5024,18 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
   const [emergMsg,setEmergMsg]=useState("");
 
   // ── Baca nama kasir dari sessionStorage (diisi saat login) ───────────────────
-  const kasirName=useMemo(()=>{
+  // Pakai useState lazy init — nilai dibaca sekali saat komponen mount,
+  // tidak berubah selama sesi berlangsung (sessionStorage per-tab/device).
+  const [kasirName] = useState(()=>{
     try{return sessionStorage.getItem(`bzr_kasir_${tenant.id}`)||"";}catch(e){return "";}
-  },[tenant.id]);
-  // Kode kasir: ambil spasi hapus, uppercase, max 4 char (contoh: "Kasir 1"→"K1", "Budi"→"BUDI")
-  const kasirCode=useMemo(()=>{
+  });
+  // Kode kasir: otomatis dari nama, max 4 char (ex: "Kasir 1"→"K1", "Budi"→"BUDI")
+  const kasirCode=(()=>{
     if(!kasirName)return "";
-    // Cek apakah sudah dalam format pendek (≤4 char tanpa spasi)
     const clean=kasirName.replace(/\s+/g,"");
     if(clean.length<=4)return clean.toUpperCase();
-    // Ambil huruf pertama tiap kata, max 4 char
     return kasirName.split(/\s+/).map(w=>w[0]||"").join("").toUpperCase().slice(0,4);
-  },[kasirName]);
+  })();
 
   useEffect(()=>{
     const on=()=>setIsOnline(true); const off=()=>setIsOnline(false);
