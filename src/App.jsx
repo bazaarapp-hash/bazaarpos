@@ -3934,20 +3934,238 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
 function POReport({orders,tenants,customers,settings}){
   const [filterTenant,setFilterTenant]=useState("all");
   const [filterDate,setFilterDate]=useState(todayStr());
-  const [reportTab,setReportTab]=useState("completed"); // "completed" | "cancelled"
+  const [reportTab,setReportTab]=useState("completed"); // "completed"|"pending"|"cancelled"
   const bname=settings?.bazaarName||"BazaarPOS";
   const esc=s=>String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
   const byDate=orders.filter(o=>{
     const tenantOk=filterTenant==="all"||o.tenantId===filterTenant;
-    const dateOk=o.date===filterDate;
-    return tenantOk&&dateOk;
+    return tenantOk&&o.date===filterDate;
   });
 
   const completedOrders=byDate.filter(o=>o.status==="completed");
+  // "Belum Bayar" = pending dengan paymentStatus unpaid (Bayar Nanti yang belum dikonfirmasi)
+  const pendingOrders=byDate.filter(o=>o.status==="pending");
   const cancelledOrders=byDate.filter(o=>o.status==="cancelled");
-  const dispOrders=reportTab==="completed"?completedOrders:cancelledOrders;
+
+  const dispOrders=reportTab==="completed"?completedOrders
+    :reportTab==="pending"?pendingOrders
+    :cancelledOrders;
   const dispTotal=dispOrders.reduce((s,o)=>s+o.subtotal,0);
+
+  // Helper: label status yang jelas termasuk Batal vs Refund
+  const getStatusLabel=(o)=>{
+    if(o.status==="completed") return "✅ Selesai";
+    if(o.status==="pending") return o.paymentStatus==="paid"?"⏳ Lunas-Belum Ambil":"⏳ Belum Bayar";
+    if(o.status==="cancelled") return o.cancelReason==="refund"?"↩️ REFUND":"❌ DIBATALKAN";
+    return o.status;
+  };
+
+  // ── Excel export ──────────────────────────────────────────────────────────────
+  const exportPOHtml=(rows,title,filename)=>{
+    const thBg=reportTab==="completed"?"#16a34a":reportTab==="pending"?"#0284c7":"#dc2626";
+    const thStyle=`style="background:${thBg};color:#fff;padding:6px 10px;border:1px solid #ccc;font-family:Arial;font-size:11pt;font-weight:bold;"`;
+    const tdStyle='style="padding:5px 10px;border:1px solid #ccc;font-family:Arial;font-size:11pt;"';
+    const tdRedStyle='style="padding:5px 10px;border:1px solid #ccc;font-family:Arial;font-size:11pt;color:#dc2626;font-weight:bold;"';
+    const tdOkStyle='style="padding:5px 10px;border:1px solid #ccc;font-family:Arial;font-size:11pt;color:#16a34a;font-weight:bold;"';
+
+    const headers=["No","Nota","Tenant","Pelanggan","No. HP","Item","Total (Rp)","Status","Keterangan","Tgl Order","Waktu","Oleh"];
+    const tblRows=rows.map((o,i)=>{
+      const items=(o.items||[]).map(it=>`${it.menuName} x${it.qty}`).join(", ");
+      const statusLabel=getStatusLabel(o);
+      const isRefund=o.cancelReason==="refund";
+      const isCancelled=o.status==="cancelled"&&!isRefund;
+      const keterangan=o.status==="cancelled"?(isRefund?"Saldo dikembalikan ke pelanggan":"PO dibatalkan tanpa pengembalian saldo")
+        :o.status==="pending"?(o.paymentStatus==="paid"?"Sudah lunas, belum diambil":"PO tercatat, saldo belum dipotong")
+        :"Saldo sudah dipotong, pesanan diambil";
+      const oleh=o.status==="completed"?(o.verifiedBy||"-"):((o.cancelledBy||o.createdBy)||"-");
+      const td=isCancelled?tdRedStyle:isRefund?tdRedStyle:tdStyle;
+      return`<tr>
+        <td ${tdStyle}>${i+1}</td><td ${tdStyle}><strong>${esc(o.nota)}</strong></td>
+        <td ${tdStyle}>${esc(o.tenantName)}</td><td ${tdStyle}>${esc(o.customerName)}</td>
+        <td ${tdStyle}>${esc(o.customerPhone)}</td><td ${tdStyle}>${esc(items)}</td>
+        <td ${tdStyle}>${o.subtotal||0}</td>
+        <td ${isRefund||isCancelled?tdRedStyle:tdOkStyle}>${esc(statusLabel)}</td>
+        <td ${tdStyle}>${esc(keterangan)}</td>
+        <td ${tdStyle}>${esc(o.date)}</td><td ${tdStyle}>${esc(o.time)}</td>
+        <td ${tdStyle}>${esc(oleh)}</td>
+      </tr>`;
+    }).join("");
+    const total=rows.reduce((s,o)=>s+o.subtotal,0);
+    const sumRow=`<tr><td colspan="6" style="padding:6px 10px;border:1px solid #ccc;font-family:Arial;font-weight:bold;background:#f9fafb;">TOTAL (${rows.length} PO)</td><td style="padding:6px 10px;border:1px solid #ccc;font-family:Arial;font-weight:bold;background:#f9fafb;">${total.toLocaleString("id-ID")}</td><td colspan="5" style="background:#f9fafb;border:1px solid #ccc;"></td></tr>`;
+    const tbl=`<table><tr>${headers.map(h=>`<th ${thStyle}>${esc(h)}</th>`).join("")}</tr>${tblRows}${sumRow}</table>`;
+    const html=`<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"/></head><body><h2 style="font-family:Arial">${esc(title)}</h2><p style="font-family:Arial;color:#6b7280">Tanggal: ${filterDate}${filterTenant!=="all"?" | Tenant: "+(tenants.find(t=>t.id===filterTenant)?.name||""):""} | Dicetak: ${new Date().toLocaleString("id-ID")}</p>${tbl}</body></html>`;
+    const blob=new Blob(["\uFEFF"+html],{type:"application/vnd.ms-excel;charset=utf-8"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");a.href=url;a.download=filename;a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ── Print A4 ──────────────────────────────────────────────────────────────────
+  const doPrint=(rows,title)=>{
+    const tableRows=rows.map((o,i)=>{
+      const items=(o.items||[]).map(it=>`[${it.menuCode||""}] ${it.menuName} ×${it.qty} = ${idr(it.qty*it.price)}`).join("<br/>");
+      const statusLabel=getStatusLabel(o);
+      const isRefund=o.cancelReason==="refund";
+      const isCancelled=o.status==="cancelled"&&!isRefund;
+      const statusColor=isCancelled?"#dc2626":isRefund?"#92400e":o.status==="pending"?"#0284c7":"#16a34a";
+      const oleh=o.status==="completed"?(o.verifiedBy||"-"):((o.cancelledBy||o.createdBy)||"-");
+      const waktuAksi=o.status==="completed"
+        ?(o.verifiedAt?new Date(o.verifiedAt).toLocaleString("id-ID",{hour:"2-digit",minute:"2-digit"}):o.time)
+        :o.status==="cancelled"
+        ?(o.cancelledAt?new Date(o.cancelledAt).toLocaleString("id-ID",{hour:"2-digit",minute:"2-digit"}):"-")
+        :o.time;
+      return`<tr style="${isCancelled||isRefund?"background:#fff8f8":""}">
+        <td>${i+1}</td>
+        <td><strong>${o.nota}</strong></td>
+        <td><strong>${o.tenantCode||""}</strong><br/><span style="font-size:10px;color:#6b7280">${o.tenantName}</span></td>
+        <td>${o.customerName}<br/><span style="font-size:10px;color:#9ca3af">${o.customerPhone}</span></td>
+        <td style="font-size:10px">${items}</td>
+        <td style="text-align:right;font-weight:700">${idr(o.subtotal)}</td>
+        <td style="color:${statusColor};font-weight:700">${statusLabel}</td>
+        <td>${waktuAksi}<br/><span style="font-size:10px;color:#6b7280">${oleh}</span></td>
+      </tr>`;
+    }).join("");
+    const summary=`<div class="sr">
+      <div class="sb"><p class="lbl">Jumlah PO</p><p class="val" style="color:#1c0a00">${rows.length}</p></div>
+      <div class="sb em"><p class="lbl">Total Nilai</p><p class="val">${idr(rows.reduce((s,o)=>s+o.subtotal,0))}</p></div>
+      <div class="sb"><p class="lbl">Selesai</p><p class="val" style="color:#16a34a">${completedOrders.length}</p></div>
+      <div class="sb"><p class="lbl">Belum Bayar</p><p class="val" style="color:#0284c7">${pendingOrders.length}</p></div>
+    </div>`;
+    printA4({
+      title,
+      subtitle:`Tanggal: ${filterDate}${filterTenant!=="all"?" | Tenant: "+(tenants.find(t=>t.id===filterTenant)?.name||""):""} | Dicetak: ${new Date().toLocaleString("id-ID")}`,
+      bazaarName:bname,
+      bodyHtml:`${summary}<div class="sec">Daftar PO</div>
+      <table>
+        <thead><tr><th>#</th><th>Nota</th><th>Tenant</th><th>Pelanggan</th><th>Item</th><th style="text-align:right">Total</th><th>Status</th><th>Waktu & Oleh</th></tr></thead>
+        <tbody>${tableRows}</tbody>
+        <tfoot><tr><td colspan="5"><strong>TOTAL</strong></td><td style="text-align:right"><strong>${idr(rows.reduce((s,o)=>s+o.subtotal,0))}</strong></td><td colspan="2"></td></tr></tfoot>
+      </table>`
+    });
+  };
+
+  // Warna aktif per tab
+  const tabColor={completed:"#16a34a",pending:"#0284c7",cancelled:"#dc2626"};
+
+  return(
+    <div>
+      {/* ── Header & Filter ── */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,flexWrap:"wrap",gap:12}}>
+        <h3 style={{margin:0,fontSize:16,fontWeight:800,color:"#1c0a00"}}>📊 Laporan Pre-Order</h3>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          <DP value={filterDate} onChange={setFilterDate}/>
+          <select value={filterTenant} onChange={e=>setFilterTenant(e.target.value)}
+            style={{border:"2px solid #e5e7eb",borderRadius:10,padding:"9px 12px",fontSize:13,color:"#374151",fontFamily:"'Plus Jakarta Sans',sans-serif",outline:"none"}}>
+            <option value="all">Semua Tenant</option>
+            {tenants.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {/* ── Ringkasan 4 kotak ── */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:8,marginBottom:16}}>
+        {[
+          {l:"Total PO",v:byDate.length,c:"#ea580c",bg:"#fff7ed",bc:"#fed7aa"},
+          {l:"✅ Selesai",v:completedOrders.length,c:"#16a34a",bg:"#f0fdf4",bc:"#bbf7d0"},
+          {l:"⏳ Belum Bayar",v:pendingOrders.length,c:"#0284c7",bg:"#eff6ff",bc:"#bae6fd"},
+          {l:"❌ Batal/Refund",v:cancelledOrders.length,c:"#dc2626",bg:"#fef2f2",bc:"#fca5a5"},
+        ].map(s=>(
+          <div key={s.l} style={{background:s.bg,border:`1px solid ${s.bc}`,borderRadius:12,padding:"10px 8px",textAlign:"center",minWidth:0,cursor:"pointer"}}
+            onClick={()=>s.l.includes("Selesai")?setReportTab("completed"):s.l.includes("Belum")?setReportTab("pending"):s.l.includes("Batal")&&setReportTab("cancelled")}>
+            <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.l}</p>
+            <p style={{margin:"4px 0 0",color:s.c,fontWeight:900,fontSize:13,wordBreak:"break-all"}}>{s.v}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* ── 3 Tab ── */}
+      <div style={{display:"flex",gap:4,marginBottom:14,background:"#f9fafb",borderRadius:12,padding:4}}>
+        {[
+          {k:"completed",l:`✅ PO Selesai (${completedOrders.length})`},
+          {k:"pending",l:`⏳ Belum Bayar (${pendingOrders.length})`},
+          {k:"cancelled",l:`❌ Batal/Refund (${cancelledOrders.length})`},
+        ].map(t=>(
+          <button key={t.k} onClick={()=>setReportTab(t.k)}
+            style={{flex:1,padding:"9px 4px",background:reportTab===t.k?"#fff":"transparent",border:"none",borderRadius:9,
+              fontWeight:reportTab===t.k?700:500,
+              color:reportTab===t.k?tabColor[t.k]:"#6b7280",
+              cursor:"pointer",fontSize:11,
+              boxShadow:reportTab===t.k?"0 2px 6px rgba(0,0,0,.08)":"none",
+              transition:"all .2s",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+            {t.l}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Tombol Export ── */}
+      {dispOrders.length>0&&(
+        <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+          <button onClick={()=>exportPOHtml(dispOrders,
+            `Laporan PO ${reportTab==="completed"?"Selesai":reportTab==="pending"?"Belum Bayar":"Batal & Refund"} — ${filterDate}`,
+            `PO_${reportTab==="completed"?"Selesai":reportTab==="pending"?"BelumBayar":"BatalRefund"}_${filterDate}.xls`)}
+            style={{padding:"8px 14px",background:tabColor[reportTab],color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",gap:6}}
+            onMouseOver={e=>e.currentTarget.style.opacity=".85"} onMouseOut={e=>e.currentTarget.style.opacity="1"}>
+            📥 Excel {reportTab==="completed"?"Selesai":reportTab==="pending"?"Belum Bayar":"Batal/Refund"}
+          </button>
+          <button onClick={()=>doPrint(dispOrders,`Laporan PO ${reportTab==="completed"?"Selesai":reportTab==="pending"?"Belum Bayar":"Batal & Refund"}`)}
+            style={{padding:"8px 14px",background:"#1c0a00",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",gap:6}}
+            onMouseOver={e=>e.currentTarget.style.background="#431407"} onMouseOut={e=>e.currentTarget.style.background="#1c0a00"}>
+            🖨️ Print A4 {reportTab==="completed"?"Selesai":reportTab==="pending"?"Belum Bayar":"Batal/Refund"}
+          </button>
+        </div>
+      )}
+
+      {/* ── Daftar PO ── */}
+      {dispOrders.length===0
+        ?<EmptyState icon={reportTab==="completed"?"✅":reportTab==="pending"?"⏳":"❌"}
+            text={`Tidak ada PO ${reportTab==="completed"?"selesai":reportTab==="pending"?"belum bayar":"batal/refund"} pada tanggal ini.`}/>
+        :<div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {dispOrders.map(order=>{
+            const isRefund=order.cancelReason==="refund";
+            const isPending=order.status==="pending";
+            const isCancelled=order.status==="cancelled";
+            const statusLabel=getStatusLabel(order);
+            const borderColor=isCancelled?(isRefund?"#fbbf24":"#fca5a5"):isPending?"#bae6fd":"#bbf7d0";
+            return(
+              <div key={order.id} style={{background:isCancelled&&!isRefund?"#fff8f8":"#fff",border:`1px solid ${borderColor}`,borderRadius:14,padding:14}}>
+                <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:6}}>
+                  <div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:4,alignItems:"center"}}>
+                      <span style={{background:isCancelled?(isRefund?"#fef3c7":"#fef2f2"):isPending?"#eff6ff":"#f0fdf4",
+                        color:isCancelled?(isRefund?"#92400e":"#dc2626"):isPending?"#0284c7":"#16a34a",
+                        fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,
+                        border:`1px solid ${borderColor}`}}>
+                        {statusLabel}
+                      </span>
+                      <span style={{background:"#fff7ed",color:"#ea580c",fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>🏪 {order.tenantName}</span>
+                      <span style={{background:"#f0f9ff",color:"#0284c7",fontSize:11,padding:"2px 8px",borderRadius:20}}>{order.nota}</span>
+                    </div>
+                    <p style={{margin:"0 0 2px",fontWeight:700,color:"#1c0a00",fontSize:14}}>{order.customerName}</p>
+                    <p style={{margin:0,color:"#6b7280",fontSize:12}}>📱 {order.customerPhone} • {order.date} {order.time}</p>
+                    {isCancelled&&order.cancelledBy&&<p style={{margin:"2px 0 0",color:"#9ca3af",fontSize:11}}>Oleh: {order.cancelledBy}</p>}
+                    {!isCancelled&&!isPending&&order.verifiedBy&&<p style={{margin:"2px 0 0",color:"#16a34a",fontSize:11}}>✅ Dikonfirmasi: {order.verifiedBy}</p>}
+                    {isPending&&<p style={{margin:"2px 0 0",color:"#0284c7",fontSize:11}}>Dibuat oleh: {order.createdBy||"-"}</p>}
+                  </div>
+                  <p style={{margin:0,fontWeight:900,fontSize:16,
+                    color:isCancelled?"#dc2626":isPending?"#0284c7":"#ea580c"}}>{idr(order.subtotal)}</p>
+                </div>
+                <div style={{fontSize:12,color:"#6b7280",display:"flex",flexWrap:"wrap",gap:6}}>
+                  {(order.items||[]).map((it,i)=><span key={i} style={{background:"#f9fafb",padding:"2px 8px",borderRadius:8}}>{it.menuName} ×{it.qty}</span>)}
+                </div>
+              </div>
+            );
+          })}
+          <div style={{background:"#fff7ed",borderRadius:12,padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontWeight:700,color:"#374151"}}>
+              TOTAL {dispOrders.length} PO ({reportTab==="completed"?"Selesai":reportTab==="pending"?"Belum Bayar":"Batal/Refund"})
+            </span>
+            <span style={{fontWeight:900,color:tabColor[reportTab],fontSize:18}}>{idr(dispTotal)}</span>
+          </div>
+        </div>}
+    </div>
+  );
+}
 
   // ── Excel export (HTML table format — bekerja di semua locale Excel) ──────────
   const exportPOHtml=(rows,title,filename)=>{
@@ -4010,106 +4228,10 @@ function POReport({orders,tenants,customers,settings}){
         <tfoot><tr><td colspan="5"><strong>TOTAL</strong></td><td style="text-align:right"><strong>${idr(rows.reduce((s,o)=>s+o.subtotal,0))}</strong></td><td></td></tr></tfoot>
       </table>`
     });
-  };
 
-  return(
-    <div>
-      {/* ── Header & Filter ── */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,flexWrap:"wrap",gap:12}}>
-        <h3 style={{margin:0,fontSize:16,fontWeight:800,color:"#1c0a00"}}>📊 Laporan Pre-Order</h3>
-        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-          <DP value={filterDate} onChange={setFilterDate}/>
-          <select value={filterTenant} onChange={e=>setFilterTenant(e.target.value)}
-            style={{border:"2px solid #e5e7eb",borderRadius:10,padding:"9px 12px",fontSize:13,color:"#374151",fontFamily:"'Plus Jakarta Sans',sans-serif",outline:"none"}}>
-            <option value="all">Semua Tenant</option>
-            {tenants.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-        </div>
-      </div>
 
-      {/* ── Ringkasan ── */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:8,marginBottom:16}}>
-        {[
-          {l:"Total PO",v:byDate.length,c:"#ea580c",bg:"#fff7ed",bc:"#fed7aa"},
-          {l:"✅ Selesai",v:completedOrders.length,c:"#16a34a",bg:"#f0fdf4",bc:"#bbf7d0"},
-          {l:"❌ Batal/Refund",v:cancelledOrders.length,c:"#dc2626",bg:"#fef2f2",bc:"#fca5a5"},
-          {l:"Total Nilai Selesai",v:idr(completedOrders.reduce((s,o)=>s+o.subtotal,0)),c:"#ea580c",bg:"#fff7ed",bc:"#fed7aa"},
-        ].map(s=>(
-          <div key={s.l} style={{background:s.bg,border:`1px solid ${s.bc}`,borderRadius:12,padding:"10px 8px",textAlign:"center",minWidth:0}}>
-            <p style={{margin:0,color:"#6b7280",fontSize:10,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.l}</p>
-            <p style={{margin:"4px 0 0",color:s.c,fontWeight:900,fontSize:13,wordBreak:"break-all"}}>{s.v}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* ── Tab Selesai / Batal ── */}
-      <div style={{display:"flex",gap:4,marginBottom:14,background:"#f9fafb",borderRadius:12,padding:4}}>
-        {[{k:"completed",l:`✅ PO Selesai (${completedOrders.length})`},{k:"cancelled",l:`❌ Batal/Refund (${cancelledOrders.length})`}].map(t=>(
-          <button key={t.k} onClick={()=>setReportTab(t.k)}
-            style={{flex:1,padding:"9px",background:reportTab===t.k?"#fff":"transparent",border:"none",borderRadius:9,fontWeight:reportTab===t.k?700:500,color:reportTab===t.k?t.k==="completed"?"#16a34a":"#dc2626":"#6b7280",cursor:"pointer",fontSize:12,boxShadow:reportTab===t.k?"0 2px 6px rgba(0,0,0,.08)":"none",transition:"all .2s",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-            {t.l}
-          </button>
-        ))}
-      </div>
-
-      {/* ── Tombol Export ── */}
-      {dispOrders.length>0&&(
-        <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
-          <button onClick={()=>exportPOHtml(dispOrders,
-            `Laporan PO ${reportTab==="completed"?"Selesai":"Batal/Refund"} — ${filterDate}`,
-            `PO_${reportTab==="completed"?"Selesai":"Batal"}_${filterDate}.xls`)}
-            style={{padding:"8px 14px",background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",gap:6}}
-            onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>
-            📥 Excel {reportTab==="completed"?"Selesai":"Batal/Refund"}
-          </button>
-          <button onClick={()=>doPrint(dispOrders,`Laporan PO ${reportTab==="completed"?"Selesai":"Batal/Refund"}`)}
-            style={{padding:"8px 14px",background:"#1c0a00",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",gap:6}}
-            onMouseOver={e=>e.currentTarget.style.background="#431407"} onMouseOut={e=>e.currentTarget.style.background="#1c0a00"}>
-            🖨️ Print A4 {reportTab==="completed"?"Selesai":"Batal/Refund"}
-          </button>
-        </div>
-      )}
-
-      {/* ── Daftar PO ── */}
-      {dispOrders.length===0?<EmptyState icon={reportTab==="completed"?"✅":"❌"} text={`Tidak ada PO ${reportTab==="completed"?"selesai":"batal/refund"} pada tanggal ini.`}/>:
-        <div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {dispOrders.map(order=>{
-            const isCancelled=order.status==="cancelled";
-            const isRefund=order.cancelReason==="refund";
-            return(
-              <div key={order.id} style={{background:"#fff",border:`1px solid ${isCancelled?isRefund?"#fbbf24":"#fca5a5":"#bbf7d0"}`,borderRadius:14,padding:14}}>
-                <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:6}}>
-                  <div>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:4,alignItems:"center"}}>
-                      <span style={{background:isCancelled?isRefund?"#fef3c7":"#fef2f2":"#f0fdf4",color:isCancelled?isRefund?"#92400e":"#dc2626":"#16a34a",fontSize:11,fontWeight:700,padding:"2px 8px",borderRadius:20,border:`1px solid ${isCancelled?isRefund?"#fbbf24":"#fca5a5":"#bbf7d0"}`}}>
-                        {isCancelled?(isRefund?"↩️ Refund":"❌ Dibatalkan"):"✅ Selesai"}
-                      </span>
-                      <span style={{background:"#fff7ed",color:"#ea580c",fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20}}>🏪 {order.tenantName}</span>
-                      <span style={{background:"#f0f9ff",color:"#0284c7",fontSize:11,padding:"2px 8px",borderRadius:20}}>{order.nota}</span>
-                    </div>
-                    <p style={{margin:"0 0 2px",fontWeight:700,color:"#1c0a00",fontSize:14}}>{order.customerName}</p>
-                    <p style={{margin:0,color:"#6b7280",fontSize:12}}>📱 {order.customerPhone} • {order.date} {order.time}</p>
-                    {isCancelled&&order.cancelledBy&&<p style={{margin:"2px 0 0",color:"#9ca3af",fontSize:11}}>Dibatalkan oleh: {order.cancelledBy}</p>}
-                    {!isCancelled&&order.verifiedBy&&<p style={{margin:"2px 0 0",color:"#16a34a",fontSize:11}}>✅ Dikonfirmasi oleh: {order.verifiedBy}</p>}
-                  </div>
-                  <p style={{margin:0,fontWeight:900,color:isCancelled?"#dc2626":"#ea580c",fontSize:16}}>{idr(order.subtotal)}</p>
-                </div>
-                <div style={{fontSize:12,color:"#6b7280",display:"flex",flexWrap:"wrap",gap:6}}>
-                  {(order.items||[]).map((it,i)=><span key={i} style={{background:"#f9fafb",padding:"2px 8px",borderRadius:8}}>{it.menuName} ×{it.qty}</span>)}
-                </div>
-              </div>
-            );
-          })}
-          <div style={{background:"#fff7ed",borderRadius:12,padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <span style={{fontWeight:700,color:"#374151"}}>TOTAL {dispOrders.length} PO ({reportTab==="completed"?"Selesai":"Batal/Refund"})</span>
-            <span style={{fontWeight:900,color:"#ea580c",fontSize:18}}>{idr(dispTotal)}</span>
-          </div>
-        </div>}
-    </div>
-  );
 }
 
-// ─── PO Tenant ────────────────────────────────────────────────────────────────
 function POTenant({tenant,orders,customers,onSaveOrders,onSaveCustomers,onUpdateCustomerBalance,onCheckConnection,settings,menus}){
   const [poSearch,setPOSearch]=useState("");
   const [showScanner,setShowScanner]=useState(false);
