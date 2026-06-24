@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────95
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────96
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -5901,6 +5901,13 @@ function CustomerCardPage({phone,settings,customers,walletLogs,onRefresh,refresh
   // QR code berisi customer ID (bukan nomor HP)
   const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(customer.id)}&bgcolor=ffffff&color=4c1d95&margin=10`;
 
+  // Riwayat transaksi & transfer — dihitung di scope komponen supaya bisa dipakai di beberapa tempat
+  const allTx=(walletLogs||[]).filter(l=>l.customerId===customer.id&&l.type==="payment")
+    .sort((a,b)=>{const ta=a.timestamp?new Date(a.timestamp).getTime():0;const tb=b.timestamp?new Date(b.timestamp).getTime():0;return tb-ta;});
+  const allTransfers=(walletLogs||[]).filter(l=>l.customerId===customer.id&&(l.type==="transfer_out"||l.type==="transfer_in"))
+    .sort((a,b)=>{const ta=a.timestamp?new Date(a.timestamp).getTime():0;const tb=b.timestamp?new Date(b.timestamp).getTime():0;return tb-ta;})
+    .slice(0,5);
+
   return(
     <div style={{minHeight:"100vh",background:"linear-gradient(145deg,#4c1d95,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
       {/* ── Modal Transfer Saldo ── */}
@@ -6151,9 +6158,6 @@ function CustomerCardPage({phone,settings,customers,walletLogs,onRefresh,refresh
 
             {/* Recent transactions */}
             {(()=>{
-              const allTx=(walletLogs||[]).filter(l=>l.customerId===customer.id&&l.type==="payment").sort((a,b)=>b.timestamp?.localeCompare(a.timestamp)||0);
-              // Riwayat transfer
-              const allTransfers=(walletLogs||[]).filter(l=>l.customerId===customer.id&&(l.type==="transfer_out"||l.type==="transfer_in")).sort((a,b)=>b.timestamp?.localeCompare(a.timestamp)||0).slice(0,5);
               const visibleTx=showAllTx?allTx:allTx.slice(0,5);
               return allTx.length>0?(
                 <div style={{marginBottom:14}}>
