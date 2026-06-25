@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────98
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────99
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -5224,7 +5224,7 @@ function AdminSummary({tenants,transactions,settings,filterDate,setFilterDate}){
 // ═════════════════════════════════════════════════════════════════════════════
 // TENANT APP
 // ═════════════════════════════════════════════════════════════════════════════
-function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,customers,walletLogs,orders,onSaveMenus,onSaveTx,onSaveCustomers,onSaveWalletLogs,onSaveOrders,onUpdateCustomerBalance,onCheckConnection,onSaveAlerts,alerts,onRefresh,refreshing,onLogout}){
+function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,customers,walletLogs,orders,onSaveMenus,onSaveTx,onAppendTx,onAppendOrders,onSaveCustomers,onSaveWalletLogs,onSaveOrders,onUpdateCustomerBalance,onCheckConnection,onSaveAlerts,alerts,onRefresh,refreshing,onLogout}){
   const [tab,setTab]=useState("pos");
   const {BackConfirmModal}=useBackConfirm(true);
   const [isOnline,setIsOnline]=useState(navigator.onLine);
