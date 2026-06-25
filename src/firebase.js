@@ -1,4 +1,4 @@
-// ─── GANTI nilai firebaseConfig dengan punya kamu dari Firebase Console ───────95
+// ─── GANTI nilai firebaseConfig dengan punya kamu dari Firebase Console ───────97
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, getDoc, getDocFromServer, setDoc, onSnapshot, runTransaction } from "firebase/firestore";
 
@@ -164,6 +164,27 @@ export const db = {
 
     return true;
   },
+
+  // ── Append item ke koleksi array secara ATOMIK — aman untuk concurrent writes ──
+  // Masalah: db.set(array) membaca array dari state lokal lalu overwrite seluruh
+  // dokumen. Kalau 2 kasir menulis bersamaan, yang terakhir menang dan yang pertama
+  // hilang (last-write-wins). Fungsi ini memakai runTransaction untuk membaca array
+  // TERBARU dari server sebelum append, sehingga tidak ada data yang tertimpa.
+  async appendToCollection(key, newItems){
+    const ref=doc(firestore,"bazaarpos",key);
+    await runTransaction(firestore,async(transaction)=>{
+      const snap=await transaction.get(ref);
+      const current=snap.exists()?JSON.parse(snap.data().value):[];
+      const items=Array.isArray(newItems)?newItems:[newItems];
+      // Idempotency: skip kalau id sudah ada (mencegah duplikat dari ghost commit)
+      const ids=new Set(current.map(x=>x.id).filter(Boolean));
+      const toAdd=items.filter(x=>!x.id||!ids.has(x.id));
+      if(!toAdd.length)return; // semua sudah ada, tidak perlu tulis ulang
+      const updated=[...current,...toAdd];
+      transaction.set(ref,{value:JSON.stringify(updated),updatedAt:new Date().toISOString()});
+    });
+  },
+
 
   // ── Transfer saldo antar pelanggan — ATOMIK, SATU PERCOBAAN ─────────────────
   async transferBalance(senderId, receiverId, amount, minRemaining, buildLogEntries){

@@ -1,8 +1,8 @@
-import { useState, useEffect, useLayoutEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────96
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────97
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -626,9 +626,92 @@ async function connectBTPrinter(){
 // MAIN APP
 // ═════════════════════════════════════════════════════════════════════════════
 // ─── MainApp: aplikasi utama (superadmin/admin/tenant) dengan realtime subscriptions ──
+// ─── RefreshingOverlay — muncul saat kembali dari aplikasi lain ──────────────
+// Lebih ringan dari IdleOverlay — tidak memblokir layar sepenuhnya, tidak ada
+// tombol yang harus diklik. Otomatis hilang setelah data selesai diperbarui.
+function RefreshingOverlay(){
+  return createPortal(
+    <div style={{
+      position:"fixed",inset:0,zIndex:999998,
+      backdropFilter:"blur(4px)",WebkitBackdropFilter:"blur(4px)",
+      background:"rgba(0,0,0,0.35)",
+      display:"flex",alignItems:"center",justifyContent:"center",
+    }}>
+      <div style={{
+        background:"#fff",borderRadius:20,padding:"24px 28px",
+        textAlign:"center",maxWidth:260,width:"90%",
+        fontFamily:"'Plus Jakarta Sans',sans-serif",
+      }}>
+        <div style={{fontSize:32,animation:"spin 1s linear infinite",display:"inline-block",marginBottom:10}}>⏳</div>
+        <p style={{margin:0,fontWeight:800,fontSize:15,color:"#1c0a00"}}>Memperbarui Data...</p>
+        <p style={{margin:"5px 0 0",color:"#9ca3af",fontSize:12}}>Memastikan semua data sudah terkini sebelum transaksi.</p>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+// ─── IdleOverlay — muncul setelah 30 menit tidak ada aktivitas ───────────────
+// Layar menjadi buram, semua interaksi diblokir sampai user klik AKTIFKAN.
+// Saat AKTIFKAN diklik: data diperbarui dari server sebelum bisa transaksi lagi.
+function IdleOverlay({onActivate}){
+  const [activating,setActivating]=useState(false);
+  const handle=async()=>{
+    setActivating(true);
+    await onActivate();
+    setActivating(false);
+  };
+  return createPortal(
+    <div style={{
+      position:"fixed",inset:0,zIndex:999999,
+      backdropFilter:"blur(10px)",WebkitBackdropFilter:"blur(10px)",
+      background:"rgba(0,0,0,0.55)",
+      display:"flex",alignItems:"center",justifyContent:"center",
+    }}>
+      <div style={{
+        background:"#fff",borderRadius:24,padding:"36px 28px",
+        textAlign:"center",maxWidth:300,width:"90%",
+        fontFamily:"'Plus Jakarta Sans',sans-serif",
+      }}>
+        <div style={{fontSize:52,marginBottom:12}}>💤</div>
+        <h3 style={{margin:"0 0 8px",fontSize:18,fontWeight:800,color:"#1c0a00"}}>
+          Sesi Tidak Aktif
+        </h3>
+        <p style={{color:"#6b7280",fontSize:13,margin:"0 0 6px"}}>
+          30 menit tidak ada aktivitas.
+        </p>
+        <p style={{color:"#9ca3af",fontSize:12,margin:"0 0 24px"}}>
+          Koneksi data diputus sementara untuk menghemat kuota. Klik AKTIFKAN — data akan diperbarui sebelum kamu bisa transaksi lagi.
+        </p>
+        <button onClick={handle} disabled={activating}
+          style={{
+            width:"100%",padding:"16px",
+            background:activating?"#9ca3af":"#ea580c",
+            color:"#fff",border:"none",borderRadius:14,
+            fontWeight:800,fontSize:16,cursor:activating?"not-allowed":"pointer",
+            letterSpacing:"2px",fontFamily:"'Plus Jakarta Sans',sans-serif",
+            display:"flex",alignItems:"center",justifyContent:"center",gap:10,
+          }}>
+          {activating
+            ?<><span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>⏳</span> Memperbarui Data...</>
+            :"AKTIFKAN"}
+        </button>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 function MainApp(){
   const [screen,setScreen]=useState("login");
   const [session,setSession]=useState(null);
+
+  // ── Idle & subscription management ───────────────────────────────────────────
+  const subsRef=useRef([]);        // unsubscribe functions untuk 5 realtime collections
+  const idleTimerRef=useRef(null); // timer 30 menit idle
+  const [isIdle,setIsIdle]=useState(false);       // true = layar buram, tampilkan AKTIFKAN
+  const [isRefreshing,setIsRefreshing]=useState(false); // true = sedang perbarui data saat kembali dari app lain
+  const IDLE_MS=30*60*1000;        // 30 menit
   const [tenants,setTenants]=useState([]);
   const [menus,setMenus]=useState([]);
   const [transactions,setTransactions]=useState([]);
@@ -678,23 +761,114 @@ function MainApp(){
     }catch(e){ console.error("Gagal pulihkan sesi:",e); clearSessionStorage(); }
   },[loaded]);
 
+  // ── Fungsi setup/teardown realtime subscriptions ─────────────────────────────
+  // Dipisah dari initial useEffect supaya bisa dipanggil ulang saat reconnect.
+  const setupSubs=useCallback(()=>{
+    // Bersihkan yang lama dulu supaya tidak double-subscribe
+    subsRef.current.forEach(u=>u()); subsRef.current=[];
+    const u3=db.subscribe("bzr_transactions",v=>setTransactions(v||[]));
+    const u6=db.subscribe("bzr_alerts",      v=>setAlerts(v||[]));
+    const u7=db.subscribe("bzr_customers",   v=>setCustomers(v||[]));
+    const u8=db.subscribe("bzr_wallet_logs", v=>setWalletLogs(v||[]));
+    const u9=db.subscribe("bzr_orders",      v=>setOrders(v||[]));
+    subsRef.current=[u3,u6,u7,u8,u9];
+  },[]);
+
+  const teardownSubs=useCallback(()=>{
+    subsRef.current.forEach(u=>u()); subsRef.current=[];
+  },[]);
+
   useEffect(()=>{
-    // Real-time subscriptions — semua panel update otomatis saat ada perubahan
+    // ── Strategi dual fetch: hemat Firestore reads tanpa korbankan UX ─────────
+    // REALTIME (5): transactions, orders, customers, walletLogs, alerts
+    // ONE-TIME FETCH (4): tenants, menus, settings, admins
     let count=0; const total=9;
     const checkLoaded=()=>{count++;if(count>=total)setLoaded(true);};
 
-    const u1=db.subscribe("bzr_tenants",    v=>{setTenants(v||[]);             checkLoaded();});
-    const u2=db.subscribe("bzr_menus",      v=>{setMenus(v||[]);               checkLoaded();});
-    const u3=db.subscribe("bzr_transactions",v=>{setTransactions(v||[]);       checkLoaded();});
-    const u4=db.subscribe("bzr_settings",   v=>{setSettings({...DEF,...(v||{})});checkLoaded();});
-    const u5=db.subscribe("bzr_admins",     v=>{setAdmins(v||[]);              checkLoaded();});
-    const u6=db.subscribe("bzr_alerts",     v=>{setAlerts(v||[]);              checkLoaded();});
-    const u7=db.subscribe("bzr_customers",  v=>{setCustomers(v||[]);           checkLoaded();});
-    const u8=db.subscribe("bzr_wallet_logs",v=>{setWalletLogs(v||[]);          checkLoaded();});
-    const u9=db.subscribe("bzr_orders",     v=>{setOrders(v||[]);              checkLoaded();});
+    // ── One-time fetch (static data) ──────────────────────────────────────────
+    db.get("bzr_tenants") .then(v=>{setTenants(v||[]);  checkLoaded();}).catch(()=>checkLoaded());
+    db.get("bzr_menus")   .then(v=>{setMenus(v||[]);    checkLoaded();}).catch(()=>checkLoaded());
+    db.get("bzr_settings").then(v=>{setSettings({...DEF,...(v||{})});checkLoaded();}).catch(()=>checkLoaded());
+    db.get("bzr_admins")  .then(v=>{setAdmins(v||[]);   checkLoaded();}).catch(()=>checkLoaded());
 
-    return()=>{u1();u2();u3();u4();u5();u6();u7();u8();u9();};
+    // ── Realtime listeners — simpan ke subsRef supaya bisa di-manage ──────────
+    // Gunakan versi checkLoaded di sini (hanya saat initial mount)
+    subsRef.current.forEach(u=>u()); subsRef.current=[];
+    const u3=db.subscribe("bzr_transactions",v=>{setTransactions(v||[]); checkLoaded();});
+    const u6=db.subscribe("bzr_alerts",      v=>{setAlerts(v||[]);       checkLoaded();});
+    const u7=db.subscribe("bzr_customers",   v=>{setCustomers(v||[]);    checkLoaded();});
+    const u8=db.subscribe("bzr_wallet_logs", v=>{setWalletLogs(v||[]);   checkLoaded();});
+    const u9=db.subscribe("bzr_orders",      v=>{setOrders(v||[]);       checkLoaded();});
+    subsRef.current=[u3,u6,u7,u8,u9];
+
+    return()=>{subsRef.current.forEach(u=>u()); subsRef.current=[];};
   },[]);
+
+  // ── visibilitychange: disconnect saat pindah app, reconnect saat kembali ─────
+  // Saat kembali ke foreground: tampilkan "Memperbarui Data..." sebentar supaya
+  // kasir tahu data sedang diperbarui dan tidak langsung transaksi dengan data lama.
+  useEffect(()=>{
+    if(!loaded)return;
+    const handle=async()=>{
+      if(document.visibilityState==="hidden"){
+        teardownSubs(); // tab ke background → putus subscription
+      } else {
+        if(!isIdle&&session){ // kembali ke foreground & belum idle
+          setIsRefreshing(true);
+          await refreshStaticData();
+          setupSubs();
+          // Beri sedikit waktu supaya realtime data sempat masuk sebelum overlay hilang
+          setTimeout(()=>setIsRefreshing(false),1200);
+        }
+      }
+    };
+    document.addEventListener("visibilitychange",handle);
+    return()=>document.removeEventListener("visibilitychange",handle);
+  },[loaded,isIdle,session,setupSubs,teardownSubs]);
+
+  // ── Idle timer 30 menit: layar buram + tombol AKTIFKAN ───────────────────────
+  // Hanya aktif saat user sudah login (session ada). Setiap aktivitas user
+  // (klik, ketik, scroll, sentuh) reset timer. Kalau 30 menit tidak ada aktivitas,
+  // putus subscription dan tampilkan overlay.
+  const resetIdleTimer=useCallback(()=>{
+    clearTimeout(idleTimerRef.current);
+    idleTimerRef.current=setTimeout(()=>{
+      teardownSubs(); // hemat reads selama idle
+      setIsIdle(true);
+    },IDLE_MS);
+  },[teardownSubs,IDLE_MS]);
+
+  useEffect(()=>{
+    if(!loaded||!session)return;
+    const events=["mousemove","mousedown","keydown","touchstart","scroll","click"];
+    const handler=()=>{ if(!isIdle) resetIdleTimer(); };
+    events.forEach(e=>window.addEventListener(e,handler,{passive:true}));
+    resetIdleTimer(); // mulai timer saat pertama login
+    return()=>{
+      events.forEach(e=>window.removeEventListener(e,handler));
+      clearTimeout(idleTimerRef.current);
+    };
+  },[loaded,session,isIdle,resetIdleTimer]);
+
+  // ── Aktifkan kembali dari idle ────────────────────────────────────────────────
+  const handleActivate=async()=>{
+    setIsIdle(false);
+    resetIdleTimer();
+    await refreshStaticData(); // pastikan data terbaru sebelum bisa transaksi lagi
+    setupSubs();               // reconnect realtime
+  };
+
+  // ── Refresh data statis (dipanggil saat admin ubah setting/menu/tenant) ─────
+  const refreshStaticData=async()=>{
+    try{
+      const [t,m,s,a]=await Promise.all([
+        db.get("bzr_tenants"),db.get("bzr_menus"),
+        db.get("bzr_settings"),db.get("bzr_admins"),
+      ]);
+      setTenants(t||[]); setMenus(m||[]);
+      setSettings({...DEF,...(s||{})}); setAdmins(a||[]);
+    }catch(e){console.error("Gagal refresh data statis:",e);}
+  };
 
   useEffect(()=>{
     clearInterval(bkRef.current);
@@ -724,15 +898,22 @@ function MainApp(){
     })();
   },[]);
 
-  const saveTenants=async d=>{setTenants(d);await db.set("bzr_tenants",d);};
-  const saveMenus=async d=>{await db.set("bzr_menus",d);setMenus(d);};
-  const saveTx=async d=>{await db.set("bzr_transactions",d);setTransactions(d);};
-  const saveSettings=async d=>{await db.set("bzr_settings",d);setSettings(d);};
-  const saveAdmins=async d=>{await db.set("bzr_admins",d);setAdmins(d);};
-  const saveAlerts=async d=>{await db.set("bzr_alerts",d);setAlerts(d);};
+  const saveTenants=async d=>{await db.set("bzr_tenants",d);setTenants(d);};
+  const saveMenus  =async d=>{await db.set("bzr_menus",d);setMenus(d);};
+  const saveTx     =async d=>{await db.set("bzr_transactions",d);setTransactions(d);};
+  const saveSettings=async d=>{await db.set("bzr_settings",d);setSettings({...DEF,...d});};
+  const saveAdmins =async d=>{await db.set("bzr_admins",d);setAdmins(d);};
+  const saveAlerts =async d=>{await db.set("bzr_alerts",d);setAlerts(d);};
   const saveCustomers=async d=>{await db.set("bzr_customers",d);setCustomers(d);};
   const saveWalletLogs=async d=>{await db.set("bzr_wallet_logs",d);setWalletLogs(d);};
-  const saveOrders=async d=>{await db.set("bzr_orders",d);setOrders(d);};
+  const saveOrders =async d=>{await db.set("bzr_orders",d);setOrders(d);};
+
+  // ── Atomic append — aman untuk concurrent writes (tidak ada last-write-wins) ─
+  // Pakai runTransaction: baca array terbaru dari server, append, tulis balik.
+  // State lokal tidak perlu di-update manual karena realtime listener akan
+  // menerima perubahan dari Firestore dan update otomatis.
+  const appendTx    =async tx    =>db.appendToCollection("bzr_transactions",[tx]);
+  const appendOrders=async orders=>db.appendToCollection("bzr_orders",orders);
 
   // ── Update saldo pelanggan ATOMIK (anti race-condition) ──────────────────────
   // Dipakai untuk: top up, bayar transaksi (potong saldo), refund, kosongkan saldo.
@@ -808,6 +989,8 @@ function MainApp(){
     onSaveTenants:saveTenants, onSaveMenus:saveMenus, onSaveTx:saveTx,
     onSaveSettings:saveSettings, onSaveAdmins:saveAdmins, onSaveAlerts:saveAlerts,
     onSaveCustomers:saveCustomers, onSaveWalletLogs:saveWalletLogs, onSaveOrders:saveOrders,
+    onAppendTx:appendTx, onAppendOrders:appendOrders,
+    onRefreshStatic:refreshStaticData,
     onUpdateCustomerBalance:updateCustomerBalance, onAddNewCustomer:addNewCustomerAtomic,
     onCheckConnection:checkConnection,
     onRestoreBackup:restoreBackup, onRefresh:doRefresh, refreshing,
@@ -820,21 +1003,32 @@ function MainApp(){
         <p style={{color:"#ea580c",fontWeight:700,fontSize:18}}>Memuat BazaarPOS…</p></div>
     </div>);
 
-  if(screen==="superadmin") return <SuperAdminDashboard {...commonProps}/>;
-  if(screen==="admin") return <AdminDashboard {...commonProps} adminData={session?.data}/>;
-  if(screen==="tenant"&&session) return(
+  if(screen==="superadmin") return(<>
+    {isRefreshing&&<RefreshingOverlay/>}
+    {isIdle&&<IdleOverlay onActivate={handleActivate}/>}
+    <SuperAdminDashboard {...commonProps}/>
+  </>);
+  if(screen==="admin") return(<>
+    {isRefreshing&&<RefreshingOverlay/>}
+    {isIdle&&<IdleOverlay onActivate={handleActivate}/>}
+    <AdminDashboard {...commonProps} adminData={session?.data}/>
+  </>);
+  if(screen==="tenant"&&session) return(<>
+    {isRefreshing&&<RefreshingOverlay/>}
+    {isIdle&&<IdleOverlay onActivate={handleActivate}/>}
     <TenantApp tenant={session.data}
       menus={menus.filter(m=>m.tenantId===session.data.id)} allMenus={menus}
       transactions={transactions.filter(t=>t.tenantId===session.data.id)}
       allTransactions={transactions} settings={settings}
       customers={customers} walletLogs={walletLogs} orders={orders}
-      onSaveMenus={saveMenus} onSaveTx={saveTx}
+      onSaveMenus={saveMenus} onSaveTx={saveTx} onAppendTx={appendTx} onAppendOrders={appendOrders}
       onSaveCustomers={saveCustomers} onSaveWalletLogs={saveWalletLogs} onSaveOrders={saveOrders}
       onUpdateCustomerBalance={updateCustomerBalance}
       onCheckConnection={checkConnection}
       onSaveAlerts={saveAlerts} alerts={alerts}
       onRefresh={doRefresh} refreshing={refreshing}
-      onLogout={logout}/>);
+      onLogout={logout}/>
+  </>);
 
   return <LoginScreen tenants={tenants} admins={admins} settings={settings}
     onLogin={(type,data)=>{setSession({type,data});setScreen(type);saveSessionToStorage(type,data);}}/>;
@@ -3084,7 +3278,7 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
 // ─── Pre-Order Manager (Admin & SuperAdmin) ───────────────────────────────────
 // Setiap order disimpan TERPISAH per tenant (1 sesi checkout → N order records)
 // groupNota menghubungkan semua order dari sesi yang sama
-function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,onSaveCustomers,onSaveWalletLogs,onSaveOrders,onSaveMenus,onUpdateCustomerBalance,onCheckConnection,adminData,isSuperAdmin}){
+function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,onSaveCustomers,onSaveWalletLogs,onSaveOrders,onAppendOrders,onSaveMenus,onUpdateCustomerBalance,onCheckConnection,adminData,isSuperAdmin}){
   // Bisa edit kuota: SuperAdmin atau admin dengan flag isPOManager
   const canEditQuota=isSuperAdmin||(adminData?.isPOManager===true);
   const [subTab,setSubTab]=useState("new");
@@ -3234,9 +3428,9 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
       return;
     }
 
-    // ── Baru simpan record PO ──
+    // ── Simpan record PO baru secara ATOMIK (aman concurrent) ────────────────
     try{
-      await onSaveOrders([...(orders||[]),...newOrders]);
+      await (onAppendOrders||onSaveOrders)(newOrders);
     }catch(e){
       console.error("PO gagal simpan SETELAH saldo terpotong:",e);
       setProcessing(false);
@@ -3843,7 +4037,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                         });
                       }
                       try{
-                        await onSaveOrders([...(orders||[]),...newOrders]);
+                        await (onAppendOrders||onSaveOrders)(newOrders);
                       }catch(e){
                         console.error("PO Bayar Nanti gagal simpan:",e);
                         alert(`❌ GAGAL MENYIMPAN PO! Coba lagi.\n\nDetail: ${e.message}`);
@@ -5114,7 +5308,7 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
       </div>
 
       <div style={{padding:16,maxWidth:520,margin:"0 auto"}} className="fade-in">
-        {tab==="pos"&&<TenantPOS tenant={tenant} menus={menus} allTransactions={allTransactions} onSaveTx={onSaveTx} settings={settings} customers={customers} walletLogs={walletLogs} onSaveCustomers={onSaveCustomers} onSaveWalletLogs={onSaveWalletLogs} onUpdateCustomerBalance={onUpdateCustomerBalance} onCheckConnection={onCheckConnection} kasirName={kasirName} kasirCode={kasirCode}/>}
+        {tab==="pos"&&<TenantPOS tenant={tenant} menus={menus} allTransactions={allTransactions} onSaveTx={onSaveTx} onAppendTx={onAppendTx} settings={settings} customers={customers} walletLogs={walletLogs} onSaveCustomers={onSaveCustomers} onSaveWalletLogs={onSaveWalletLogs} onUpdateCustomerBalance={onUpdateCustomerBalance} onCheckConnection={onCheckConnection} kasirName={kasirName} kasirCode={kasirCode}/>}
         {tab==="po"&&<POTenant tenant={tenant} orders={orders} customers={customers} onSaveOrders={onSaveOrders} onSaveCustomers={onSaveCustomers} onUpdateCustomerBalance={onUpdateCustomerBalance} onCheckConnection={onCheckConnection} settings={settings} menus={menus} kasirName={kasirName}/>}
         {tab==="menu"&&<TenantMenuMgr tenant={tenant} menus={menus} allMenus={allMenus} allTransactions={allTransactions} orders={orders} onSaveMenus={onSaveMenus}/>}
         {tab==="history"&&<TenantHistory transactions={transactions} tenant={tenant} settings={settings}/>}
@@ -5124,7 +5318,7 @@ function TenantApp({tenant,menus,allMenus,transactions,allTransactions,settings,
 }
 
 // ─── Tenant POS ───────────────────────────────────────────────────────────────
-function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,customers,walletLogs,onSaveCustomers,onSaveWalletLogs,onUpdateCustomerBalance,onCheckConnection,kasirName="",kasirCode=""}){
+function TenantPOS({tenant,menus,allTransactions,onSaveTx,onAppendTx,settings,customers,walletLogs,onSaveCustomers,onSaveWalletLogs,onUpdateCustomerBalance,onCheckConnection,kasirName="",kasirCode=""}){
   const [cart,setCart]=useState([]);
   const [lastNota,setLastNota]=useState(null);
   const [printed,setPrinted]=useState(false);
@@ -5257,9 +5451,11 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,settings,customers,wal
         tx.walletBalanceAfter=result.balance;
       }
 
-      // ── Baru simpan record transaksi (selalu langsung ke server, TIDAK ada antrian offline) ──
+      // ── Simpan record transaksi secara ATOMIK (aman concurrent) ──────────────
+      // onAppendTx pakai runTransaction: baca array terbaru server, append, tulis.
+      // Tidak ada risiko last-write-wins kalau banyak kasir submit bersamaan.
       try{
-        await onSaveTx([...allTransactions,tx]);
+        await (onAppendTx||onSaveTx)([...allTransactions,tx]);
       }catch(txErr){
         // Saldo SUDAH terpotong tapi transaksi gagal tersimpan — kasus kritis, beri tahu jelas
         console.error("Transaksi gagal simpan SETELAH saldo terpotong:",txErr);
