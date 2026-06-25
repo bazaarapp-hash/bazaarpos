@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────100
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────101
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -1425,7 +1425,7 @@ function AdminDashboard(props){
 }
 
 // ─── Admin Users ──────────────────────────────────────────────────────────────
-function AdminUsers({admins,onSaveAdmins}){
+function AdminUsers({admins,onSaveAdmins,walletLogs,orders}){
   const [showForm,setShowForm]=useState(false);
   const [editing,setEditing]=useState(null);
   const [form,setForm]=useState({username:"",password:"",name:"",isPOManager:false});
@@ -1440,6 +1440,17 @@ function AdminUsers({admins,onSaveAdmins}){
     }catch(e){
       alert(`❌ GAGAL MENYIMPAN! Data admin tidak tersimpan. Cek koneksi, lalu coba lagi.\n(${e.message})`);
     }
+  };
+  const delAdmin=async(a)=>{
+    // Cek riwayat top up
+    const hasTopUp=(walletLogs||[]).some(l=>l.adminName===a.name&&l.type==="topup");
+    if(hasTopUp){alert(`❌ Admin "${a.name}" tidak bisa dihapus karena masih terhubung dengan riwayat top up pelanggan.\n\nJika admin sudah tidak aktif, nonaktifkan aksesnya dengan mengubah password saja.`);return;}
+    // Cek keterlibatan di Pre-Order (buat, verifikasi, atau batalkan PO)
+    const hasPO=(orders||[]).some(o=>o.createdBy===a.name||o.verifiedBy===a.name||(o.cancelledBy===a.name));
+    if(hasPO){alert(`❌ Admin "${a.name}" tidak bisa dihapus karena masih terhubung dengan data Pre-Order (PO) sebagai pembuat, verifikator, atau pembatal.\n\nJika admin sudah tidak aktif, nonaktifkan aksesnya dengan mengubah password saja.`);return;}
+    if(!window.confirm(`Hapus admin "${a.name}"?\n\nTindakan ini tidak bisa dibatalkan.`))return;
+    try{await onSaveAdmins(admins.filter(x=>x.id!==a.id));}
+    catch(e){alert("❌ GAGAL HAPUS! "+e.message);}
   };
   return(
     <div>
@@ -1487,7 +1498,7 @@ function AdminUsers({admins,onSaveAdmins}){
               )}
               <div style={{display:"flex",gap:8}}>
                 <button onClick={()=>openEdit(a)} style={{flex:1,padding:"8px",background:"#eff6ff",color:"#2563eb",border:"none",borderRadius:10,cursor:"pointer",fontWeight:600,fontSize:13}}>✏️ Edit</button>
-                <button onClick={async()=>{if(window.confirm("Hapus admin ini?")){try{await onSaveAdmins(admins.filter(x=>x.id!==a.id));}catch(e){alert("❌ GAGAL HAPUS! "+e.message);}}}} style={{flex:1,padding:"8px",background:"#fef2f2",color:"#dc2626",border:"none",borderRadius:10,cursor:"pointer",fontWeight:600,fontSize:13}}>🗑️ Hapus</button>
+                <button onClick={()=>delAdmin(a)} style={{flex:1,padding:"8px",background:"#fef2f2",color:"#dc2626",border:"none",borderRadius:10,cursor:"pointer",fontWeight:600,fontSize:13}}>🗑️ Hapus</button>
               </div>
             </div>
           ))}
@@ -1497,7 +1508,7 @@ function AdminUsers({admins,onSaveAdmins}){
 }
 
 // ─── Admin Tenants ────────────────────────────────────────────────────────────
-function AdminTenants({tenants,transactions,menus,onSaveTenants}){
+function AdminTenants({tenants,transactions,menus,orders,onSaveTenants}){
   const [showForm,setShowForm]=useState(false);
   const [editing,setEditing]=useState(null);
   const [form,setForm]=useState({code:"",name:"",password:""});
@@ -1516,8 +1527,17 @@ function AdminTenants({tenants,transactions,menus,onSaveTenants}){
     }
   };
   const del=async id=>{
-    if(transactions.some(t=>t.tenantId===id)){alert("❌ Tenant tidak bisa dihapus karena sudah memiliki data transaksi!");return;}
-    if(!window.confirm("Hapus tenant ini?"))return;
+    const tenant=tenants.find(t=>t.id===id);
+    const name=tenant?.name||"ini";
+    // Cek transaksi penjualan
+    if(transactions.some(t=>t.tenantId===id)){
+      alert(`❌ Tenant "${name}" tidak bisa dihapus karena masih memiliki riwayat transaksi penjualan.`);return;
+    }
+    // Cek Pre-Order (PO)
+    if((orders||[]).some(o=>o.tenantId===id)){
+      alert(`❌ Tenant "${name}" tidak bisa dihapus karena masih memiliki data Pre-Order (PO).`);return;
+    }
+    if(!window.confirm(`Hapus tenant "${name}"?\n\nMenu-menu tenant ini juga akan tetap ada di database. Tindakan ini tidak bisa dibatalkan.`))return;
     try{ await onSaveTenants(tenants.filter(t=>t.id!==id)); }
     catch(e){ alert("❌ GAGAL HAPUS! "+e.message); }
   };
@@ -1532,7 +1552,7 @@ function AdminTenants({tenants,transactions,menus,onSaveTenants}){
         // Hitung qty terjual per menu (semua waktu)
         const soldQty={};
         transactions.filter(t=>t.tenantId===viewMenuOf.id)
-          .forEach(tx=>tx.items.forEach(it=>{soldQty[it.menuCode]=(soldQty[it.menuCode]||0)+it.qty;}));
+          .forEach(tx=>(tx.items||[]).forEach(it=>{soldQty[it.menuCode]=(soldQty[it.menuCode]||0)+it.qty;}));
         return(
           <Modal title="" onClose={()=>setViewMenuOf(null)}>
             {/* Header tenant */}
