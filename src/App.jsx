@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────99
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────100
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -3438,7 +3438,8 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
 
     // ── Simpan record PO baru secara ATOMIK (aman concurrent) ────────────────
     try{
-      await (onAppendOrders||onSaveOrders)(newOrders);
+      if(onAppendOrders) await onAppendOrders(newOrders);
+      else await onSaveOrders([...(orders||[]),...newOrders]);
     }catch(e){
       console.error("PO gagal simpan SETELAH saldo terpotong:",e);
       setProcessing(false);
@@ -4045,7 +4046,8 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                         });
                       }
                       try{
-                        await (onAppendOrders||onSaveOrders)(newOrders);
+                        if(onAppendOrders) await onAppendOrders(newOrders);
+                        else await onSaveOrders([...(orders||[]),...newOrders]);
                       }catch(e){
                         console.error("PO Bayar Nanti gagal simpan:",e);
                         alert(`❌ GAGAL MENYIMPAN PO! Coba lagi.\n\nDetail: ${e.message}`);
@@ -5460,10 +5462,11 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,onAppendTx,settings,cu
       }
 
       // ── Simpan record transaksi secara ATOMIK (aman concurrent) ──────────────
-      // onAppendTx pakai runTransaction: baca array terbaru server, append, tulis.
-      // Tidak ada risiko last-write-wins kalau banyak kasir submit bersamaan.
+      // onAppendTx: hanya kirim transaksi BARU saja (runTransaction append ke server)
+      // onSaveTx fallback: kirim seluruh array (lama + baru) untuk db.set()
       try{
-        await (onAppendTx||onSaveTx)([...allTransactions,tx]);
+        if(onAppendTx) await onAppendTx(tx);
+        else await onSaveTx([...allTransactions,tx]);
       }catch(txErr){
         // Saldo SUDAH terpotong tapi transaksi gagal tersimpan — kasus kritis, beri tahu jelas
         console.error("Transaksi gagal simpan SETELAH saldo terpotong:",txErr);
@@ -5736,7 +5739,7 @@ function TenantMenuMgr({tenant,menus,allMenus,allTransactions,orders,onSaveMenus
   const [showForm,setShowForm]=useState(false);
   const [editing,setEditing]=useState(null);
   const [form,setForm]=useState({code:"",name:"",price:""});
-  const usedIds=new Set(allTransactions.flatMap(tx=>tx.items.map(it=>it.menuId)));
+  const usedIds=new Set(allTransactions.flatMap(tx=>(tx.items||[]).map(it=>it.menuId)));
   const genCode=()=>{
     // Pakai kode tenant (sudah unik) sebagai prefix menu
     // Format: {TENANT_CODE}-{nomor urut 3 digit}
