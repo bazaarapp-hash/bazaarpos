@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────97
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────98
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -782,23 +782,31 @@ function MainApp(){
     // ── Strategi dual fetch: hemat Firestore reads tanpa korbankan UX ─────────
     // REALTIME (5): transactions, orders, customers, walletLogs, alerts
     // ONE-TIME FETCH (4): tenants, menus, settings, admins
-    let count=0; const total=9;
-    const checkLoaded=()=>{count++;if(count>=total)setLoaded(true);};
+    //
+    // Pakai Set bukan counter sederhana — supaya setiap koleksi hanya
+    // berkontribusi SATU KALI ke pengecekan loaded, meskipun subscription
+    // realtime bisa fire berkali-kali (cache → server update).
+    // Tanpa ini, 5 subscription fire 2x = count 10 sebelum 4 fetch selesai
+    // → loaded=true terlalu cepat → tenants/menus kosong → login tenant gagal.
+    const loadedKeys=new Set();
+    const checkLoaded=(key)=>{
+      loadedKeys.add(key);
+      if(loadedKeys.size>=9)setLoaded(true);
+    };
 
     // ── One-time fetch (static data) ──────────────────────────────────────────
-    db.get("bzr_tenants") .then(v=>{setTenants(v||[]);  checkLoaded();}).catch(()=>checkLoaded());
-    db.get("bzr_menus")   .then(v=>{setMenus(v||[]);    checkLoaded();}).catch(()=>checkLoaded());
-    db.get("bzr_settings").then(v=>{setSettings({...DEF,...(v||{})});checkLoaded();}).catch(()=>checkLoaded());
-    db.get("bzr_admins")  .then(v=>{setAdmins(v||[]);   checkLoaded();}).catch(()=>checkLoaded());
+    db.get("bzr_tenants") .then(v=>{setTenants(v||[]);  checkLoaded("tenants"); }).catch(()=>checkLoaded("tenants"));
+    db.get("bzr_menus")   .then(v=>{setMenus(v||[]);    checkLoaded("menus");   }).catch(()=>checkLoaded("menus"));
+    db.get("bzr_settings").then(v=>{setSettings({...DEF,...(v||{})});checkLoaded("settings");}).catch(()=>checkLoaded("settings"));
+    db.get("bzr_admins")  .then(v=>{setAdmins(v||[]);   checkLoaded("admins");  }).catch(()=>checkLoaded("admins"));
 
     // ── Realtime listeners — simpan ke subsRef supaya bisa di-manage ──────────
-    // Gunakan versi checkLoaded di sini (hanya saat initial mount)
     subsRef.current.forEach(u=>u()); subsRef.current=[];
-    const u3=db.subscribe("bzr_transactions",v=>{setTransactions(v||[]); checkLoaded();});
-    const u6=db.subscribe("bzr_alerts",      v=>{setAlerts(v||[]);       checkLoaded();});
-    const u7=db.subscribe("bzr_customers",   v=>{setCustomers(v||[]);    checkLoaded();});
-    const u8=db.subscribe("bzr_wallet_logs", v=>{setWalletLogs(v||[]);   checkLoaded();});
-    const u9=db.subscribe("bzr_orders",      v=>{setOrders(v||[]);       checkLoaded();});
+    const u3=db.subscribe("bzr_transactions",v=>{setTransactions(v||[]); checkLoaded("transactions");});
+    const u6=db.subscribe("bzr_alerts",      v=>{setAlerts(v||[]);       checkLoaded("alerts");});
+    const u7=db.subscribe("bzr_customers",   v=>{setCustomers(v||[]);    checkLoaded("customers");});
+    const u8=db.subscribe("bzr_wallet_logs", v=>{setWalletLogs(v||[]);   checkLoaded("walletLogs");});
+    const u9=db.subscribe("bzr_orders",      v=>{setOrders(v||[]);       checkLoaded("orders");});
     subsRef.current=[u3,u6,u7,u8,u9];
 
     return()=>{subsRef.current.forEach(u=>u()); subsRef.current=[];};
