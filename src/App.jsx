@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────103
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────104
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -1718,12 +1718,19 @@ function BackupPanel({tenants,menus,transactions,settings,admins,customers,walle
   const [restoring,setRestoring]=useState(false);
   const [previewData,setPreviewData]=useState(null);
   const [previewSrc,setPreviewSrc]=useState("");
-  const [restoreStep,setRestoreStep]=useState(0); // 0=preview, 1=konfirmasi, 2=selesai
+  const [restoreStep,setRestoreStep]=useState(0);
   const [restoreErr,setRestoreErr]=useState("");
   const [restoredSummary,setRestoredSummary]=useState(null);
   const [backupMsg,setBackupMsg]=useState("");
   const fileRef=useRef(null);
-  // Semua koleksi ikut di-backup
+
+  // Manajemen foto bukti lokal — dipakai oleh LocalPhotoManager
+  const clearLocalPhotos=()=>{
+    try{const keys=Object.keys(localStorage).filter(k=>k.startsWith("bzr_photo_"));keys.forEach(k=>localStorage.removeItem(k));return keys.length;}catch(e){return 0;}
+  };
+  const countLocalPhotos=()=>{
+    try{return Object.keys(localStorage).filter(k=>k.startsWith("bzr_photo_")).length;}catch(e){return 0;}
+  };
   const data={tenants,menus,transactions,settings,admins,customers,walletLogs,orders};
 
   // ── Backup manual ──────────────────────────────────────────────────────────
@@ -2003,6 +2010,9 @@ function BackupPanel({tenants,menus,transactions,settings,admins,customers,walle
           </button>
         </div>
       )}
+
+      {/* ── Hapus Foto Bukti Lokal ─────────────────────────────────────────── */}
+      <LocalPhotoManager countLocalPhotos={countLocalPhotos} clearLocalPhotos={clearLocalPhotos}/>
     </div>
   );
 }
@@ -3312,9 +3322,6 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
             </div>}
         </div>
       )}
-
-      {/* ── Hapus Foto Bukti Lokal ────────────────────────────────────────── */}
-      <LocalPhotoManager countLocalPhotos={countLocalPhotos} clearLocalPhotos={clearLocalPhotos}/>
     </div>
   );
 }
