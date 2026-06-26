@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────102
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────103
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -3321,8 +3321,8 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
 
 // Helper component untuk manajemen foto lokal di BackupPanel
 function LocalPhotoManager({countLocalPhotos,clearLocalPhotos}){
-  const [count,setCount]=React.useState(()=>countLocalPhotos());
-  const [cleared,setCleared]=React.useState(false);
+  const [count,setCount]=useState(()=>countLocalPhotos());
+  const [cleared,setCleared]=useState(false);
   const handleClear=()=>{
     if(count===0){alert("Tidak ada foto bukti tersimpan di device ini.");return;}
     if(!window.confirm(`Hapus ${count} foto bukti top up dari device ini?\n\nFoto di device kasir lain tidak terpengaruh.\nTindakan ini tidak bisa dibatalkan.`))return;
@@ -5901,10 +5901,18 @@ ${waSignature(tenant.name)}`;
         <div style={{background:"#fff",borderRadius:18,padding:18,boxShadow:"0 8px 32px rgba(22,163,74,.15)",border:"1px solid #dcfce7",position:"sticky",bottom:10}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
             <h3 style={{margin:0,color:"#14532d",fontSize:15,fontWeight:800}}>🛒 Keranjang</h3>
-            <button onClick={()=>setShowSavePending(true)}
-              style={{padding:"6px 12px",background:"#fff7ed",color:"#ea580c",border:"1px solid #fed7aa",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:12,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",gap:5}}>
-              ⏸️ Tunda
-            </button>
+            <div style={{display:"flex",gap:7,alignItems:"center"}}>
+              {pendingCarts.length>0&&(
+                <button onClick={()=>setShowPendingList(true)}
+                  style={{padding:"5px 10px",background:"#fff7ed",color:"#ea580c",border:"1px solid #fed7aa",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:12,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                  ⏸️ {pendingCarts.length}
+                </button>
+              )}
+              <button onClick={()=>setShowSavePending(true)}
+                style={{padding:"6px 12px",background:"#fff7ed",color:"#ea580c",border:"1px solid #fed7aa",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:12,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",gap:5}}>
+                ⏸️ Tunda
+              </button>
+            </div>
           </div>
           <div style={{maxHeight:180,overflowY:"auto",marginBottom:12}}>
             {cart.map(item=>(
@@ -5936,10 +5944,11 @@ ${waSignature(tenant.name)}`;
         </div>
       )}
 
-      {/* Tombol akses daftar pending — selalu terlihat jika ada pending */}
-      {pendingCarts.length>0&&(
+      {/* Tombol akses daftar pending — hanya tampil saat keranjang KOSONG
+          (saat keranjang terbuka, akses via tombol ⏸️ di header keranjang) */}
+      {pendingCarts.length>0&&cart.length===0&&(
         <button onClick={()=>setShowPendingList(true)}
-          style={{position:"fixed",bottom:cart.length>0?200:20,right:16,zIndex:500,padding:"11px 16px",background:"#f97316",color:"#fff",border:"none",borderRadius:50,fontWeight:800,cursor:"pointer",fontSize:13,boxShadow:"0 4px 16px rgba(249,115,22,.4)",fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",gap:7}}>
+          style={{position:"fixed",bottom:20,right:16,zIndex:100,padding:"11px 16px",background:"#f97316",color:"#fff",border:"none",borderRadius:50,fontWeight:800,cursor:"pointer",fontSize:13,boxShadow:"0 4px 16px rgba(249,115,22,.4)",fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",gap:7}}>
           ⏸️ {pendingCarts.length} Tunda
         </button>
       )}
