@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────105
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────106
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -3626,19 +3626,8 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
     }
   };
 
-  // Data PO Tercatat — filtered per tenant
+  // Data PO Tercatat — hanya allPending dihitung di sini, filter dilakukan saat render
   const allPending=[...(orders||[]).filter(o=>o.status==="pending")].sort((a,b)=>{const ta=a.timestamp?new Date(a.timestamp).getTime():0;const tb=b.timestamp?new Date(b.timestamp).getTime():0;return tb-ta;});
-  const filteredPO=allPending.filter(o=>{
-    const tenantOk=poTenantFilter==="all"||o.tenantId===poTenantFilter;
-    const q=poSearch.trim().toLowerCase();
-    const searchOk=!q||(
-      (o.customerName||"").toLowerCase().includes(q)||
-      (o.customerPhone||"").replace(/\D/g,"").includes(poSearch.replace(/\D/g,""))||
-      (o.nota||"").toLowerCase().includes(q)||
-      (o.tenantName||"").toLowerCase().includes(q)
-    );
-    return tenantOk&&searchOk;
-  });
 
   // ── Refund PO (sudah bayar) ──────────────────────────────────────────────
   const doRefundPO=async(order)=>{
@@ -4174,7 +4163,20 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
             </select>
           </div>
 
-          {/* Statistik */}
+          {/* Statistik + List — filteredPO dihitung inline agar selalu pakai poSearch terbaru */}
+          {(()=>{
+            const q=poSearch.trim().toLowerCase();
+            const filteredPO=allPending.filter(o=>{
+              const tenantOk=poTenantFilter==="all"||o.tenantId===poTenantFilter;
+              const searchOk=!q||(
+                (o.customerName||"").toLowerCase().includes(q)||
+                (o.customerPhone||"").replace(/\D/g,"").includes(q)||
+                (o.nota||"").toLowerCase().includes(q)||
+                (o.tenantName||"").toLowerCase().includes(q)
+              );
+              return tenantOk&&searchOk;
+            });
+            return(<>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
             <div style={{background:"#fef3c7",border:"1px solid #fbbf24",borderRadius:12,padding:"10px",textAlign:"center"}}>
               <p style={{margin:0,color:"#92400e",fontSize:12,fontWeight:600}}>⏳ Belum Selesai</p>
@@ -4185,9 +4187,9 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
               <p style={{margin:"4px 0 0",color:"#15803d",fontWeight:900,fontSize:20}}>{(orders||[]).filter(o=>o.status==="completed"&&(poTenantFilter==="all"||o.tenantId===poTenantFilter)).length}</p>
             </div>
           </div>
-
-          {filteredPO.length===0?<EmptyState icon="📦" text="Tidak ada PO yang menunggu."/>:
-            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {filteredPO.length===0
+            ?<EmptyState icon={q?"🔍":"📦"} text={q?`Tidak ada PO cocok dengan "${q}".`:"Tidak ada PO yang menunggu."}/>
+            :<div style={{display:"flex",flexDirection:"column",gap:10}}>
               {filteredPO.map(order=>(
                 <div key={order.id} style={{background:"#fff",border:"2px solid #fbbf24",borderRadius:16,padding:16}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8,marginBottom:10}}>
@@ -4241,10 +4243,12 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
                 </div>
               ))}
             </div>}
+          </>);})()}
 
           {/* PO Selesai */}
           {(()=>{
-            const done=(orders||[]).filter(o=>o.status==="completed"&&(poTenantFilter==="all"||o.tenantId===poTenantFilter)&&(!poSearch||o.customerName.toLowerCase().includes(poSearch.toLowerCase())||o.customerPhone.replace(/\D/g,"").includes(poSearch.replace(/\D/g,"")))).slice(0,10);
+            const q=poSearch.trim().toLowerCase();
+            const done=(orders||[]).filter(o=>o.status==="completed"&&(poTenantFilter==="all"||o.tenantId===poTenantFilter)&&(!q||(o.customerName||"").toLowerCase().includes(q)||(o.customerPhone||"").replace(/\D/g,"").includes(q))).slice(0,10);
             return done.length>0?(
               <div style={{marginTop:16}}>
                 <p style={{fontWeight:700,color:"#6b7280",fontSize:13,margin:"0 0 8px"}}>✅ PO Selesai</p>
