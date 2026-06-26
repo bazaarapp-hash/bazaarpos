@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────104
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────105
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -3308,10 +3308,6 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
                         {expandedProof===log.id&&(
                           <div style={{marginTop:8}}>
                             <img src={proof} alt="Bukti Transfer" style={{width:"100%",maxHeight:280,objectFit:"contain",borderRadius:10,border:"1px solid #e5e7eb"}}/>
-                            <button onClick={()=>{if(window.confirm("Hapus foto bukti ini dari device?"))deletePhoto(log.id);setExpandedProof(null);}}
-                              style={{marginTop:8,padding:"6px 12px",background:"#fef2f2",color:"#dc2626",border:"1px solid #fca5a5",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:600}}>
-                              🗑️ Hapus Foto dari Device
-                            </button>
                           </div>
                         )}
                       </div>
