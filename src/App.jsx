@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────101
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────102
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -2027,6 +2027,19 @@ function ResetPanel({transactions,tenants,menus,customers,walletLogs,orders,sett
     else alert("❌ Password reset salah!");
   };
 
+  // Hapus semua foto bukti top up dari localStorage (dipanggil saat reset data)
+  const clearLocalPhotos=()=>{
+    try{
+      const keys=Object.keys(localStorage).filter(k=>k.startsWith("bzr_photo_"));
+      keys.forEach(k=>localStorage.removeItem(k));
+      return keys.length;
+    }catch(e){return 0;}
+  };
+  const countLocalPhotos=()=>{
+    try{return Object.keys(localStorage).filter(k=>k.startsWith("bzr_photo_")).length;}
+    catch(e){return 0;}
+  };
+
   const doReset=async()=>{
     setLoading(true);
     try{
@@ -2039,7 +2052,8 @@ function ResetPanel({transactions,tenants,menus,customers,walletLogs,orders,sett
         await onSaveOrders([]);
         await onSaveCustomers([]);
         await onSaveWalletLogs([]);
-        setDoneMsg(`✅ Reset penuh selesai. Transaksi, PO, pelanggan & saldo dihapus.`);
+        const photoCount=clearLocalPhotos();
+        setDoneMsg(`✅ Reset penuh selesai. Transaksi, PO, pelanggan & saldo dihapus.${photoCount>0?` (${photoCount} foto bukti lokal juga dibersihkan)`:""}`);
       } else if(mode==="tenant"){
         await onSaveTenants([]);
         await onSaveMenus([]);
@@ -2060,8 +2074,8 @@ function ResetPanel({transactions,tenants,menus,customers,walletLogs,orders,sett
       desc:`Hapus semua transaksi (${txCount}) dan data Pre-Order (${poCount}). Data pelanggan & saldo tetap.`,
       confirm:`${txCount} transaksi dan ${poCount} data PO akan dihapus permanen.`},
     full:{icon:"🔥",label:"Reset Penuh (Event Baru)",color:"#dc2626",border:"#fca5a5",bg:"#fef2f2",
-      desc:`Hapus SEMUA transaksi (${txCount}), PO (${poCount}), pelanggan (${custCount}), dan riwayat saldo. Gunakan untuk memulai event baru dari awal.`,
-      confirm:`${txCount} transaksi, ${poCount} PO, ${custCount} pelanggan & semua riwayat saldo akan dihapus PERMANEN.`},
+      desc:`Hapus SEMUA transaksi (${txCount}), PO (${poCount}), pelanggan (${custCount}), riwayat saldo, dan foto bukti top up lokal. Gunakan untuk memulai event baru dari awal.`,
+      confirm:`${txCount} transaksi, ${poCount} PO, ${custCount} pelanggan, semua riwayat saldo, dan foto bukti lokal di device ini akan dihapus PERMANEN.`},
     tenant:{icon:"🏪",label:"Reset Tenant & Menu",color:"#7c3aed",border:"#c4b5fd",bg:"#f5f0ff",
       desc:`Hapus semua tenant (${tenantCount}) dan menu (${menuCount}). Hanya aktif setelah transaksi dikosongkan.`,
       confirm:`${tenantCount} tenant dan ${menuCount} menu akan dihapus permanen.`,
@@ -3298,6 +3312,46 @@ function KasirTopUp({customers,walletLogs,settings,admins,adminData,onSaveCustom
             </div>}
         </div>
       )}
+
+      {/* ── Hapus Foto Bukti Lokal ────────────────────────────────────────── */}
+      <LocalPhotoManager countLocalPhotos={countLocalPhotos} clearLocalPhotos={clearLocalPhotos}/>
+    </div>
+  );
+}
+
+// Helper component untuk manajemen foto lokal di BackupPanel
+function LocalPhotoManager({countLocalPhotos,clearLocalPhotos}){
+  const [count,setCount]=React.useState(()=>countLocalPhotos());
+  const [cleared,setCleared]=React.useState(false);
+  const handleClear=()=>{
+    if(count===0){alert("Tidak ada foto bukti tersimpan di device ini.");return;}
+    if(!window.confirm(`Hapus ${count} foto bukti top up dari device ini?\n\nFoto di device kasir lain tidak terpengaruh.\nTindakan ini tidak bisa dibatalkan.`))return;
+    const n=clearLocalPhotos();
+    setCount(0);
+    setCleared(true);
+    alert(`✅ ${n} foto bukti berhasil dihapus dari device ini.`);
+  };
+  return(
+    <div style={{marginTop:24,padding:16,background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:14}}>
+      <h4 style={{margin:"0 0 6px",fontWeight:700,color:"#c2410c",fontSize:14}}>📷 Foto Bukti Top Up (Device Ini)</h4>
+      <p style={{margin:"0 0 12px",fontSize:12,color:"#9a3412"}}>
+        Foto bukti hanya tersimpan di localStorage browser device yang dipakai kasir saat top up.
+        Tidak ada di server dan tidak ikut backup. Bersihkan dari masing-masing device secara mandiri.
+      </p>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+        <div style={{background:"#fff",border:"1px solid #fed7aa",borderRadius:10,padding:"8px 14px"}}>
+          <span style={{fontSize:12,color:"#9a3412"}}>Foto di device ini: </span>
+          <span style={{fontWeight:800,color:"#c2410c",fontSize:15}}>{count}</span>
+          <span style={{fontSize:11,color:"#9a3412",marginLeft:4}}>foto</span>
+        </div>
+        <button onClick={handleClear} disabled={count===0||cleared}
+          style={{padding:"9px 16px",background:count===0||cleared?"#f3f4f6":"#dc2626",
+            color:count===0||cleared?"#9ca3af":"#fff",border:"none",borderRadius:10,
+            fontWeight:700,cursor:count===0||cleared?"not-allowed":"pointer",
+            fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+          {cleared?"✅ Sudah Dibersihkan":count===0?"Tidak Ada Foto":"🗑️ Hapus Semua Foto di Device Ini"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -3573,7 +3627,13 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
   const allPending=[...(orders||[]).filter(o=>o.status==="pending")].sort((a,b)=>{const ta=a.timestamp?new Date(a.timestamp).getTime():0;const tb=b.timestamp?new Date(b.timestamp).getTime():0;return tb-ta;});
   const filteredPO=allPending.filter(o=>{
     const tenantOk=poTenantFilter==="all"||o.tenantId===poTenantFilter;
-    const searchOk=!poSearch.trim()||(o.customerName.toLowerCase().includes(poSearch.toLowerCase())||o.customerPhone.replace(/\D/g,"").includes(poSearch.replace(/\D/g,""))||o.nota.toLowerCase().includes(poSearch.toLowerCase()));
+    const q=poSearch.trim().toLowerCase();
+    const searchOk=!q||(
+      (o.customerName||"").toLowerCase().includes(q)||
+      (o.customerPhone||"").replace(/\D/g,"").includes(poSearch.replace(/\D/g,""))||
+      (o.nota||"").toLowerCase().includes(q)||
+      (o.tenantName||"").toLowerCase().includes(q)
+    );
     return tenantOk&&searchOk;
   });
 
@@ -5353,16 +5413,57 @@ function TenantPOS({tenant,menus,allTransactions,onSaveTx,onAppendTx,settings,cu
   const [lastNota,setLastNota]=useState(null);
   const [printed,setPrinted]=useState(false);
   const [showScanner,setShowScanner]=useState(false);
-  const [scanPhone,setScanPhone]=useState(""); // hasil scan
+  const [scanPhone,setScanPhone]=useState("");
   const [scanError,setScanError]=useState("");
-  const [pinInput,setPinInput]=useState(""); // PIN yang diinput pelanggan
+  const [pinInput,setPinInput]=useState("");
   const [pinError,setPinError]=useState("");
-  const [scannedCust,setScannedCust]=useState(null); // customer hasil scan, menunggu PIN
+  const [scannedCust,setScannedCust]=useState(null);
   const [checkoutLoading,setCheckoutLoading]=useState(false);
   const [netToast,setNetToast]=useState("");
-  const submittingRef=useRef(false); // proteksi anti dobel-submit (klik ganda cepat)
+  const submittingRef=useRef(false);
   const videoRef=useRef(null);
   const scanIntervalRef=useRef(null);
+
+  // ── Pending Transaksi — disimpan di localStorage per tenant per kasir ─────────
+  // Tidak mempengaruhi saldo atau transaksi sama sekali, hanya keranjang belanja.
+  const PENDING_KEY=`bzr_pending_${tenant.id}${kasirCode?`_${kasirCode}`:""}`;
+  const [pendingCarts,setPendingCarts]=useState(()=>{
+    try{return JSON.parse(localStorage.getItem(PENDING_KEY)||"[]");}catch(e){return [];}
+  });
+  const [showPendingList,setShowPendingList]=useState(false);
+  const [showSavePending,setShowSavePending]=useState(false);
+  const [pendingCustName,setPendingCustName]=useState("");
+  const [pendingNote,setPendingNote]=useState("");
+
+  const savePendingToStorage=(list)=>{
+    try{localStorage.setItem(PENDING_KEY,JSON.stringify(list));}catch(e){}
+  };
+  const doSavePending=()=>{
+    if(!cart.length)return;
+    const entry={
+      id:uid(), savedAt:new Date().toISOString(),
+      items:[...cart],
+      customerName:pendingCustName.trim(),
+      note:pendingNote.trim(),
+      total:cart.reduce((s,c)=>s+c.price*c.qty,0),
+    };
+    const updated=[entry,...pendingCarts];
+    setPendingCarts(updated); savePendingToStorage(updated);
+    setCart([]); setShowSavePending(false);
+    setPendingCustName(""); setPendingNote("");
+  };
+  const doRestorePending=(p)=>{
+    if(cart.length>0&&!window.confirm("Keranjang aktif saat ini akan diganti dengan yang ditunda. Lanjutkan?"))return;
+    setCart(p.items);
+    const updated=pendingCarts.filter(x=>x.id!==p.id);
+    setPendingCarts(updated); savePendingToStorage(updated);
+    setShowPendingList(false);
+  };
+  const doDeletePending=(id)=>{
+    if(!window.confirm("Hapus keranjang yang ditunda ini?"))return;
+    const updated=pendingCarts.filter(x=>x.id!==id);
+    setPendingCarts(updated); savePendingToStorage(updated);
+  };
 
   const addToCart=m=>setCart(p=>{const ex=p.find(c=>c.menuId===m.id);return ex?p.map(c=>c.menuId===m.id?{...c,qty:c.qty+1}:c):[...p,{menuId:m.id,menuCode:m.code,menuName:m.name,price:m.price,qty:1}];});
   const updQty=(id,q)=>{if(q<=0)setCart(p=>p.filter(c=>c.menuId!==id));else setCart(p=>p.map(c=>c.menuId===id?{...c,qty:q}:c));};
@@ -5718,9 +5819,93 @@ ${waSignature(tenant.name)}`;
           ))}
         </div>}
 
+      {/* ── Modal Simpan Pending ── */}
+      {showSavePending&&createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,.6)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{background:"#fff",borderRadius:20,padding:24,width:"100%",maxWidth:380,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+            <h3 style={{margin:"0 0 6px",fontSize:16,fontWeight:800,color:"#1c0a00"}}>⏸️ Tunda Keranjang</h3>
+            <p style={{margin:"0 0 16px",fontSize:12,color:"#6b7280"}}>Keranjang ditunda, tidak mempengaruhi saldo. Bisa dilanjutkan kapan saja.</p>
+            <div style={{background:"#f9fafb",borderRadius:12,padding:"10px 14px",marginBottom:14,fontSize:13}}>
+              {cart.map((it,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"3px 0",color:"#374151"}}><span>{it.menuName} ×{it.qty}</span><span style={{fontWeight:700}}>{idr(it.price*it.qty)}</span></div>)}
+              <div style={{borderTop:"1px dashed #e5e7eb",marginTop:6,paddingTop:6,display:"flex",justifyContent:"space-between",fontWeight:800,color:"#16a34a"}}><span>Total</span><span>{idr(cart.reduce((s,c)=>s+c.price*c.qty,0))}</span></div>
+            </div>
+            <div style={{marginBottom:10}}>
+              <label style={{fontSize:12,fontWeight:700,color:"#374151",display:"block",marginBottom:5}}>Nama Pelanggan <span style={{color:"#9ca3af"}}>(opsional)</span></label>
+              <input value={pendingCustName} onChange={e=>setPendingCustName(e.target.value)} placeholder="Contoh: Budi, Meja 3..."
+                style={{width:"100%",border:"2px solid #e5e7eb",borderRadius:10,padding:"9px 12px",fontSize:14,boxSizing:"border-box",outline:"none",fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                onFocus={e=>e.target.style.borderColor="#f97316"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
+            </div>
+            <div style={{marginBottom:16}}>
+              <label style={{fontSize:12,fontWeight:700,color:"#374151",display:"block",marginBottom:5}}>Keterangan <span style={{color:"#9ca3af"}}>(opsional)</span></label>
+              <input value={pendingNote} onChange={e=>setPendingNote(e.target.value)} placeholder="Contoh: Saldo kurang, mau top up dulu..."
+                style={{width:"100%",border:"2px solid #e5e7eb",borderRadius:10,padding:"9px 12px",fontSize:14,boxSizing:"border-box",outline:"none",fontFamily:"'Plus Jakarta Sans',sans-serif"}}
+                onFocus={e=>e.target.style.borderColor="#f97316"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
+            </div>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>{setShowSavePending(false);setPendingCustName("");setPendingNote("");}}
+                style={{flex:1,padding:"12px",background:"#f9fafb",color:"#374151",border:"1px solid #e5e7eb",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>Batal</button>
+              <button onClick={doSavePending}
+                style={{flex:2,padding:"12px",background:"#f97316",color:"#fff",border:"none",borderRadius:12,fontWeight:800,cursor:"pointer",fontSize:14,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>⏸️ Tunda Keranjang</button>
+            </div>
+          </div>
+        </div>,document.body
+      )}
+
+      {/* ── Modal Daftar Pending ── */}
+      {showPendingList&&createPortal(
+        <div style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,.6)",display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+          <div style={{background:"#fff",borderRadius:"20px 20px 0 0",padding:24,width:"100%",maxWidth:500,maxHeight:"85vh",overflowY:"auto",fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <h3 style={{margin:0,fontSize:16,fontWeight:800,color:"#1c0a00"}}>⏸️ Keranjang Ditunda ({pendingCarts.length})</h3>
+              <button onClick={()=>setShowPendingList(false)} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:"#9ca3af",padding:4}}>✕</button>
+            </div>
+            {pendingCarts.length===0
+              ?<div style={{textAlign:"center",padding:"32px 0",color:"#9ca3af"}}>
+                <div style={{fontSize:40,marginBottom:8}}>⏸️</div>
+                <p style={{margin:0}}>Belum ada keranjang yang ditunda.</p>
+              </div>
+              :<div style={{display:"flex",flexDirection:"column",gap:12}}>
+                {pendingCarts.map(p=>(
+                  <div key={p.id} style={{background:"#fff7ed",border:"2px solid #fed7aa",borderRadius:14,padding:14}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                      <div>
+                        <p style={{margin:"0 0 2px",fontWeight:800,fontSize:14,color:"#1c0a00"}}>
+                          {p.customerName||<span style={{color:"#9ca3af",fontStyle:"italic"}}>Pelanggan tidak diketahui</span>}
+                        </p>
+                        {p.note&&<p style={{margin:"0 0 2px",fontSize:12,color:"#ea580c",fontWeight:600}}>📝 {p.note}</p>}
+                        <p style={{margin:0,fontSize:11,color:"#9ca3af"}}>{new Date(p.savedAt).toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})} • {p.items.length} item</p>
+                      </div>
+                      <p style={{margin:0,fontWeight:900,color:"#ea580c",fontSize:15}}>{idr(p.total)}</p>
+                    </div>
+                    <div style={{fontSize:12,color:"#6b7280",marginBottom:10,display:"flex",flexWrap:"wrap",gap:4}}>
+                      {p.items.map((it,i)=><span key={i} style={{background:"#fff",padding:"2px 8px",borderRadius:8,border:"1px solid #fed7aa"}}>{it.menuName} ×{it.qty}</span>)}
+                    </div>
+                    <div style={{display:"flex",gap:8}}>
+                      <button onClick={()=>doRestorePending(p)}
+                        style={{flex:2,padding:"10px",background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                        ▶️ Lanjutkan
+                      </button>
+                      <button onClick={()=>doDeletePending(p.id)}
+                        style={{flex:1,padding:"10px",background:"#fef2f2",color:"#dc2626",border:"1px solid #fca5a5",borderRadius:10,fontWeight:600,cursor:"pointer",fontSize:13,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+                        🗑️ Hapus
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>}
+          </div>
+        </div>,document.body
+      )}
+
       {cart.length>0&&(
         <div style={{background:"#fff",borderRadius:18,padding:18,boxShadow:"0 8px 32px rgba(22,163,74,.15)",border:"1px solid #dcfce7",position:"sticky",bottom:10}}>
-          <h3 style={{margin:"0 0 12px",color:"#14532d",fontSize:15,fontWeight:800}}>🛒 Keranjang</h3>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <h3 style={{margin:0,color:"#14532d",fontSize:15,fontWeight:800}}>🛒 Keranjang</h3>
+            <button onClick={()=>setShowSavePending(true)}
+              style={{padding:"6px 12px",background:"#fff7ed",color:"#ea580c",border:"1px solid #fed7aa",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:12,fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",gap:5}}>
+              ⏸️ Tunda
+            </button>
+          </div>
           <div style={{maxHeight:180,overflowY:"auto",marginBottom:12}}>
             {cart.map(item=>(
               <div key={item.menuId} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:"1px solid #f0fdf4"}}>
@@ -5749,6 +5934,14 @@ ${waSignature(tenant.name)}`;
           {/* <button onClick={()=>handleCheckout("emoney")}>E-Money</button> */}
           {/* <button onClick={()=>handleCheckout("cash")}>Cash</button> */}
         </div>
+      )}
+
+      {/* Tombol akses daftar pending — selalu terlihat jika ada pending */}
+      {pendingCarts.length>0&&(
+        <button onClick={()=>setShowPendingList(true)}
+          style={{position:"fixed",bottom:cart.length>0?200:20,right:16,zIndex:500,padding:"11px 16px",background:"#f97316",color:"#fff",border:"none",borderRadius:50,fontWeight:800,cursor:"pointer",fontSize:13,boxShadow:"0 4px 16px rgba(249,115,22,.4)",fontFamily:"'Plus Jakarta Sans',sans-serif",display:"flex",alignItems:"center",gap:7}}>
+          ⏸️ {pendingCarts.length} Tunda
+        </button>
       )}
     </div>
   );
@@ -6309,23 +6502,39 @@ function CustomerCardPage({phone,settings,customers,walletLogs,onRefresh,refresh
         </div>
       )}
 
+      {/* Tombol Refresh Data — pojok kanan atas, besar untuk mudah dipencet */}
+      {onRefresh&&(
+        <button onClick={onRefresh} disabled={refreshing}
+          style={{position:"fixed",top:14,right:14,zIndex:200,
+            padding:"12px 18px",
+            background:justRefreshed?"#16a34a":refreshing?"rgba(255,255,255,.25)":"rgba(255,255,255,.2)",
+            backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",
+            border:"2px solid rgba(255,255,255,.5)",color:"#fff",
+            borderRadius:16,cursor:refreshing?"not-allowed":"pointer",
+            fontSize:15,fontWeight:700,
+            display:"flex",alignItems:"center",gap:8,
+            boxShadow:"0 4px 16px rgba(0,0,0,.25)",
+            transition:"all .3s",
+            fontFamily:"'Plus Jakarta Sans',sans-serif",
+          }}>
+          <span style={{fontSize:18,display:"inline-block",animation:refreshing?"spin 1s linear infinite":"none"}}>
+            {justRefreshed?"✅":"🔄"}
+          </span>
+          <span>{refreshing?"Memuat...":justRefreshed?"Terbaru!":"Refresh"}</span>
+        </button>
+      )}
+
       {/* Decorative blobs */}
       <div style={{position:"fixed",top:-100,right:-100,width:300,height:300,borderRadius:"50%",background:"rgba(255,255,255,.07)"}}/>
       <div style={{position:"fixed",bottom:-80,left:-80,width:250,height:250,borderRadius:"50%",background:"rgba(255,255,255,.05)"}}/>
 
       <div style={{width:"100%",maxWidth:400,animation:"slideUp .4s ease"}}>
         {/* Header */}
-        <div style={{textAlign:"center",marginBottom:20}}>
+        <div style={{textAlign:"center",marginBottom:20,paddingTop:16}}>
           <p style={{color:"rgba(255,255,255,.8)",fontSize:14,margin:0,fontWeight:600}}>🏪 {bazaarName}</p>
           <p style={{color:"rgba(255,255,255,.6)",fontSize:12,margin:"4px 0 0"}}>Kartu Saldo Pelanggan</p>
-          {onRefresh&&(
-            <button onClick={onRefresh} disabled={refreshing}
-              style={{marginTop:10,padding:"6px 16px",background:justRefreshed?"#16a34a":"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"#fff",borderRadius:20,cursor:refreshing?"not-allowed":"pointer",fontSize:12,fontWeight:600,display:"inline-flex",alignItems:"center",gap:6,transition:"background .3s"}}>
-              <span style={{display:"inline-block",animation:refreshing?"spin 1s linear infinite":"none"}}>{justRefreshed?"✅":"🔄"}</span> {refreshing?"Memuat...":justRefreshed?"Data Terbaru!":"Refresh Data"}
-            </button>
-          )}
           {lastUpdated&&!refreshing&&(
-            <p style={{color:"rgba(255,255,255,.5)",fontSize:11,margin:"6px 0 0"}}>Terakhir diperbarui: {lastUpdated.toLocaleTimeString("id-ID")}</p>
+            <p style={{color:"rgba(255,255,255,.5)",fontSize:11,margin:"8px 0 0"}}>Terakhir diperbarui: {lastUpdated.toLocaleTimeString("id-ID")}</p>
           )}
         </div>
 
