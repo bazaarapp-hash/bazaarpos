@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────109
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────110
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -6852,20 +6852,12 @@ function Modal({title,onClose,children,accent="#ea580c"}){
   const backdropRef=useRef(null);
   useEffect(()=>{
     // Reset scroll: window DAN scroll internal backdrop modal itu sendiri.
-    // Backdrop pakai overflowY:"scroll" sendiri (position:fixed), jadi window.scrollTo
-    // saja tidak cukup — backdrop bisa membawa posisi scroll dari modal sebelumnya,
-    // membuat bagian atas modal baru (judul/header) tidak terlihat sampai discroll manual.
     window.scrollTo({top:0,behavior:"instant"});
     if(backdropRef.current) backdropRef.current.scrollTop=0;
   },[]);
-  // Render lewat Portal langsung ke <body> — supaya position:fixed TIDAK terpengaruh
-  // oleh transform/overflow di elemen induk manapun (penyebab umum modal "terpotong"
-  // di sebagian device/browser mobile, dimana sebagian layar di bawah modal kosong
-  // menampilkan background halaman di belakangnya).
   return createPortal(
     <div
       ref={backdropRef}
-      onClick={e=>{if(e.target===e.currentTarget&&onClose)onClose();}}
       style={{
         position:"fixed",top:0,left:0,right:0,bottom:0,
         height:"100dvh",
@@ -6888,7 +6880,13 @@ function Modal({title,onClose,children,accent="#ea580c"}){
           padding:20,
           position:"relative",
         }}>
-        {title&&<h3 style={{margin:"0 0 14px",fontSize:17,fontWeight:800,color:"#1c0a00"}}>{title}</h3>}
+        {/* Header: judul + tombol X — klik di luar modal TIDAK menutup form */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:title?14:0}}>
+          {title&&<h3 style={{margin:0,fontSize:17,fontWeight:800,color:"#1c0a00"}}>{title}</h3>}
+          {onClose&&<button onClick={onClose}
+            style={{background:"#f3f4f6",border:"none",borderRadius:50,width:32,height:32,cursor:"pointer",fontSize:18,display:"flex",alignItems:"center",justifyContent:"center",color:"#6b7280",flexShrink:0,marginLeft:"auto"}}
+            title="Tutup">✕</button>}
+        </div>
         {children}
       </div>
     </div>,
