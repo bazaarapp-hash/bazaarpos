@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────110
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────111
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -6039,29 +6039,60 @@ function TenantMenuMgr({tenant,menus,allMenus,allTransactions,orders,onSaveMenus
     catch(e){ alert("❌ GAGAL HAPUS! "+e.message); }
   };
   const [backupInfo,setBackupInfo]=useState(()=>{
-    try{const b=localStorage.getItem("bzr_menus_backup");return b?JSON.parse(b):null;}catch(e){return null;}
+    try{
+      const b=localStorage.getItem("bzr_menus_backup");
+      if(!b) return null;
+      const parsed=JSON.parse(b);
+      // Filter hanya menu tenant ini — bukan semua tenant
+      const tenantMenus=(parsed.data||[]).filter(m=>m.tenantId===tenant.id);
+      if(!tenantMenus.length) return null;
+      return {...parsed, tenantData:tenantMenus, tenantCount:tenantMenus.length};
+    }catch(e){return null;}
   });
-  const [showBackupRestore,setShowBackupRestore]=useState(false);
 
   const doRestoreMenuBackup=async()=>{
-    if(!backupInfo?.data?.length)return;
-    if(!window.confirm(`Pulihkan ${backupInfo.data.length} menu dari backup lokal (${new Date(backupInfo.savedAt).toLocaleString("id-ID")})?\n\nMenu yang tampil saat ini (${menus.length} item) akan DIGANTIKAN.\nTindakan ini tidak bisa dibatalkan.`))return;
+    const tenantMenus=backupInfo?.tenantData;
+    if(!tenantMenus?.length)return;
+    if(!window.confirm(
+      `Pulihkan ${tenantMenus.length} menu milik "${tenant.name}" dari backup lokal\n(disimpan ${new Date(backupInfo.savedAt).toLocaleString("id-ID")})?\n\nMenu tenant lain tidak akan terpengaruh.\nMenu tenant ini yang tampil saat ini (${menus.length} item) akan digantikan.\nTindakan ini tidak bisa dibatalkan.`
+    ))return;
     try{
-      await onSaveMenus(backupInfo.data);
-      setShowBackupRestore(false);
-      alert(`✅ ${backupInfo.data.length} menu berhasil dipulihkan dari backup lokal!`);
+      // ── Ambil data semua menu untuk proteksi menu tenant lain ───────────────
+      // Prioritas 1: fresh dari Firestore (paling akurat)
+      // Prioritas 2: allMenus dari memory/realtime state (fallback jika jaringan buruk)
+      // Abort: jika keduanya kosong padahal ada tenant lain (data mencurigakan)
+      let baseAll=null;
+      try{
+        const fresh=await db.get("bzr_menus");
+        if(fresh&&fresh.length>0) baseAll=fresh; // Firestore berhasil & tidak kosong
+      }catch(e){}
+
+      if(!baseAll){
+        // Firestore gagal / return null → pakai memory state sebagai fallback
+        if(allMenus&&allMenus.length>0){
+          baseAll=allMenus;
+        } else {
+          // Kedua sumber kosong — terlalu berisiko melanjutkan
+          alert("❌ Restore dibatalkan: tidak bisa memastikan data menu tenant lain aman.\nCek koneksi internet dan coba lagi.");
+          return;
+        }
+      }
+
+      const otherMenus=baseAll.filter(m=>m.tenantId!==tenant.id);
+      await onSaveMenus([...otherMenus,...tenantMenus]);
+      alert(`✅ ${tenantMenus.length} menu "${tenant.name}" berhasil dipulihkan!`);
     }catch(e){alert("❌ Gagal pulihkan: "+e.message);}
   };
 
   return(
     <div>
-      {/* Banner peringatan jika backup lokal punya lebih banyak menu */}
-      {backupInfo&&backupInfo.count>menus.length&&(
+      {/* Banner pemulihan — hanya muncul jika backup tenant ini lebih banyak dari Firestore */}
+      {backupInfo&&backupInfo.tenantCount>menus.length&&(
         <div style={{background:"#fef3c7",border:"2px solid #f59e0b",borderRadius:12,padding:"12px 16px",marginBottom:14,display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
           <div style={{flex:1}}>
             <p style={{margin:"0 0 3px",fontWeight:800,color:"#92400e",fontSize:13}}>⚠️ Backup lokal punya lebih banyak menu!</p>
             <p style={{margin:0,fontSize:12,color:"#78350f"}}>
-              Firestore: <b>{menus.length} menu</b> — Backup lokal: <b>{backupInfo.count} menu</b>
+              Firestore: <b>{menus.length} menu</b> — Backup lokal: <b>{backupInfo.tenantCount} menu</b>
               {" "}(disimpan {new Date(backupInfo.savedAt).toLocaleString("id-ID")})
             </p>
           </div>
