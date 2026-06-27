@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────107
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────109
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
@@ -767,14 +767,14 @@ function MainApp(){
   // ── Fungsi setup/teardown realtime subscriptions ─────────────────────────────
   // Dipisah dari initial useEffect supaya bisa dipanggil ulang saat reconnect.
   const setupSubs=useCallback(()=>{
-    // Bersihkan yang lama dulu supaya tidak double-subscribe
     subsRef.current.forEach(u=>u()); subsRef.current=[];
-    const u3=db.subscribe("bzr_transactions",v=>setTransactions(v||[]));
-    const u6=db.subscribe("bzr_alerts",      v=>setAlerts(v||[]));
-    const u7=db.subscribe("bzr_customers",   v=>setCustomers(v||[]));
-    const u8=db.subscribe("bzr_wallet_logs", v=>setWalletLogs(v||[]));
-    const u9=db.subscribe("bzr_orders",      v=>setOrders(v||[]));
-    subsRef.current=[u3,u6,u7,u8,u9];
+    const u2=db.subscribe("bzr_menus",        v=>setMenus(v||[]));
+    const u3=db.subscribe("bzr_transactions", v=>setTransactions(v||[]));
+    const u6=db.subscribe("bzr_alerts",       v=>setAlerts(v||[]));
+    const u7=db.subscribe("bzr_customers",    v=>setCustomers(v||[]));
+    const u8=db.subscribe("bzr_wallet_logs",  v=>setWalletLogs(v||[]));
+    const u9=db.subscribe("bzr_orders",       v=>setOrders(v||[]));
+    subsRef.current=[u2,u3,u6,u7,u8,u9];
   },[]);
 
   const teardownSubs=useCallback(()=>{
@@ -790,27 +790,32 @@ function MainApp(){
     // berkontribusi SATU KALI ke pengecekan loaded, meskipun subscription
     // realtime bisa fire berkali-kali (cache → server update).
     // Tanpa ini, 5 subscription fire 2x = count 10 sebelum 4 fetch selesai
-    // → loaded=true terlalu cepat → tenants/menus kosong → login tenant gagal.
+    // ── Strategi dual fetch (direvisi untuk keamanan data) ────────────────────
+    // REALTIME (6): menus, transactions, orders, customers, walletLogs, alerts
+    //   menus DIKEMBALIKAN ke realtime — one-time fetch terbukti berbahaya:
+    //   jika fetch gagal/null → setMenus([]) → save menu baru → 12 menu hilang!
+    //
+    // ONE-TIME FETCH (3): tenants, settings, admins (benar2 tidak berubah saat event)
     const loadedKeys=new Set();
     const checkLoaded=(key)=>{
       loadedKeys.add(key);
       if(loadedKeys.size>=9)setLoaded(true);
     };
 
-    // ── One-time fetch (static data) ──────────────────────────────────────────
+    // ── One-time fetch (tidak berubah saat event berlangsung) ─────────────────
     db.get("bzr_tenants") .then(v=>{setTenants(v||[]);  checkLoaded("tenants"); }).catch(()=>checkLoaded("tenants"));
-    db.get("bzr_menus")   .then(v=>{setMenus(v||[]);    checkLoaded("menus");   }).catch(()=>checkLoaded("menus"));
     db.get("bzr_settings").then(v=>{setSettings({...DEF,...(v||{})});checkLoaded("settings");}).catch(()=>checkLoaded("settings"));
     db.get("bzr_admins")  .then(v=>{setAdmins(v||[]);   checkLoaded("admins");  }).catch(()=>checkLoaded("admins"));
 
-    // ── Realtime listeners — simpan ke subsRef supaya bisa di-manage ──────────
+    // ── Realtime listeners ────────────────────────────────────────────────────
     subsRef.current.forEach(u=>u()); subsRef.current=[];
-    const u3=db.subscribe("bzr_transactions",v=>{setTransactions(v||[]); checkLoaded("transactions");});
-    const u6=db.subscribe("bzr_alerts",      v=>{setAlerts(v||[]);       checkLoaded("alerts");});
-    const u7=db.subscribe("bzr_customers",   v=>{setCustomers(v||[]);    checkLoaded("customers");});
-    const u8=db.subscribe("bzr_wallet_logs", v=>{setWalletLogs(v||[]);   checkLoaded("walletLogs");});
-    const u9=db.subscribe("bzr_orders",      v=>{setOrders(v||[]);       checkLoaded("orders");});
-    subsRef.current=[u3,u6,u7,u8,u9];
+    const u2=db.subscribe("bzr_menus",        v=>{setMenus(v||[]);        checkLoaded("menus");});
+    const u3=db.subscribe("bzr_transactions", v=>{setTransactions(v||[]); checkLoaded("transactions");});
+    const u6=db.subscribe("bzr_alerts",       v=>{setAlerts(v||[]);       checkLoaded("alerts");});
+    const u7=db.subscribe("bzr_customers",    v=>{setCustomers(v||[]);    checkLoaded("customers");});
+    const u8=db.subscribe("bzr_wallet_logs",  v=>{setWalletLogs(v||[]);   checkLoaded("walletLogs");});
+    const u9=db.subscribe("bzr_orders",       v=>{setOrders(v||[]);       checkLoaded("orders");});
+    subsRef.current=[u2,u3,u6,u7,u8,u9];
 
     return()=>{subsRef.current.forEach(u=>u()); subsRef.current=[];};
   },[]);
@@ -869,15 +874,21 @@ function MainApp(){
     setupSubs();               // reconnect realtime
   };
 
-  // ── Refresh data statis (dipanggil saat admin ubah setting/menu/tenant) ─────
+  // ── Refresh data statis (tenants, settings, admins) ─────────────────────────
+  // menus TIDAK di-refresh di sini karena sudah realtime subscription.
+  // Guard penting: jangan overwrite state dengan array kosong —
+  // kalau fetch gagal/null, pertahankan data yang sudah ada di state.
   const refreshStaticData=async()=>{
     try{
-      const [t,m,s,a]=await Promise.all([
-        db.get("bzr_tenants"),db.get("bzr_menus"),
-        db.get("bzr_settings"),db.get("bzr_admins"),
+      const [t,s,a]=await Promise.all([
+        db.get("bzr_tenants"),
+        db.get("bzr_settings"),
+        db.get("bzr_admins"),
       ]);
-      setTenants(t||[]); setMenus(m||[]);
-      setSettings({...DEF,...(s||{})}); setAdmins(a||[]);
+      // Hanya update jika hasil fetch valid (tidak null/kosong)
+      if(t&&t.length>0)  setTenants(t);
+      if(s)              setSettings({...DEF,...s});
+      if(a&&a.length>0)  setAdmins(a);
     }catch(e){console.error("Gagal refresh data statis:",e);}
   };
 
@@ -910,7 +921,15 @@ function MainApp(){
   },[]);
 
   const saveTenants=async d=>{await db.set("bzr_tenants",d);setTenants(d);};
-  const saveMenus  =async d=>{await db.set("bzr_menus",d);setMenus(d);};
+  const saveMenus  =async d=>{
+    await db.set("bzr_menus",d);
+    setMenus(d);
+    // Auto-backup lokal setiap kali menu berhasil disimpan ke Firestore.
+    // Jika data Firestore rusak/hilang, backup ini bisa dipakai untuk memulihkan.
+    try{localStorage.setItem("bzr_menus_backup",JSON.stringify({
+      data:d, savedAt:new Date().toISOString(), count:d.length
+    }));}catch(e){}
+  };
   const saveTx     =async d=>{await db.set("bzr_transactions",d);setTransactions(d);};
   const saveSettings=async d=>{await db.set("bzr_settings",d);setSettings({...DEF,...d});};
   const saveAdmins =async d=>{await db.set("bzr_admins",d);setAdmins(d);};
@@ -1438,22 +1457,25 @@ function AdminUsers({admins,onSaveAdmins,walletLogs,orders}){
     if(!form.username||!form.password||!form.name){alert("Semua field harus diisi!");return;}
     if(!editing&&admins.find(a=>a.username===form.username)){alert("Username sudah ada!");return;}
     try{
-      await onSaveAdmins(editing?admins.map(a=>a.id===editing?{...a,...form}:a):[...admins,{id:uid(),...form}]);
+      let base=admins;
+      if(admins.length===0){try{const fresh=await db.get("bzr_admins");if(fresh&&fresh.length>0)base=fresh;}catch(e){}}
+      await onSaveAdmins(editing?base.map(a=>a.id===editing?{...a,...form}:a):[...base,{id:uid(),...form}]);
       setShowForm(false);
     }catch(e){
       alert(`❌ GAGAL MENYIMPAN! Data admin tidak tersimpan. Cek koneksi, lalu coba lagi.\n(${e.message})`);
     }
   };
   const delAdmin=async(a)=>{
-    // Cek riwayat top up
     const hasTopUp=(walletLogs||[]).some(l=>l.adminName===a.name&&l.type==="topup");
     if(hasTopUp){alert(`❌ Admin "${a.name}" tidak bisa dihapus karena masih terhubung dengan riwayat top up pelanggan.\n\nJika admin sudah tidak aktif, nonaktifkan aksesnya dengan mengubah password saja.`);return;}
-    // Cek keterlibatan di Pre-Order (buat, verifikasi, atau batalkan PO)
     const hasPO=(orders||[]).some(o=>o.createdBy===a.name||o.verifiedBy===a.name||(o.cancelledBy===a.name));
     if(hasPO){alert(`❌ Admin "${a.name}" tidak bisa dihapus karena masih terhubung dengan data Pre-Order (PO) sebagai pembuat, verifikator, atau pembatal.\n\nJika admin sudah tidak aktif, nonaktifkan aksesnya dengan mengubah password saja.`);return;}
     if(!window.confirm(`Hapus admin "${a.name}"?\n\nTindakan ini tidak bisa dibatalkan.`))return;
-    try{await onSaveAdmins(admins.filter(x=>x.id!==a.id));}
-    catch(e){alert("❌ GAGAL HAPUS! "+e.message);}
+    try{
+      let base=admins;
+      if(admins.length===0){try{const fresh=await db.get("bzr_admins");if(fresh&&fresh.length>0)base=fresh;}catch(e){}}
+      await onSaveAdmins(base.filter(x=>x.id!==a.id));
+    }catch(e){alert("❌ GAGAL HAPUS! "+e.message);}
   };
   return(
     <div>
@@ -1523,7 +1545,9 @@ function AdminTenants({tenants,transactions,menus,orders,onSaveTenants}){
     if(!form.code||!form.name||!form.password){alert("Semua field harus diisi!");return;}
     if(!editing&&tenants.find(t=>t.code===form.code)){alert("Kode tenant sudah ada!");return;}
     try{
-      await onSaveTenants(editing?tenants.map(t=>t.id===editing?{...t,...form}:t):[...tenants,{id:uid(),...form}]);
+      let base=tenants;
+      if(tenants.length===0){try{const fresh=await db.get("bzr_tenants");if(fresh&&fresh.length>0)base=fresh;}catch(e){}}
+      await onSaveTenants(editing?base.map(t=>t.id===editing?{...t,...form}:t):[...base,{id:uid(),...form}]);
       setShowForm(false);
     }catch(e){
       alert(`❌ GAGAL MENYIMPAN! Data tenant tidak tersimpan. Cek koneksi, lalu coba lagi.\n(${e.message})`);
@@ -1532,17 +1556,18 @@ function AdminTenants({tenants,transactions,menus,orders,onSaveTenants}){
   const del=async id=>{
     const tenant=tenants.find(t=>t.id===id);
     const name=tenant?.name||"ini";
-    // Cek transaksi penjualan
     if(transactions.some(t=>t.tenantId===id)){
       alert(`❌ Tenant "${name}" tidak bisa dihapus karena masih memiliki riwayat transaksi penjualan.`);return;
     }
-    // Cek Pre-Order (PO)
     if((orders||[]).some(o=>o.tenantId===id)){
       alert(`❌ Tenant "${name}" tidak bisa dihapus karena masih memiliki data Pre-Order (PO).`);return;
     }
     if(!window.confirm(`Hapus tenant "${name}"?\n\nMenu-menu tenant ini juga akan tetap ada di database. Tindakan ini tidak bisa dibatalkan.`))return;
-    try{ await onSaveTenants(tenants.filter(t=>t.id!==id)); }
-    catch(e){ alert("❌ GAGAL HAPUS! "+e.message); }
+    try{
+      let base=tenants;
+      if(tenants.length===0){try{const fresh=await db.get("bzr_tenants");if(fresh&&fresh.length>0)base=fresh;}catch(e){}}
+      await onSaveTenants(base.filter(t=>t.id!==id));
+    }catch(e){ alert("❌ GAGAL HAPUS! "+e.message); }
   };
 
   return(
@@ -5995,7 +6020,13 @@ function TenantMenuMgr({tenant,menus,allMenus,allTransactions,orders,onSaveMenus
     if(!editing&&menus.find(m=>m.code===form.code)){alert("Kode menu sudah ada!");return;}
     const p={code:form.code,name:form.name,price};
     try{
-      await onSaveMenus(editing?allMenus.map(m=>m.id===editing?{...m,...p}:m):[...allMenus,{id:uid(),tenantId:tenant.id,...p}]);
+      // Safety net: kalau allMenus kosong padahal seharusnya ada data,
+      // fetch langsung dari Firestore sebelum simpan supaya tidak overwrite dengan kosong.
+      let baseMenus=allMenus;
+      if(allMenus.length===0){
+        try{const fresh=await db.get("bzr_menus");if(fresh&&fresh.length>0)baseMenus=fresh;}catch(e){}
+      }
+      await onSaveMenus(editing?baseMenus.map(m=>m.id===editing?{...m,...p}:m):[...baseMenus,{id:uid(),tenantId:tenant.id,...p}]);
       setShowForm(false);
     }catch(e){
       alert(`❌ GAGAL MENYIMPAN! Menu tidak tersimpan. Cek koneksi, lalu coba lagi.\n(${e.message})`);
@@ -6007,10 +6038,45 @@ function TenantMenuMgr({tenant,menus,allMenus,allTransactions,orders,onSaveMenus
     try{ await onSaveMenus(allMenus.filter(x=>x.id!==m.id)); }
     catch(e){ alert("❌ GAGAL HAPUS! "+e.message); }
   };
+  const [backupInfo,setBackupInfo]=useState(()=>{
+    try{const b=localStorage.getItem("bzr_menus_backup");return b?JSON.parse(b):null;}catch(e){return null;}
+  });
+  const [showBackupRestore,setShowBackupRestore]=useState(false);
+
+  const doRestoreMenuBackup=async()=>{
+    if(!backupInfo?.data?.length)return;
+    if(!window.confirm(`Pulihkan ${backupInfo.data.length} menu dari backup lokal (${new Date(backupInfo.savedAt).toLocaleString("id-ID")})?\n\nMenu yang tampil saat ini (${menus.length} item) akan DIGANTIKAN.\nTindakan ini tidak bisa dibatalkan.`))return;
+    try{
+      await onSaveMenus(backupInfo.data);
+      setShowBackupRestore(false);
+      alert(`✅ ${backupInfo.data.length} menu berhasil dipulihkan dari backup lokal!`);
+    }catch(e){alert("❌ Gagal pulihkan: "+e.message);}
+  };
+
   return(
     <div>
+      {/* Banner peringatan jika backup lokal punya lebih banyak menu */}
+      {backupInfo&&backupInfo.count>menus.length&&(
+        <div style={{background:"#fef3c7",border:"2px solid #f59e0b",borderRadius:12,padding:"12px 16px",marginBottom:14,display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+          <div style={{flex:1}}>
+            <p style={{margin:"0 0 3px",fontWeight:800,color:"#92400e",fontSize:13}}>⚠️ Backup lokal punya lebih banyak menu!</p>
+            <p style={{margin:0,fontSize:12,color:"#78350f"}}>
+              Firestore: <b>{menus.length} menu</b> — Backup lokal: <b>{backupInfo.count} menu</b>
+              {" "}(disimpan {new Date(backupInfo.savedAt).toLocaleString("id-ID")})
+            </p>
+          </div>
+          <button onClick={doRestoreMenuBackup}
+            style={{padding:"8px 14px",background:"#d97706",color:"#fff",border:"none",borderRadius:9,fontWeight:700,cursor:"pointer",fontSize:12,fontFamily:"'Plus Jakarta Sans',sans-serif",whiteSpace:"nowrap"}}>
+            🔄 Pulihkan Backup
+          </button>
+        </div>
+      )}
+
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-        <div><h2 style={{margin:0,fontSize:17,fontWeight:800,color:"#14532d"}}>Kelola Menu</h2><p style={{color:"#6b7280",margin:"3px 0 0",fontSize:13}}>{menus.length} item menu</p></div>
+        <div>
+          <h2 style={{margin:0,fontSize:17,fontWeight:800,color:"#14532d"}}>Kelola Menu</h2>
+          <p style={{color:"#6b7280",margin:"3px 0 0",fontSize:13}}>{menus.length} item menu</p>
+        </div>
         <button onClick={openAdd} style={{background:"#16a34a",color:"#fff",border:"none",borderRadius:10,padding:"9px 14px",fontWeight:700,cursor:"pointer",fontSize:13}} onMouseOver={e=>e.currentTarget.style.background="#15803d"} onMouseOut={e=>e.currentTarget.style.background="#16a34a"}>+ Tambah</button>
       </div>
       {showForm&&<Modal title={editing?"Edit Menu":"Tambah Menu Baru"} onClose={()=>setShowForm(false)} accent="#16a34a">
