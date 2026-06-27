@@ -2,12 +2,15 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import { createPortal } from "react-dom";
 import { db } from "./firebase";
 
-// ─── Fonts & Global Style ─────────────────────────────────────────────────────106
+// ─── Fonts & Global Style ─────────────────────────────────────────────────────107
 const _fl = document.createElement("link");
 _fl.href = "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@400;600;700&display=swap";
 _fl.rel = "stylesheet"; document.head.appendChild(_fl);
 const _gs = document.createElement("style");
 _gs.textContent = `
+  * { box-sizing: border-box; }
+  html, body { translate: no; }
+  input, textarea, select { -webkit-user-modify: read-write-plaintext-only; }
   *{font-family:'Plus Jakarta Sans',sans-serif;box-sizing:border-box}
   h1,h2,h3{font-family:'Sora',sans-serif}
   ::-webkit-scrollbar{width:6px} ::-webkit-scrollbar-track{background:#f1f1f1}
@@ -1228,7 +1231,7 @@ function LoginScreen({tenants,admins,settings,onLogin}){
             </div>
             <div>
               <label style={{display:"block",fontWeight:700,color:"#374151",fontSize:13,marginBottom:6}}>Nama / Kode Kasir</label>
-              <input placeholder="Contoh: Kasir 1, Budi, K2, dll."
+              <input placeholder="Contoh: Kasir 1, Budi, K2, dll." translate="no" spellCheck={false} autoCorrect="off" autoCapitalize="off"
                 value={kasirName}
                 onChange={e=>setKasirName(e.target.value)}
                 onKeyDown={e=>e.key==="Enter"&&confirmKasir()}
@@ -4153,7 +4156,7 @@ function POManager({tenants,menus,customers,walletLogs,orders,settings,admins,on
           {/* Filter & Search */}
           <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap"}}>
             <input placeholder="🔍 Cari nama atau nomor HP pelanggan..."
-              value={poSearch} onChange={e=>setPOSearch(e.target.value)}
+              value={poSearch} onChange={e=>setPOSearch(e.target.value)} translate="no" spellCheck={false} autoCorrect="off" autoCapitalize="off"
               style={{flex:1,minWidth:180,border:"2px solid #e5e7eb",borderRadius:10,padding:"10px 14px",fontSize:14,outline:"none",color:"#111",fontFamily:"'Plus Jakarta Sans',sans-serif"}}
               onFocus={e=>e.target.style.borderColor="#ea580c"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
             <select value={poTenantFilter} onChange={e=>setPOTenantFilter(e.target.value)}
@@ -5838,13 +5841,13 @@ ${waSignature(tenant.name)}`;
             </div>
             <div style={{marginBottom:10}}>
               <label style={{fontSize:12,fontWeight:700,color:"#374151",display:"block",marginBottom:5}}>Nama Pelanggan <span style={{color:"#9ca3af"}}>(opsional)</span></label>
-              <input value={pendingCustName} onChange={e=>setPendingCustName(e.target.value)} placeholder="Contoh: Budi, Meja 3..."
+              <input value={pendingCustName} onChange={e=>setPendingCustName(e.target.value)} placeholder="Contoh: Budi, Meja 3..." translate="no" spellCheck={false} autoCorrect="off" autoCapitalize="off"
                 style={{width:"100%",border:"2px solid #e5e7eb",borderRadius:10,padding:"9px 12px",fontSize:14,boxSizing:"border-box",outline:"none",fontFamily:"'Plus Jakarta Sans',sans-serif"}}
                 onFocus={e=>e.target.style.borderColor="#f97316"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
             </div>
             <div style={{marginBottom:16}}>
               <label style={{fontSize:12,fontWeight:700,color:"#374151",display:"block",marginBottom:5}}>Keterangan <span style={{color:"#9ca3af"}}>(opsional)</span></label>
-              <input value={pendingNote} onChange={e=>setPendingNote(e.target.value)} placeholder="Contoh: Saldo kurang, mau top up dulu..."
+              <input value={pendingNote} onChange={e=>setPendingNote(e.target.value)} placeholder="Contoh: Saldo kurang, mau top up dulu..." translate="no" spellCheck={false} autoCorrect="off" autoCapitalize="off"
                 style={{width:"100%",border:"2px solid #e5e7eb",borderRadius:10,padding:"9px 12px",fontSize:14,boxSizing:"border-box",outline:"none",fontFamily:"'Plus Jakarta Sans',sans-serif"}}
                 onFocus={e=>e.target.style.borderColor="#f97316"} onBlur={e=>e.target.style.borderColor="#e5e7eb"}/>
             </div>
@@ -6381,7 +6384,7 @@ function CustomerCardPage({phone,settings,customers,walletLogs,onRefresh,refresh
             {trStep==="manual"&&(
               <div>
                 <p style={{color:"#6b7280",fontSize:13,margin:"0 0 14px"}}>Masukkan nomor WA terdaftar penerima.</p>
-                <FI label="Nomor WA Penerima" placeholder="08xxxxxxxxxx" value={manualWa} onChange={v=>setManualWa(v)}/>
+                <FI label="Nomor WA Penerima" placeholder="08xxxxxxxxxx" value={manualWa} onChange={v=>setManualWa(v)} translate="no" spellCheck={false} autoCorrect="off" autoCapitalize="off"/>
                 {manualWaErr&&<p style={{color:"#dc2626",fontSize:12,fontWeight:600,margin:"-8px 0 10px"}}>{manualWaErr}</p>}
                 <div style={{display:"flex",gap:10}}>
                   <button onClick={()=>setTrStep("scan")} style={{flex:1,padding:"11px",background:"#f9fafb",color:"#374151",border:"1px solid #e5e7eb",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:13}}>← Scan QR</button>
@@ -6883,6 +6886,10 @@ function FI({label,placeholder,value,onChange,disabled,type="text",accent="#ea58
       <label style={{display:"block",fontWeight:600,color:"#374151",fontSize:13,marginBottom:5}}>{label}</label>
       <input type={type} placeholder={placeholder} value={value} onChange={e=>onChange(e.target.value)} disabled={disabled}
         onFocus={()=>setF(true)} onBlur={()=>setF(false)}
+        translate="no"
+        spellCheck={false}
+        autoCorrect="off"
+        autoCapitalize="off"
         style={{width:"100%",border:`2px solid ${f?accent:"#e5e7eb"}`,borderRadius:11,padding:"11px 14px",fontSize:14,outline:"none",fontFamily:"'Plus Jakarta Sans',sans-serif",background:disabled?"#f9fafb":"#fff",color:"#111",transition:"border-color .2s",boxSizing:"border-box"}}/>
     </div>
   );
